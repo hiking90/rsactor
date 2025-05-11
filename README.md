@@ -2,6 +2,8 @@
 
 `rsActor` is a lightweight, Tokio-based actor framework in Rust, inspired by [Kameo](https://github.com/Nugine/kameo). It prioritizes simplicity and ease of use for local, in-process actor systems by stripping away more complex features like remote actors and supervision trees.
 
+**Note:** This project is in a very early stage of development. APIs are subject to change, and features are still being actively developed.
+
 ## Core Features
 
 *   **Minimalist Actor System**: Focuses on the core actor model primitives.
