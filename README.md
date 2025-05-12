@@ -47,18 +47,18 @@ env_logger = "0.11" # Optional, for logging examples
 Here's a simple counter actor:
 
 ```rust
-use rsActor::{Actor, ActorRef, Message, spawn, impl_message_handler};
+use rsactor::{Actor, ActorRef, Message}; // Updated import
 use anyhow::Result;
 use log::info;
 
 // Define your actor struct
 struct CounterActor {
-    count: i32,
+    count: u32,
 }
 
 // Implement the Actor trait
 impl Actor for CounterActor {
-    type Error = anyhow::Error; // Define an error type
+    type Error = anyhow::Error;
 
     async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
         info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.count);
@@ -72,53 +72,91 @@ impl Actor for CounterActor {
 }
 
 // Define message types
-struct IncrementMsg(i32);
-struct GetCountMsg;
+struct IncrementMsg(u32); // Message to increment the counter by a value
+struct GetCountMsg;       // Message to get the current count
 
-// Implement Message<T> for each message your actor handles
+// Implement Message<T> for CounterActor to handle IncrementMsg
 impl Message<IncrementMsg> for CounterActor {
-    type Reply = i32; // The type of reply this message expects
+    type Reply = u32; // This message expects a u32 reply (the new count)
 
     async fn handle(&mut self, msg: IncrementMsg) -> Self::Reply {
         self.count += msg.0;
-        self.count
+        self.count // Return the new count
     }
 }
 
+// Implement Message<T> for CounterActor to handle GetCountMsg
 impl Message<GetCountMsg> for CounterActor {
-    type Reply = i32;
+    type Reply = u32; // This message expects a u32 reply (the current count)
 
     async fn handle(&mut self, _msg: GetCountMsg) -> Self::Reply {
-        self.count
+        self.count // Return the current count
     }
 }
 
-// Use the macro to implement the MessageHandler for your actor and its messages
-impl_message_handler!(CounterActor, [IncrementMsg, GetCountMsg]);
+// Use the rsactor::impl_message_handler! macro to generate boilerplate
+// for routing IncrementMsg and GetCountMsg to their respective handlers.
+rsactor::impl_message_handler!(CounterActor, [IncrementMsg, GetCountMsg]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init(); // Initialize logger to see on_start/on_stop messages
+    // Initialize the logger (e.g., env_logger) to see log messages.
+    // Ensure you have `env_logger` and `log` in your Cargo.toml.
+    env_logger::init();
 
-    let counter_actor = CounterActor { count: 0 };
-    let actor_ref: ActorRef = spawn(counter_actor).await?;
+    let initial_count = 0u32;
+    let counter_actor_instance = CounterActor { count: initial_count };
+    info!("Creating CounterActor with initial count: {}", initial_count);
 
-    // Send an IncrementMsg (fire-and-forget using tell, though ask is used here for demo)
-    let new_count: i32 = actor_ref.ask(IncrementMsg(5)).await?;
-    info!("Count after increment: {}", new_count); // Expected: 5
+    // Spawn the actor.
+    // rsactor::spawn returns a tuple:
+    // 1. ActorRef: A handle to send messages to the actor.
+    // 2. JoinHandle: A handle to await the actor's termination and retrieve its final state.
+    info!("Spawning CounterActor...");
+    let (actor_ref, join_handle) = rsactor::spawn(counter_actor_instance);
+    info!("CounterActor spawned with ID: {}", actor_ref.id());
 
-    // Send GetCountMsg
-    let current_count: i32 = actor_ref.ask(GetCountMsg).await?;
-    info!("Current count: {}", current_count); // Expected: 5
+    // Send an IncrementMsg using 'ask' to get a reply.
+    let increment_value = 5u32;
+    info!("Sending IncrementMsg({}) to CounterActor (ID: {})...", increment_value, actor_ref.id());
+    let count_after_increment: u32 = actor_ref.ask(IncrementMsg(increment_value)).await?;
+    info!("Received reply after increment: new count = {}", count_after_increment);
 
-    // Stop the actor (it will process on_stop)
-    // Dropping the ActorRef also signals the actor to stop after processing existing messages.
-    // actor_ref.stop().await?; // or actor_ref.kill().await?;
-    drop(actor_ref);
+    // Send a GetCountMsg using 'ask'.
+    info!("Sending GetCountMsg to CounterActor (ID: {})...", actor_ref.id());
+    let current_count: u32 = actor_ref.ask(GetCountMsg).await?;
+    info!("Received reply for GetCountMsg: current count = {}", current_count);
 
-    // Give a moment for the actor to shut down and log its on_stop message
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Stop the actor gracefully.
+    // The actor will process all messages currently in its mailbox before stopping.
+    // The on_stop hook will be called.
+    info!("Sending stop signal to CounterActor (ID: {})...", actor_ref.id());
+    actor_ref.stop().await?;
+    info!("Stop signal sent. CounterActor (ID: {}) will shut down gracefully.", actor_ref.id());
 
+    // Wait for the actor's task to complete.
+    // This is important to ensure the actor has fully stopped and resources are cleaned up.
+    // join_handle.await returns a Result containing the actor's final state and stop reason.
+    info!("Waiting for CounterActor (ID: {}) to complete its task...", actor_ref.id());
+    match join_handle.await {
+        Ok((stopped_actor, reason)) => {
+            info!(
+                "CounterActor (ID: {}) task completed. Final count: {}. Stop reason: {:?}",
+                actor_ref.id(), // Note: actor_ref.id() is still usable here
+                stopped_actor.count,
+                reason
+            );
+        }
+        Err(e) => {
+            log::error!(
+                "Error waiting for CounterActor (ID: {}) task to complete: {:?}",
+                actor_ref.id(), // It's good practice to log the ID if available
+                e
+            );
+        }
+    }
+
+    info!("Example finished.");
     Ok(())
 }
 ```
