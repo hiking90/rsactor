@@ -3,18 +3,21 @@ use anyhow::Result;
 use log::{info, debug}; // ADDED
 
 // Message types
-struct Increment;
-struct Decrement;
+struct Increment; // Message to increment the actor's counter
+struct Decrement; // Message to decrement the actor's counter
 
+// Define the actor struct
 struct MyActor {
-    count: u32,
+    count: u32, // Internal state of the actor
 }
 
+// Implement the Actor trait for MyActor
 impl Actor for MyActor {
-    type Error = anyhow::Error;
+    type Error = anyhow::Error; // Define the error type for actor operations
 
+    // Called when the actor is started
     async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
-        self.count = 0;
+        self.count = 0; // Initialize count on start
         info!(
             "MyActor (id: {}) started. Initial count: {}.",
             actor_ref.id(),
@@ -23,34 +26,38 @@ impl Actor for MyActor {
         Ok(())
     }
 
+    // Called when the actor is stopped
     async fn on_stop(&mut self) -> Result<(), Self::Error> {
         info!("MyActor stopping. Final count: {}.", self.count);
         Ok(())
     }
 }
 
-// MyActor handles Increment messages
+// Implement message handling for Increment
 impl Message<Increment> for MyActor {
-    type Reply = u32;
+    type Reply = u32; // Define the reply type for Increment messages
 
+    // Handle the Increment message
     async fn handle(&mut self, _msg: Increment) -> Self::Reply {
         self.count += 1;
         debug!("MyActor handled Increment. Count is now {}.", self.count); // Changed to debug!
-        self.count
+        self.count // Return the new count
     }
 }
 
-// MyActor handles Decrement messages
+// Implement message handling for Decrement
 impl Message<Decrement> for MyActor {
-    type Reply = u32;
+    type Reply = u32; // Define the reply type for Decrement messages
 
+    // Handle the Decrement message
     async fn handle(&mut self, _msg: Decrement) -> Self::Reply {
         self.count -= 1;
         debug!("MyActor handled Decrement. Count is now {}.", self.count); // Changed to debug!
-        self.count
+        self.count // Return the new count
     }
 }
 
+// A dummy message type for demonstration
 struct DummyMessage;
 impl Message<DummyMessage> for MyActor {
     type Reply = u32;
@@ -61,41 +68,64 @@ impl Message<DummyMessage> for MyActor {
     }
 }
 
-// Use the macro to implement ErasedMessageHandler for MyActor
+// Use the macro to implement ErasedMessageHandler for MyActor,
+// enabling it to handle the specified message types.
 rsactor::impl_message_handler!(MyActor, [Increment, Decrement, DummyMessage]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init(); // ADDED: Initialize logger
+    env_logger::init(); // Initialize the logger
 
-    // MyActor's count field is initialized here, but on_start will reset it to 0.
+    // Create an instance of MyActor.
+    // Its `count` field is initialized here, but `on_start` will reset it to 0.
     let actor_instance = MyActor { count: 100 };
 
     println!("Spawning MyActor...");
-    let actor_ref = rsactor::spawn(actor_instance).await?; // MODIFIED: use system.spawn
+    // Spawn the actor. This returns an ActorRef for sending messages
+    // and a JoinHandle to await the actor's completion.
+    let (actor_ref, join_handle) = rsactor::spawn(actor_instance); // MODIFIED: use system.spawn and await
     println!("MyActor spawned with ref: {:?}", actor_ref);
 
     println!("Sending Increment message...");
+    // Send an Increment message and await the reply using `ask`.
     let count_after_inc: u32 = actor_ref.ask(Increment).await?;
     println!("Reply after Increment: {}", count_after_inc);
 
     println!("Sending Decrement message...");
+    // Send a Decrement message and await the reply.
     let count_after_dec: u32 = actor_ref.ask(Decrement).await?;
     println!("Reply after Decrement: {}", count_after_dec);
 
     println!("Sending Increment message again...");
+    // Send another Increment message.
     let count_after_inc_2: u32 = actor_ref.ask(Increment).await?;
     println!("Reply after Increment again: {}", count_after_inc_2);
 
-    // To observe the actor's on_stop message, we need to ensure its runtime loop exits.
-    // Dropping the actor_ref (and any clones) will close its mailbox channel from the sender side.
-    // The runtime's receiver will then yield None, causing the loop to terminate and on_stop to be called.
-    println!("Dropping ActorRef to signal shutdown for actor {}.", actor_ref.id());
-    drop(actor_ref);
+    // Signal the actor to stop gracefully.
+    // The actor will process any remaining messages in its mailbox before stopping.
+    println!("Sending StopGracefully message to actor {}.", actor_ref.id());
+    actor_ref.stop().await?; // Corrected method name
 
-    // Give some time for the actor's task to process the channel closure and shut down gracefully.
-    // In a real application, you'd have a more robust system-wide shutdown mechanism.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for the actor's task to complete.
+    // `join_handle.await` returns a Result containing a tuple:
+    // - The actor instance (allowing access to its final state).
+    // - The ActorStopReason indicating why it stopped.
+    println!("Waiting for actor {} to stop...", actor_ref.id());
+    match join_handle.await {
+        Ok((stopped_actor, reason)) => {
+            // Successfully retrieved the actor and its stop reason.
+            println!(
+                "Actor {} stopped. Final count: {}. Reason: {:?}",
+                actor_ref.id(), // actor_ref is still in scope here
+                stopped_actor.count, // Access the final count from the returned actor instance
+                reason // The reason why the actor stopped
+            );
+        }
+        Err(e) => {
+            // An error occurred while joining the actor's task (e.g., if the task panicked).
+            eprintln!("Error joining actor task for actor {}: {:?}", actor_ref.id(), e);
+        }
+    }
 
     println!("Main function finished.");
     Ok(())
