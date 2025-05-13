@@ -170,7 +170,7 @@ use log::{info, error, warn};
 ///   implement `Message<MsgType>` for each of them.
 #[macro_export]
 macro_rules! impl_message_handler {
-    ($actor_type:ty, [$($msg_type:ty),+ $(,)?]) => {
+    ($actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
         impl $crate::MessageHandler for $actor_type {
             async fn handle(
                 &mut self,
@@ -188,7 +188,7 @@ macro_rules! impl_message_handler {
                             }
                         }
                     }
-                )+
+                )*
                 Err(anyhow::anyhow!(concat!(stringify!($actor_type), ": ErasedMessageHandler received unknown message type.")))
             }
         }
