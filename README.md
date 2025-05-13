@@ -60,13 +60,18 @@ struct CounterActor {
 impl Actor for CounterActor {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self,
+        actor_ref: ActorRef
+    ) -> Result<(), Self::Error> {
         info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.count);
         Ok(())
     }
 
-    async fn on_stop(&mut self) -> Result<(), Self::Error> {
-        info!("CounterActor stopping. Final count: {}.", self.count);
+    async fn on_stop(&mut self,
+        actor_ref: ActorRef,
+        stop_reason: &rsactor::ActorStopReason
+    ) -> Result<(), Self::Error> {
+        info!("CounterActor (id: {}) stopping. Final count: {}. Reason: {:?}", actor_ref.id(), self.count, stop_reason);
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use rsactor::{ActorRef, Actor, Message}; // MODIFIED: Added System
+use rsactor::{ActorRef, Actor, Message, ActorStopReason}; // MODIFIED: Added System
 use anyhow::Result;
 use log::{info, debug}; // ADDED
 
@@ -27,7 +27,7 @@ impl Actor for MyActor {
     }
 
     // Called when the actor is stopped
-    async fn on_stop(&mut self) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         info!("MyActor stopping. Final count: {}.", self.count);
         Ok(())
     }

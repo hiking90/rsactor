@@ -1,7 +1,9 @@
-use std::any::Any;
-use std::fmt::Debug;
-use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    any::Any,
+    fmt::Debug,
+    future::Future,
+    sync::atomic::{AtomicUsize, Ordering}
+};
 
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
@@ -165,6 +167,17 @@ impl ActorRef {
     }
 }
 
+#[derive(Debug)]
+pub enum ActorStopReason {
+    /// Actor stopped normally.
+    Normal,
+    /// Actor was killed.
+    Killed,
+    /// Actor panicked or a lifecycle hook (on_start, on_stop) failed.
+    Error(anyhow::Error),
+}
+
+/// Trait for actors
 pub trait Actor: Send + 'static {
     type Error: Send + Debug + 'static; // Error type for the actor
 
@@ -172,7 +185,7 @@ pub trait Actor: Send + 'static {
         async { Ok(()) }
     }
 
-    fn on_stop(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
 }
@@ -194,28 +207,6 @@ pub trait MessageHandler: Send + Sync + 'static {
         msg_any: Box<dyn Any + Send>,
     ) -> impl Future<Output = Result<Box<dyn Any + Send>>> + Send;
 }
-
-#[derive(Debug)]
-pub enum ActorStopReason {
-    /// Actor stopped normally.
-    Normal,
-    /// Actor was killed.
-    Killed,
-    /// Actor panicked or a lifecycle hook (on_start, on_stop) failed.
-    Panicked(Box<dyn std::error::Error + Send + Sync>),
-}
-
-// Custom error type for actor lifecycle issues within run_actor_lifecycle
-#[derive(Debug)]
-struct ActorRunError(String);
-
-impl std::fmt::Display for ActorRunError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for ActorRunError {}
 
 // Manages the lifecycle and message loop for a single actor instance.
 pub struct Runtime<T: Actor + MessageHandler> {
@@ -247,7 +238,15 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         if let Err(e) = self.actor.on_start(self.actor_ref.clone()).await {
             error!("Actor {} on_start error: {:?}", actor_id, e);
             let err_msg = format!("on_start failed for actor {}: {:?}", actor_id, e);
-            let reason = ActorStopReason::Panicked(Box::new(ActorRunError(err_msg)));
+            let mut reason = ActorStopReason::Error(anyhow::Error::msg(err_msg));
+            if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &reason).await {
+                error!("Actor {} on_stop error: {:?}", actor_id, e_on_stop);
+
+                if let ActorStopReason::Error(original_start_err) = reason {
+                    let new_err = original_start_err.context("on_stop failed after on_start error");
+                    reason = ActorStopReason::Error(new_err); // Corrected this line
+                }
+            }
             info!("Actor {} task finishing prematurely due to on_start error.", actor_id);
             return (self.actor, reason); // Return actor instance and reason
         }
@@ -290,11 +289,11 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         info!("Runtime for actor {} is shutting down.", actor_id);
 
         // Call on_stop
-        if let Err(e) = self.actor.on_stop().await {
+        if let Err(e) = self.actor.on_stop(self.actor_ref.clone(), &final_reason).await {
             error!("Actor {} on_stop error: {:?}", actor_id, e);
             if matches!(final_reason, ActorStopReason::Normal) {
                 let err_msg = format!("on_stop failed for actor {}: {:?}", actor_id, e);
-                final_reason = ActorStopReason::Panicked(Box::new(ActorRunError(err_msg)));
+                final_reason = ActorStopReason::Error(anyhow::Error::msg(err_msg));
             }
         }
 
@@ -325,6 +324,7 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
     (actor_ref, handle) // Return ActorRef and JoinHandle
 }
 
+// ---------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,7 +369,7 @@ mod tests {
             Ok(())
         }
 
-        async fn on_stop(&mut self) -> Result<(), Self::Error> {
+        async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
             let mut called = self.on_stop_called.lock().await;
             *called = true;
             debug!("TestActor (id: {}) stopped. Final count: {}", self.id, *self.counter.lock().await);
@@ -615,7 +615,7 @@ mod tests {
             *self.on_start_attempted.lock().await = true;
             if self.fail_on_start { Err(anyhow::anyhow!("simulated on_start failure")) } else { Ok(()) }
         }
-        async fn on_stop(&mut self) -> Result<(), Self::Error> {
+        async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
             *self.on_stop_attempted.lock().await = true;
             if self.fail_on_stop { Err(anyhow::anyhow!("simulated on_stop failure")) } else { Ok(()) }
         }
@@ -642,8 +642,8 @@ mod tests {
 
         match handle.await {
             Ok((returned_actor, reason)) => {
-                assert!(matches!(reason, ActorStopReason::Panicked(_)), "Expected Panicked, got {:?}", reason);
-                if let ActorStopReason::Panicked(e) = reason {
+                assert!(matches!(reason, ActorStopReason::Error(_)), "Expected Panicked, got {:?}", reason);
+                if let ActorStopReason::Error(e) = reason {
                     assert!(e.to_string().contains("on_start failed"));
                 }
                 assert!(*returned_actor.on_start_attempted.lock().await);
@@ -673,8 +673,8 @@ mod tests {
 
         match handle.await {
             Ok((returned_actor, reason)) => {
-                assert!(matches!(reason, ActorStopReason::Panicked(_)), "Expected Panicked, got {:?}", reason);
-                if let ActorStopReason::Panicked(e) = reason {
+                assert!(matches!(reason, ActorStopReason::Error(_)), "Expected Panicked, got {:?}", reason);
+                if let ActorStopReason::Error(e) = reason {
                     assert!(e.to_string().contains("on_stop failed"));
                 }
                 assert!(*returned_actor.on_start_attempted.lock().await);
@@ -690,10 +690,7 @@ mod tests {
 
     impl Actor for PanicActor {
         type Error = anyhow::Error;
-        async fn on_stop(&mut self) -> Result<(), Self::Error> {
-            *self.on_stop_called.lock().await = true;
-            Ok(())
-        }
+        async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> { *self.on_stop_called.lock().await = true; Ok(()) }
     }
     impl Message<PanicMsg> for PanicActor {
         type Reply = ();
