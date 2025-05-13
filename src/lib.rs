@@ -1,3 +1,125 @@
+//! # rsactor: A Rust Actor Framework
+//!
+//! `rsactor` provides a simple and lightweight actor framework for building concurrent
+//! applications in Rust. It is built on top of `tokio` for asynchronous message
+//! passing and task management.
+//!
+//! ## Features
+//!
+//! - **Asynchronous Actors**: Actors run in their own asynchronous tasks.
+//! - **Message Passing**: Actors communicate by sending and receiving messages.
+//!   - `tell`: Send a message without waiting for a reply (fire-and-forget).
+//!   - `ask`: Send a message and await a reply.
+//! - **Actor Lifecycle**: Actors have `on_start` and `on_stop` lifecycle hooks.
+//! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
+//! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
+//! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
+//!   handling multiple message types.
+//!
+//! ## Core Concepts
+//!
+//! - **`Actor`**: A trait defining the behavior of an actor, including lifecycle hooks.
+//! - **`Message<M>`**: A trait defining how an actor handles a specific message type `M`
+//!   and what type of reply it produces.
+//! - **`ActorRef`**: A handle to an actor, used to send messages to it.
+//! - **`spawn`**: A function to create and start a new actor. It returns an `ActorRef`
+//!   and a `JoinHandle` to await the actor's completion.
+//! - **`MailboxMessage`**: An enum representing messages in an actor's mailbox,
+//!   including user messages and control signals (Terminate, StopGracefully).
+//! - **`Runtime`**: Manages the internal lifecycle and message loop for an actor.
+//!
+//! ## Getting Started
+//!
+//! To use `rsactor`, define your actor struct, implement the `Actor` trait, and then
+//! implement the `Message<M>` trait for each message type your actor should handle.
+//! Finally, use the `impl_message_handler!` macro to wire up the message handling.
+//!
+//! ```rust
+//! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+//! use anyhow::Result;
+//!
+//! // 1. Define your actor struct
+//! struct MyActor {
+//!     data: String,
+//! }
+//!
+//! impl MyActor {
+//!     fn new(data: &str) -> Self {
+//!         MyActor { data: data.to_string() }
+//!     }
+//! }
+//!
+//! // 2. Implement the Actor trait
+//! impl Actor for MyActor {
+//!     type Error = anyhow::Error; // Define an error type
+//!
+//!     async fn on_start(&mut self, _actor_ref: ActorRef) -> Result<(), Self::Error> {
+//!         println!("MyActor (data: '{}') started!", self.data);
+//!         Ok(())
+//!     }
+//!
+//!     async fn on_stop(&mut self, _actor_ref: ActorRef, _reason: &rsactor::ActorStopReason) -> Result<(), Self::Error> {
+//!         println!("MyActor (data: '{}') stopped!", self.data);
+//!         Ok(())
+//!     }
+//! }
+//!
+//! // 3. Define your message types
+//! struct GetData; // A message to get the actor's data
+//! struct UpdateData(String); // A message to update the actor's data
+//!
+//! // 4. Implement Message<M> for each message type
+//! impl Message<GetData> for MyActor {
+//!     type Reply = String; // This message will return a String
+//!
+//!     async fn handle(&mut self, _msg: GetData) -> Self::Reply {
+//!         self.data.clone()
+//!     }
+//! }
+//!
+//! impl Message<UpdateData> for MyActor {
+//!     type Reply = (); // This message does not return a value
+//!
+//!     async fn handle(&mut self, msg: UpdateData) -> Self::Reply {
+//!         self.data = msg.0;
+//!         println!("MyActor data updated!");
+//!     }
+//! }
+//!
+//! // 5. Use the macro to implement the MessageHandler trait
+//! impl_message_handler!(MyActor, [GetData, UpdateData]);
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     let my_actor = MyActor::new("initial data");
+//!     let (actor_ref, join_handle) = spawn(my_actor);
+//!
+//!     // Send an "ask" message and wait for a reply
+//!     let current_data: String = actor_ref.ask(GetData).await?;
+//!     println!("Received data: {}", current_data);
+//!
+//!     // Send a "tell" message (fire-and-forget)
+//!     actor_ref.tell(UpdateData("new data".to_string())).await?;
+//!
+//!     // Verify the update
+//!     let updated_data: String = actor_ref.ask(GetData).await?;
+//!     println!("Updated data: {}", updated_data);
+//!
+//!     // Stop the actor gracefully
+//!     actor_ref.stop().await?;
+//!
+//!     // Wait for the actor to terminate
+//!     let (_actor_instance, stop_reason) = join_handle.await?;
+//!     println!("Actor stopped with reason: {:?}", stop_reason);
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! This crate-level documentation provides an overview of `rsactor`.
+//! For more details on specific components, please refer to their individual
+//! documentation.
+
 use std::{
     any::Any,
     fmt::Debug,
@@ -9,6 +131,43 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 use log::{info, error, warn};
 
+/// Implements the `MessageHandler` trait for a given actor type.
+///
+/// This macro simplifies the process of handling multiple message types within an actor.
+/// It generates the necessary boilerplate code to downcast a `Box<dyn Any + Send>`
+/// message to its concrete type and then calls the appropriate `Message::handle`
+/// implementation on the actor.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// struct MyActor;
+///
+/// impl Actor for MyActor { /* ... */ }
+///
+/// struct Msg1;
+/// struct Msg2;
+///
+/// impl Message<Msg1> for MyActor {
+///     type Reply = ();
+///     async fn handle(&mut self, msg: Msg1) -> Self::Reply { /* ... */ }
+/// }
+///
+/// impl Message<Msg2> for MyActor {
+///     type Reply = String;
+///     async fn handle(&mut self, msg: Msg2) -> Self::Reply { /* ... */ "response".to_string() }
+/// }
+///
+/// // This will implement `MessageHandler` for `MyActor`, allowing it to handle `Msg1` and `Msg2`.
+/// impl_message_handler!(MyActor, [Msg1, Msg2]);
+/// ```
+///
+/// # Arguments
+///
+/// * `$actor_type`: The type of the actor for which to implement `MessageHandler`.
+/// * `[$($msg_type:ty),+]`: A list of message types that the actor can handle.
+///   Each message type must implement `Send + 'static`, and the actor must
+///   implement `Message<MsgType>` for each of them.
 #[macro_export]
 macro_rules! impl_message_handler {
     ($actor_type:ty, [$($msg_type:ty),+ $(,)?]) => {
@@ -36,14 +195,22 @@ macro_rules! impl_message_handler {
     };
 }
 
-// Enum to represent messages within the actor system, including control messages.
-pub enum MailboxMessage {
+/// Represents messages that can be sent to an actor's mailbox.
+///
+/// This enum includes both user-defined messages (wrapped in `Envelope`)
+/// and control messages like `Terminate` and `StopGracefully`.
+enum MailboxMessage {
+    /// A user-defined message to be processed by the actor.
     Envelope {
+        /// The message payload.
         payload: Box<dyn Any + Send>,
+        /// A channel to send the reply back to the caller.
         reply_channel: oneshot::Sender<Result<Box<dyn Any + Send>>>,
     },
-    Terminate, // Signal to terminate the actor
-    StopGracefully, // Signal to stop after processing existing messages
+    /// A signal for the actor to terminate immediately.
+    Terminate,
+    /// A signal for the actor to stop gracefully after processing existing messages in its mailbox.
+    StopGracefully,
 }
 
 // Type alias for the sender part of the actor's mailbox channel.
@@ -52,6 +219,10 @@ type MailboxSender = mpsc::Sender<MailboxMessage>;
 // Counter for generating unique actor IDs.
 static ACTOR_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
+/// A reference to an actor, allowing messages to be sent to it.
+///
+/// `ActorRef` provides a way to interact with actors without having direct access
+/// to the actor instance itself. It holds a sender channel to the actor's mailbox.
 #[derive(Clone, Debug)]
 pub struct ActorRef {
     id: usize,
@@ -68,11 +239,23 @@ impl ActorRef {
         }
     }
 
+    /// Returns the unique ID of the actor.
     pub const fn id(&self) -> usize {
         self.id
     }
 
-    // Sends a message to the actor without awaiting a reply (fire and forget).
+    /// Sends a message to the actor without awaiting a reply (fire-and-forget).
+    ///
+    /// The message is sent to the actor's mailbox for processing.
+    /// This method returns immediately and does not wait for the actor to handle the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg`: The message to send. The message type `M` must be `Send` and `'static`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the actor's mailbox is closed (e.g., if the actor has stopped).
     pub async fn tell<M>(&self, msg: M) -> Result<()>
     where
         M: Send + 'static,
@@ -98,8 +281,27 @@ impl ActorRef {
         }
     }
 
-    // Sends a message to the actor and awaits a reply.
-    // M is the message type, R is the expected reply type.
+    /// Sends a message to the actor and awaits a reply.
+    ///
+    /// The message is sent to the actor's mailbox, and this method will wait for
+    /// the actor to process the message and send a reply.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M`: The type of the message being sent. Must be `Send` and `'static`.
+    /// * `R`: The expected type of the reply. Must be `Send` and `'static`.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg`: The message to send.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * The actor's mailbox is closed.
+    /// * The reply channel is closed before a reply is received.
+    /// * The actor's message handler returns an error.
+    /// * The received reply cannot be downcast to the expected type `R`.
     pub async fn ask<M, R>(&self, msg: M) -> Result<R>
     where
         M: Send + 'static,
@@ -134,7 +336,16 @@ impl ActorRef {
         }
     }
 
-    // New method to send a termination signal to the actor.
+    /// Sends an immediate termination signal to the actor.
+    ///
+    /// The actor will stop processing messages and shut down as soon as possible.
+    /// The `on_stop` lifecycle hook will be called with `ActorStopReason::Killed`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying channel fails to send the message,
+    /// though it logs a warning and returns `Ok(())` if the actor is already stopped,
+    /// as the desired state (stopped) is met.
     pub async fn kill(&self) -> Result<()> {
         info!("Sending Terminate message to actor {}", self.id);
         match self.sender.send(MailboxMessage::Terminate).await {
@@ -149,9 +360,18 @@ impl ActorRef {
         }
     }
 
-    // New method to send a graceful stop signal to the actor.
-    // The actor will process all messages currently in its mailbox and then stop.
-    // New messages sent after this call might be ignored or fail.
+    /// Sends a graceful stop signal to the actor.
+    ///
+    /// The actor will process all messages currently in its mailbox and then stop.
+    /// New messages sent after this call might be ignored or fail.
+    /// The `on_stop` lifecycle hook will be called with `ActorStopReason::Normal`
+    /// if no errors occur during shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying channel fails to send the message,
+    /// though it logs a warning and returns `Ok(())` if the actor is already stopped,
+    /// as the desired state (stopped/stopping) is met.
     pub async fn stop(&self) -> Result<()> {
         info!("Sending StopGracefully message to actor {}", self.id);
         match self.sender.send(MailboxMessage::StopGracefully).await {
@@ -167,41 +387,102 @@ impl ActorRef {
     }
 }
 
+/// Represents the reason an actor stopped.
 #[derive(Debug)]
 pub enum ActorStopReason {
-    /// Actor stopped normally.
+    /// Actor stopped normally after processing a `StopGracefully` signal or
+    /// when its `Runtime` finished processing messages.
     Normal,
-    /// Actor was killed.
+    /// Actor was terminated by a `kill` signal.
     Killed,
-    /// Actor panicked or a lifecycle hook (on_start, on_stop) failed.
+    /// Actor stopped due to an error, such as a panic in a message handler
+    /// or a failure in one of its lifecycle hooks (`on_start`, `on_stop`).
     Error(anyhow::Error),
 }
 
-/// Trait for actors
+/// Defines the behavior of an actor.
+///
+/// Actors are fundamental units of computation that communicate by exchanging messages.
+/// Each actor has its own state and processes messages sequentially.
+///
+/// Implementors of this trait must also be `Send + 'static`.
 pub trait Actor: Send + 'static {
-    type Error: Send + Debug + 'static; // Error type for the actor
+    /// The error type that can be returned by the actor's lifecycle methods.
+    /// Must be `Send`, `Debug`, and `'static`.
+    type Error: Send + Debug + 'static;
 
+    /// Called when the actor is started.
+    ///
+    /// This method can be used for initialization tasks.
+    /// If it returns an error, the actor will fail to start, and `on_stop` will be called
+    /// with an `ActorStopReason::Error`.
+    ///
+    /// # Arguments
+    ///
+    /// * `_actor_ref`: A reference to the actor itself.
     fn on_start(&mut self, _actor_ref: ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
 
+    /// Called when the actor is stopped.
+    ///
+    /// This method can be used for cleanup tasks.
+    ///
+    /// # Arguments
+    ///
+    /// * `_actor_ref`: A reference to the actor itself.
+    /// * `_stop_reason`: The reason why the actor is stopping.
     fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
 }
 
-// Trait for messages that an actor can handle.
-// The actor struct (e.g., MyActor) implements this for each message type it handles.
+/// A trait for messages that an actor can handle, defining the reply type.
+///
+/// An actor struct (e.g., `MyActor`) implements this trait for each specific
+/// message type it can process.
+///
+/// # Type Parameters
+///
+/// * `T`: The type of the message. Must be `Send` and `\'static`.
 pub trait Message<T: Send + 'static>: Actor {
-    type Reply: Send + 'static; // Reply type must be Send and 'static for oneshot channel
+    /// The type of the reply that will be sent back to the caller.
+    /// Must be `Send` and `\'static` to be sent over a `oneshot` channel.
+    type Reply: Send + 'static;
 
-    // Handles the message. This is an async method.
+    /// Handles the incoming message and produces a reply.
+    ///
+    /// This is an asynchronous method where the actor\'s business logic for
+    /// processing the message `T` resides.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg`: The message instance to handle.
     fn handle(&mut self, msg: T) -> impl Future<Output = Self::Reply> + Send;
 }
 
-// New trait for type-erased message handling within the Runtime.
-// Actors that can be managed by the system must implement this.
+/// A trait for type-erased message handling within the actor\'s `Runtime`.
+///
+/// This trait is typically implemented automatically by the `impl_message_handler!` macro.
+/// It allows the `Runtime` to handle messages of different types by downcasting
+/// them to their concrete types before passing them to the actor\'s specific `Message::handle`
+/// implementation.
+///
+/// Implementors of this trait must also be `Send`, `Sync`, and `\'static`.
 pub trait MessageHandler: Send + Sync + 'static {
+    /// Handles a type-erased message.
+    ///
+    /// The implementation should attempt to downcast `msg_any` to one of the
+    /// message types the actor supports and then call the corresponding
+    /// `Message::handle` method.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg_any`: A `Box<dyn Any + Send>` containing the message.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `Box<dyn Any + Send>` with the reply, or an error.
     fn handle(
         &mut self,
         msg_any: Box<dyn Any + Send>,
@@ -209,14 +490,21 @@ pub trait MessageHandler: Send + Sync + 'static {
 }
 
 // Manages the lifecycle and message loop for a single actor instance.
-pub struct Runtime<T: Actor + MessageHandler> {
+struct Runtime<T: Actor + MessageHandler> {
     actor_ref: ActorRef,
     actor: T, // Actor instance is now owned by Runtime
     receiver: mpsc::Receiver<MailboxMessage>, // Receives messages for this actor
 }
 
 impl<T: Actor + MessageHandler> Runtime<T> {
-    pub fn new(
+    /// Creates a new `Runtime` for the given actor.
+    ///
+    /// # Arguments
+    ///
+    /// * `actor`: The actor instance. It will be owned by the `Runtime`.
+    /// * `actor_ref`: A reference to the actor.
+    /// * `receiver`: The receiving end of the actor's mailbox channel.
+    fn new(
         actor: T, // Actor is moved into Runtime
         actor_ref: ActorRef,
         receiver: mpsc::Receiver<MailboxMessage>,
@@ -302,7 +590,23 @@ impl<T: Actor + MessageHandler> Runtime<T> {
     }
 }
 
-// Spawns a new actor and returns an ActorRef to it, and a JoinHandle to get the actor and stop reason.
+/// Spawns a new actor and returns an `ActorRef` to it, along with a `JoinHandle`.
+///
+/// The `JoinHandle` can be used to await the actor's termination and retrieve
+/// the actor instance and its `ActorStopReason`.
+///
+/// # Arguments
+///
+/// * `actor`: The actor instance to spawn. The actor type `T` must implement
+///   `Actor`, `MessageHandler`, and be `'static`.
+///
+/// # Returns
+///
+/// A tuple containing:
+/// * An `ActorRef` for sending messages to the spawned actor.
+/// * A `tokio::task::JoinHandle` that resolves to a tuple `(T, ActorStopReason)`
+///   when the actor terminates. `T` is the actor instance itself, allowing for state
+///   retrieval after the actor stops.
 pub fn spawn<T: Actor + MessageHandler + 'static>(
     actor: T, // Actor instance is taken by value
 ) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) { // Updated return type
@@ -647,7 +951,7 @@ mod tests {
                     assert!(e.to_string().contains("on_start failed"));
                 }
                 assert!(*returned_actor.on_start_attempted.lock().await);
-                assert!(!*returned_actor.on_stop_attempted.lock().await); // on_stop should not be called if on_start fails
+                assert!(*returned_actor.on_stop_attempted.lock().await);
             }
             Err(e) => panic!("Expected Ok with Panicked reason, got JoinError: {:?}", e),
         }
