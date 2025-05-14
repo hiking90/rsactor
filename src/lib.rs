@@ -448,15 +448,15 @@ pub trait Actor: Send + 'static {
 ///
 /// # Type Parameters
 ///
-/// * `T`: The type of the message. Must be `Send` and `\'static`.
+/// * `T`: The type of the message. Must be `Send` and `'static`.
 pub trait Message<T: Send + 'static>: Actor {
     /// The type of the reply that will be sent back to the caller.
-    /// Must be `Send` and `\'static` to be sent over a `oneshot` channel.
+    /// Must be `Send` and `'static` to be sent over a `oneshot` channel.
     type Reply: Send + 'static;
 
     /// Handles the incoming message and produces a reply.
     ///
-    /// This is an asynchronous method where the actor\'s business logic for
+    /// This is an asynchronous method where the actor's business logic for
     /// processing the message `T` resides.
     ///
     /// # Arguments
@@ -465,14 +465,14 @@ pub trait Message<T: Send + 'static>: Actor {
     fn handle(&mut self, msg: T) -> impl Future<Output = Self::Reply> + Send;
 }
 
-/// A trait for type-erased message handling within the actor\'s `Runtime`.
+/// A trait for type-erased message handling within the actor's `Runtime`.
 ///
 /// This trait is typically implemented automatically by the `impl_message_handler!` macro.
 /// It allows the `Runtime` to handle messages of different types by downcasting
-/// them to their concrete types before passing them to the actor\'s specific `Message::handle`
+/// them to their concrete types before passing them to the actor's specific `Message::handle`
 /// implementation.
 ///
-/// Implementors of this trait must also be `Send`, `Sync`, and `\'static`.
+/// Implementors of this trait must also be `Send`, `Sync`, and 'static`.
 pub trait MessageHandler: Send + Sync + 'static {
     /// Handles a type-erased message.
     ///
@@ -531,20 +531,23 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         let actor_id = self.actor_ref.id();
 
         // Call on_start
-        if let Err(e) = self.actor.on_start(self.actor_ref.clone()).await {
-            error!("Actor {} on_start error: {:?}", actor_id, e);
-            let err_msg = format!("on_start failed for actor {}: {:?}", actor_id, e);
-            let mut reason = ActorStopReason::Error(anyhow::Error::msg(err_msg));
-            if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &reason).await {
-                error!("Actor {} on_stop error: {:?}", actor_id, e_on_stop);
+        if let Err(e_on_start) = self.actor.on_start(self.actor_ref.clone()).await {
+            error!("Actor {} on_start error: {:?}", actor_id, e_on_start);
+            let base_error_msg = format!("on_start failed for actor {}: {:?}", actor_id, e_on_start);
+            let mut combined_error = anyhow::Error::msg(base_error_msg); // Initial error from on_start
 
-                if let ActorStopReason::Error(original_start_err) = reason {
-                    let new_err = original_start_err.context("on_stop failed after on_start error");
-                    reason = ActorStopReason::Error(new_err); // Corrected this line
-                }
+            // Attempt to call on_stop, its error (if any) should be chained.
+            // The reason passed to on_stop should reflect the on_start failure.
+            // Create a temporary reason for the on_stop call that clearly indicates it's due to on_start failure.
+            let on_start_failure_reason = ActorStopReason::Error(anyhow::Error::msg(format!("on_start failed for actor {}", actor_id)));
+
+            if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &on_start_failure_reason).await {
+                error!("Actor {} on_stop error following on_start error: {:?}", actor_id, e_on_stop);
+                // Add context about the on_stop failure to the combined_error
+                combined_error = combined_error.context(format!("Additionally, on_stop also failed: {:?}", e_on_stop));
             }
-            info!("Actor {} task finishing prematurely due to on_start error.", actor_id);
-            return (self.actor, reason); // Return actor instance and reason
+            info!("Actor {} task finishing prematurely due to error(s) during startup.", actor_id);
+            return (self.actor, ActorStopReason::Error(combined_error));
         }
 
         info!("Runtime for actor {} is running.", actor_id);
@@ -631,12 +634,22 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         info!("Runtime for actor {} is shutting down.", actor_id);
 
         // Call on_stop
-        if let Err(e) = self.actor.on_stop(self.actor_ref.clone(), &final_reason).await {
-            error!("Actor {} on_stop error: {:?}", actor_id, e);
-            if matches!(final_reason, ActorStopReason::Normal) {
-                let err_msg = format!("on_stop failed for actor {}: {:?}", actor_id, e);
-                final_reason = ActorStopReason::Error(anyhow::Error::msg(err_msg));
-            }
+        if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &final_reason).await {
+            let on_stop_failure_message = format!("on_stop failed: {:?}", e_on_stop);
+            error!("Actor {} {}. Original reason: {:?}", actor_id, on_stop_failure_message, final_reason);
+
+            final_reason = match final_reason {
+                ActorStopReason::Error(existing_err) => {
+                    // Chain the on_stop failure to the existing error.
+                    ActorStopReason::Error(existing_err.context(on_stop_failure_message))
+                }
+                ActorStopReason::Normal | ActorStopReason::Killed => {
+                    // If stopping normally or killed, and on_stop fails, the overall result is an error.
+                    // The error should state the original intended stop reason and the on_stop failure.
+                    let context_message = format!("Actor was stopping with reason {:?}, but then {}", final_reason, on_stop_failure_message);
+                    ActorStopReason::Error(anyhow::Error::msg(context_message))
+                }
+            };
         }
 
         info!("Actor {} task finished with reason: {:?}.", actor_id, final_reason);
