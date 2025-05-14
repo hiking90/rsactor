@@ -24,6 +24,7 @@ struct RegisterPhilosopher {
     philosopher_ref: ActorRef,
 }
 
+/// For testing purposes, only one fork is processed at a time
 /// Message from Philosopher to Table to request a single fork.
 #[derive(Debug, Clone)]
 struct RequestFork {
@@ -109,14 +110,18 @@ impl Message<StartThinking> for Philosopher {
     async fn handle(&mut self, _msg: StartThinking) -> Self::Reply {
         println!("Philosopher {} ({}) is thinking.", self.id, self.name);
 
+        // Simulate thinking for a random duration.
         let think_duration = rand::rng().random_range(100..1100);
         sleep(Duration::from_millis(think_duration)).await;
 
         println!("Philosopher {} ({}) is hungry.", self.id, self.name);
 
-        // Ensure no forks are held before trying to acquire new ones
+        // --- Fork Acquisition Logic ---
+        // Before attempting to pick up forks, ensure the philosopher is not already holding any.
+        // This is a safeguard against inconsistent states.
         if self.has_left_fork || self.has_right_fork {
             eprintln!("Philosopher {} ({}) was in inconsistent fork state before thinking. Releasing all.", self.id, self.name);
+            // If holding the left fork, send a message to the table to release it.
             if self.has_left_fork {
                 let release_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Left };
                 if let Err(e) = self.table_ref.tell(release_msg).await {
@@ -124,6 +129,7 @@ impl Message<StartThinking> for Philosopher {
                 }
                 self.has_left_fork = false;
             }
+            // If holding the right fork, send a message to the table to release it.
             if self.has_right_fork {
                 let release_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Right };
                 if let Err(e) = self.table_ref.tell(release_msg).await {
@@ -133,56 +139,65 @@ impl Message<StartThinking> for Philosopher {
             }
         }
 
-
-        // Attempt to acquire Left Fork
+        // Attempt to acquire the Left Fork by sending a request to the Table actor.
         println!("Philosopher {} ({}) attempts to acquire Left fork.", self.id, self.name);
         let req_left_fork_msg = RequestFork { logical_id: self.id, side: ForkSide::Left };
+        // The 'ask' pattern is used here to wait for a reply from the Table actor
+        // indicating whether the fork was successfully acquired.
         match self.table_ref.ask::<RequestFork, bool>(req_left_fork_msg).await {
-            Ok(true) => { // Got left fork
+            Ok(true) => { // Successfully acquired the left fork.
                 self.has_left_fork = true;
                 println!("Philosopher {} ({}) acquired Left fork. Attempting Right fork.", self.id, self.name);
 
-                // Attempt to acquire Right Fork
+                // Now, attempt to acquire the Right Fork.
                 let req_right_fork_msg = RequestFork { logical_id: self.id, side: ForkSide::Right };
                 match self.table_ref.ask::<RequestFork, bool>(req_right_fork_msg).await {
-                    Ok(true) => { // Got right fork
+                    Ok(true) => { // Successfully acquired the right fork as well.
                         self.has_right_fork = true;
                         println!("Philosopher {} ({}) acquired both Left and Right forks.", self.id, self.name);
+                        // Both forks acquired, tell self to start eating.
                         if let Some(self_ref) = &self.self_ref {
                             if let Err(e) = self_ref.tell(StartEating).await {
                                 eprintln!("Philosopher {} ({}): Failed to send StartEating to self: {:?}", self.id, self.name, e);
-                                // If sending StartEating fails, we should probably release forks
+                                // If sending StartEating fails, it's crucial to release the forks
+                                // to prevent deadlock and then try thinking again.
                                 self.release_both_forks().await;
                                 self.think_again().await;
                             }
                         }
                     }
-                    Ok(false) => { // Failed to get right fork
+                    Ok(false) => { // Failed to acquire the right fork.
                         println!("Philosopher {} ({}) failed to get Right fork. Releasing Left fork.", self.id, self.name);
+                        // Must release the already acquired left fork before thinking again.
                         let release_left_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Left };
                         if let Err(e) = self.table_ref.tell(release_left_msg).await {
                              eprintln!("Philosopher {} ({}): Error releasing left fork: {:?}", self.id, self.name, e);
                         }
                         self.has_left_fork = false;
+                        // Go back to thinking.
                         self.think_again().await;
                     }
-                    Err(e) => { // Error getting right fork
+                    Err(e) => { // An error occurred while trying to acquire the right fork.
                         eprintln!("Philosopher {} ({}) error getting Right fork: {:?}. Releasing Left fork.", self.id, self.name, e);
+                        // Must release the already acquired left fork.
                         let release_left_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Left };
                         if let Err(e) = self.table_ref.tell(release_left_msg).await {
                             eprintln!("Philosopher {} ({}): Error releasing left fork (on error): {:?}", self.id, self.name, e);
                         }
                         self.has_left_fork = false;
+                        // Go back to thinking.
                         self.think_again().await;
                     }
                 }
             }
-            Ok(false) => { // Failed to get left fork
+            Ok(false) => { // Failed to acquire the left fork.
                 println!("Philosopher {} ({}) failed to get Left fork. Thinking again.", self.id, self.name);
+                // No forks acquired, so just go back to thinking.
                 self.think_again().await;
             }
-            Err(e) => { // Error getting left fork
+            Err(e) => { // An error occurred while trying to acquire the left fork.
                 eprintln!("Philosopher {} ({}) error getting Left fork: {:?}. Thinking again.", self.id, self.name, e);
+                // Go back to thinking.
                 self.think_again().await;
             }
         }
