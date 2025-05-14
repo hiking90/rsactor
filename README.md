@@ -36,8 +36,6 @@ Add `rsActor` to your `Cargo.toml`:
 rsactor = "0.1"
 ```
 
-*(Note: Update the dependency source once `rsActor` is published or if you're using a local path.)*
-
 ### 2. Basic Usage Example
 
 Here's a simple counter actor:
