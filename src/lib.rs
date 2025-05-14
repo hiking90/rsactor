@@ -199,6 +199,7 @@ macro_rules! impl_message_handler {
 ///
 /// This enum includes both user-defined messages (wrapped in `Envelope`)
 /// and control messages like `Terminate` and `StopGracefully`.
+#[derive(Debug)] // Added Debug derive
 enum MailboxMessage {
     /// A user-defined message to be processed by the actor.
     Envelope {
@@ -227,15 +228,17 @@ static ACTOR_COUNTER: AtomicUsize = AtomicUsize::new(1);
 pub struct ActorRef {
     id: usize,
     sender: MailboxSender,
+    terminate_sender: MailboxSender, // Added for dedicated termination
 }
 
 impl ActorRef {
     // Creates a new ActorRef with a unique ID and the mailbox sender.
     // This is typically called by the System when an actor is spawned.
-    fn new_internal(id: usize, sender: MailboxSender) -> Self {
+    fn new_internal(id: usize, sender: MailboxSender, terminate_sender: MailboxSender) -> Self {
         ActorRef {
             id,
             sender,
+            terminate_sender,
         }
     }
 
@@ -347,13 +350,14 @@ impl ActorRef {
     /// though it logs a warning and returns `Ok(())` if the actor is already stopped,
     /// as the desired state (stopped) is met.
     pub async fn kill(&self) -> Result<()> {
-        info!("Sending Terminate message to actor {}", self.id);
-        match self.sender.send(MailboxMessage::Terminate).await {
+        info!("Sending Terminate message to actor {} via dedicated channel", self.id);
+        // Use the dedicated terminate_sender
+        match self.terminate_sender.send(MailboxMessage::Terminate).await {
             Ok(_) => Ok(()),
             Err(_) => {
-                // This error means the actor's mailbox channel is closed,
+                // This error means the actor's terminate mailbox channel is closed,
                 // which implies the actor is already stopping or has stopped.
-                warn!("Failed to send Terminate to actor {}: mailbox closed. Actor might already be stopped.", self.id);
+                warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.id);
                 // Considered Ok as the desired state (stopped/stopping) is met.
                 Ok(())
             }
@@ -494,6 +498,7 @@ struct Runtime<T: Actor + MessageHandler> {
     actor_ref: ActorRef,
     actor: T, // Actor instance is now owned by Runtime
     receiver: mpsc::Receiver<MailboxMessage>, // Receives messages for this actor
+    terminate_receiver: mpsc::Receiver<MailboxMessage>, // Dedicated receiver for Terminate messages
 }
 
 impl<T: Actor + MessageHandler> Runtime<T> {
@@ -504,15 +509,18 @@ impl<T: Actor + MessageHandler> Runtime<T> {
     /// * `actor`: The actor instance. It will be owned by the `Runtime`.
     /// * `actor_ref`: A reference to the actor.
     /// * `receiver`: The receiving end of the actor's mailbox channel.
+    /// * `terminate_receiver`: The receiving end of the actor's terminate channel.
     fn new(
         actor: T, // Actor is moved into Runtime
         actor_ref: ActorRef,
         receiver: mpsc::Receiver<MailboxMessage>,
+        terminate_receiver: mpsc::Receiver<MailboxMessage>, // Added parameter
     ) -> Self {
         Runtime {
             actor_ref,
             actor,
             receiver,
+            terminate_receiver, // Initialize new field
         }
     }
 
@@ -545,31 +553,77 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         let mut final_reason = ActorStopReason::Normal; // Default reason
 
         // Message processing loop
-        while let Some(actor_message) = self.receiver.recv().await {
-            match actor_message {
-                MailboxMessage::Envelope { payload, reply_channel } => {
-                    if gracefully_stopping {
-                        warn!("Actor {} is stopping gracefully, ignoring Envelope message.", actor_id);
-                        continue;
-                    }
-                    let result = self.actor.handle(payload).await;
-                    if reply_channel.send(result).is_err() {
-                        warn!(
-                            "Failed to send reply: reply channel closed for actor {}",
-                            actor_id
-                        );
+        loop {
+            tokio::select! {
+                biased; // Prioritize terminate_receiver
+
+                // Listen for terminate signal on the dedicated channel
+                maybe_terminate_msg = self.terminate_receiver.recv() => {
+                    match maybe_terminate_msg {
+                        Some(MailboxMessage::Terminate) => {
+                            info!("Actor {} received Terminate message via dedicated channel. Initiating immediate shutdown.", actor_id);
+                            final_reason = ActorStopReason::Killed;
+                            self.receiver.close(); // Stop processing main queue
+                            break; // Exit the loop to proceed to on_stop
+                        }
+                        Some(other_msg) => {
+                            // This should not happen if the channel is used exclusively for Terminate.
+                            warn!("Actor {} received unexpected message {:?} on terminate channel. Ignoring.", actor_id, other_msg);
+                        }
+                        None => {
+                            // Terminate channel closed (e.g., ActorRef dropped).
+                            // If the main receiver is still active, the loop continues.
+                            // If main receiver is also done, the 'else' branch or main receiver's 'None' will break.
+                        }
                     }
                 }
-                MailboxMessage::Terminate => {
-                    info!("Actor {} received Terminate message. Initiating immediate shutdown.", actor_id);
-                    final_reason = ActorStopReason::Killed;
-                    break; // Exit the loop to proceed to on_stop
+
+                // Listen for regular messages on the main channel
+                // Disable this arm if we've already decided to kill to ensure immediate shutdown
+                maybe_actor_message = self.receiver.recv(), if !matches!(final_reason, ActorStopReason::Killed) => {
+                    match maybe_actor_message {
+                        Some(actor_message) => {
+                            match actor_message {
+                                MailboxMessage::Envelope { payload, reply_channel } => {
+                                    if gracefully_stopping { // Already implies not Killed due to arm guard
+                                        warn!("Actor {} is stopping gracefully, ignoring new Envelope message.", actor_id);
+                                        drop(reply_channel); // Signal caller that message won't be processed
+                                        continue;
+                                    }
+                                    let result = self.actor.handle(payload).await;
+                                    if reply_channel.send(result).is_err() {
+                                        warn!("Actor {} failed to send reply for an Envelope message: reply channel closed by caller.", actor_id);
+                                    }
+                                }
+                                MailboxMessage::Terminate => {
+                                    // Terminate received on main channel (fallback or explicit send to main)
+                                    info!("Actor {} received Terminate message via main channel. Initiating immediate shutdown.", actor_id);
+                                    final_reason = ActorStopReason::Killed;
+                                    self.terminate_receiver.close(); // Close the dedicated terminate receiver as well
+                                    break; // Exit the loop
+                                }
+                                MailboxMessage::StopGracefully => {
+                                    // Don't switch to Normal if already Killed (though arm guard should prevent this state change)
+                                    if !matches!(final_reason, ActorStopReason::Killed) {
+                                        info!("Actor {} received StopGracefully message. Will process remaining messages then shut down. New messages will be ignored.", actor_id);
+                                        gracefully_stopping = true;
+                                        self.receiver.close(); // Close the main receiver to drain it.
+                                        final_reason = ActorStopReason::Normal;
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            // Main receiver channel closed.
+                            info!("Actor {} main mailbox channel closed. Actor will shut down.", actor_id);
+                            break; // Exit the loop
+                        }
+                    }
                 }
-                MailboxMessage::StopGracefully => {
-                    info!("Actor {} received StopGracefully message. Will process remaining messages then shut down. New messages will be ignored.", actor_id);
-                    gracefully_stopping = true;
-                    self.receiver.close(); // Close the receiver. recv() will drain existing messages then return None.
-                    final_reason = ActorStopReason::Normal; // Will stop normally after queue drains
+                // This `else` is reached if all enabled select arms are pending or all arms become disabled.
+                else => {
+                    info!("Actor {} event loop is concluding as all message sources are complete or disabled.", actor_id);
+                    break;
                 }
             }
         }
@@ -611,11 +665,12 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
     actor: T, // Actor instance is taken by value
 ) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) { // Updated return type
     let actor_id = ACTOR_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let (tx, rx) = mpsc::channel::<MailboxMessage>(32);
+    let (tx, rx) = mpsc::channel::<MailboxMessage>(32); // Main channel
+    let (terminate_tx, terminate_rx) = mpsc::channel::<MailboxMessage>(1); // Dedicated terminate channel
 
-    let actor_ref = ActorRef::new_internal(actor_id, tx);
+    let actor_ref = ActorRef::new_internal(actor_id, tx, terminate_tx); // Pass both senders
 
-    let runtime = Runtime::new(actor, actor_ref.clone(), rx);
+    let runtime = Runtime::new(actor, actor_ref.clone(), rx, terminate_rx); // Pass both receivers
     let id_for_log = runtime.actor_ref.id(); // Capture ID for logging before move
 
     let handle = tokio::spawn(async move { // runtime is moved into the spawned task
@@ -852,24 +907,37 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_ref_kill() {
-        let (actor_ref, handle, _counter, _lpmt, on_start_called, on_stop_called) =
+        let (actor_ref, handle, _counter_arc_from_setup, _lpmt_arc_from_setup, on_start_called_arc, _on_stop_called_arc_from_setup) =
             setup_actor().await;
-        assert!(*on_start_called.lock().await);
+        assert!(*on_start_called_arc.lock().await, "on_start should have been called");
 
-        // Send a message that might be in flight
-        actor_ref.tell(UpdateCounterMsg(10)).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await; // Small delay
+        // Send a message that should ideally sit in the queue if kill is prioritized.
+        // The initial value of counter in TestActor is 0.
+        actor_ref.tell(UpdateCounterMsg(10)).await.expect("Tell UpdateCounterMsg failed");
 
+        // Immediately send kill, without waiting for the previous message to be processed.
+        // The dedicated terminate channel and biased select in Runtime should prioritize this.
         actor_ref.kill().await.expect("kill command failed");
 
-        let (_actor_state, reason) = handle.await.expect("Actor task failed");
-        assert!(matches!(reason, ActorStopReason::Killed), "Reason: {:?}", reason);
-        // Current implementation calls on_stop even for Killed
-        assert!(*on_stop_called.lock().await, "on_stop should be called on kill");
+        let (returned_actor, reason) = handle.await.expect("Actor task failed to complete");
 
-        // Interactions after kill
+        println!("Actor value: {:?}", returned_actor.counter);
+
+        assert!(matches!(reason, ActorStopReason::Killed), "Stop reason was {:?}, expected ActorStopReason::Killed", reason);
+
+        // Check that on_stop was called on the actor instance.
+        assert!(*returned_actor.on_stop_called.lock().await, "on_stop should have been called even on kill");
+
+        // Verify that the UpdateCounterMsg(10) was NOT processed because kill took priority.
+        let final_counter = *returned_actor.counter.lock().await;
+        assert_eq!(final_counter, 0, "Counter should be 0, indicating UpdateCounterMsg was not processed due to kill priority. Got: {}", final_counter);
+
+        let final_lpmt = returned_actor.last_processed_message_type.lock().await.clone();
+        assert_eq!(final_lpmt, None, "Last processed message type should be None, indicating UpdateCounterMsg was not processed. Got: {:?}", final_lpmt);
+
+        // Interactions after kill should still fail
         assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to killed actor should fail");
-        assert!(actor_ref.ask::<_, String>(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
+        assert!(actor_ref.ask::<PingMsg, String>(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
     }
 
     #[tokio::test]
@@ -1037,5 +1105,7 @@ mod tests {
         // So, a panic in `self.actor.handle()` will propagate and terminate the task before `on_stop` is called by the loop.
         assert!(!*on_stop_called_arc.lock().await, "on_stop should not be called if handler panics and task terminates abruptly");
     }
+
+    // Test: Spawning multiple actors
 }
 

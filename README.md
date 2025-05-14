@@ -33,11 +33,7 @@ Add `rsActor` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rsActor = { git = "https://your-repo-url/rsActor.git" } # Or path, or crates.io version when published
-tokio = { version = "1", features = ["full"] }
-anyhow = "1.0"
-log = "0.4"
-env_logger = "0.11" # Optional, for logging examples
+rsactor = "0.1"
 ```
 
 *(Note: Update the dependency source once `rsActor` is published or if you're using a local path.)*
@@ -47,7 +43,7 @@ env_logger = "0.11" # Optional, for logging examples
 Here's a simple counter actor:
 
 ```rust
-use rsactor::{Actor, ActorRef, Message}; // Updated import
+use rsactor::{Actor, ActorRef, Message, ActorStopReason, impl_message_handler, spawn};
 use anyhow::Result;
 use log::info;
 
@@ -69,7 +65,7 @@ impl Actor for CounterActor {
 
     async fn on_stop(&mut self,
         actor_ref: ActorRef,
-        stop_reason: &rsactor::ActorStopReason
+        stop_reason: &ActorStopReason
     ) -> Result<(), Self::Error> {
         info!("CounterActor (id: {}) stopping. Final count: {}. Reason: {:?}", actor_ref.id(), self.count, stop_reason);
         Ok(())
@@ -99,9 +95,9 @@ impl Message<GetCountMsg> for CounterActor {
     }
 }
 
-// Use the rsactor::impl_message_handler! macro to generate boilerplate
+// Use the impl_message_handler! macro to generate boilerplate
 // for routing IncrementMsg and GetCountMsg to their respective handlers.
-rsactor::impl_message_handler!(CounterActor, [IncrementMsg, GetCountMsg]);
+impl_message_handler!(CounterActor, [IncrementMsg, GetCountMsg]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -114,11 +110,11 @@ async fn main() -> Result<()> {
     info!("Creating CounterActor with initial count: {}", initial_count);
 
     // Spawn the actor.
-    // rsactor::spawn returns a tuple:
+    // spawn returns a tuple:
     // 1. ActorRef: A handle to send messages to the actor.
     // 2. JoinHandle: A handle to await the actor's termination and retrieve its final state.
     info!("Spawning CounterActor...");
-    let (actor_ref, join_handle) = rsactor::spawn(counter_actor_instance);
+    let (actor_ref, join_handle) = spawn(counter_actor_instance);
     info!("CounterActor spawned with ID: {}", actor_ref.id());
 
     // Send an IncrementMsg using 'ask' to get a reply.
