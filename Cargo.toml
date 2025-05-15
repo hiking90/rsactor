@@ -1,10 +1,11 @@
 [package]
 name = "rsactor"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75.0"
-description = "A Rust actor library"
+description = "A Simplified Actor Framework for Rust"
 repository = "https://github.com/hiking90/rsactor"
+homepage = "https://github.com/hiking90/rsactor"
 license = "Apache-2.0"
 keywords = ["actor", "rust", "async"]
 

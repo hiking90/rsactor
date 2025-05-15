@@ -111,21 +111,14 @@ async fn main() -> Result<()> {
     // - The actor instance (allowing access to its final state).
     // - The ActorStopReason indicating why it stopped.
     println!("Waiting for actor {} to stop...", actor_ref.id());
-    match join_handle.await {
-        Ok((stopped_actor, reason)) => {
-            // Successfully retrieved the actor and its stop reason.
-            println!(
-                "Actor {} stopped. Final count: {}. Reason: {:?}",
-                actor_ref.id(), // actor_ref is still in scope here
-                stopped_actor.count, // Access the final count from the returned actor instance
-                reason // The reason why the actor stopped
-            );
-        }
-        Err(e) => {
-            // An error occurred while joining the actor's task (e.g., if the task panicked).
-            eprintln!("Error joining actor task for actor {}: {:?}", actor_ref.id(), e);
-        }
-    }
+    let (stopped_actor, reason) = join_handle.await?;
+    // Successfully retrieved the actor and its stop reason.
+    println!(
+        "Actor {} stopped. Final count: {}. Reason: {:?}",
+        actor_ref.id(), // actor_ref is still in scope here
+        stopped_actor.count, // Access the final count from the returned actor instance
+        reason // The reason why the actor stopped
+    );
 
     println!("Main function finished.");
     Ok(())

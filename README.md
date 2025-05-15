@@ -137,23 +137,13 @@ async fn main() -> Result<()> {
     // This is important to ensure the actor has fully stopped and resources are cleaned up.
     // join_handle.await returns a Result containing the actor's final state and stop reason.
     info!("Waiting for CounterActor (ID: {}) to complete its task...", actor_ref.id());
-    match join_handle.await {
-        Ok((stopped_actor, reason)) => {
-            info!(
-                "CounterActor (ID: {}) task completed. Final count: {}. Stop reason: {:?}",
-                actor_ref.id(), // Note: actor_ref.id() is still usable here
-                stopped_actor.count,
-                reason
-            );
-        }
-        Err(e) => {
-            log::error!(
-                "Error waiting for CounterActor (ID: {}) task to complete: {:?}",
-                actor_ref.id(), // It's good practice to log the ID if available
-                e
-            );
-        }
-    }
+    let (stopped_actor, reason) = join_handle.await?;
+    info!(
+        "CounterActor (ID: {}) task completed. Final count: {}. Stop reason: {:?}",
+        actor_ref.id(), // Note: actor_ref.id() is still usable here
+        stopped_actor.count,
+        reason
+    );
 
     info!("Example finished.");
     Ok(())

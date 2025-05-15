@@ -124,11 +124,14 @@ use std::{
     any::Any,
     fmt::Debug,
     future::Future,
-    sync::atomic::{AtomicUsize, Ordering}
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        OnceLock,
+    },
 };
 
 use anyhow::Result;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot}; // Mutex might be from tests, ensure it's not needed here. std::sync::Mutex if for global. No, OnceLock is fine.
 use log::{info, error, warn};
 
 /// Implements the `MessageHandler` trait for a given actor type.
@@ -205,13 +208,19 @@ enum MailboxMessage {
     Envelope {
         /// The message payload.
         payload: Box<dyn Any + Send>,
-        /// A channel to send the reply back to the caller.
-        reply_channel: oneshot::Sender<Result<Box<dyn Any + Send>>>,
+        /// A channel to send the reply back to the caller. Optional for 'tell' operations.
+        reply_channel: Option<oneshot::Sender<Result<Box<dyn Any + Send>>>>,
     },
-    /// A signal for the actor to terminate immediately.
-    Terminate,
+    // Terminate is removed from here
     /// A signal for the actor to stop gracefully after processing existing messages in its mailbox.
     StopGracefully,
+}
+
+/// Represents control signals that can be sent to an actor.
+#[derive(Debug)]
+enum ControlSignal {
+    /// A signal for the actor to terminate immediately.
+    Terminate,
 }
 
 // Type alias for the sender part of the actor's mailbox channel.
@@ -219,6 +228,29 @@ type MailboxSender = mpsc::Sender<MailboxMessage>;
 
 // Counter for generating unique actor IDs.
 static ACTOR_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+// Global configuration for the main channel buffer size.
+static MAIN_CHANNEL_BUFFER_SIZE: OnceLock<usize> = OnceLock::new();
+const DEFAULT_MAIN_CHANNEL_BUFFER_SIZE: usize = 32;
+
+/// Sets the global buffer size for the main actor mailbox channel.
+///
+/// This function can only be called successfully once. Subsequent calls
+/// will return an error.
+///
+/// # Arguments
+///
+/// * `size`: The desired buffer size for the main channel.
+///
+/// # Returns
+///
+/// `Ok(())` if the buffer size was set successfully, or an `Err` with a
+/// message if it has already been set.
+pub fn set_main_channel_buffer_size(size: usize) -> Result<(), String> {
+    MAIN_CHANNEL_BUFFER_SIZE
+        .set(size)
+        .map_err(|_| "Main channel buffer size has already been set.".to_string())
+}
 
 /// A reference to an actor, allowing messages to be sent to it.
 ///
@@ -228,13 +260,13 @@ static ACTOR_COUNTER: AtomicUsize = AtomicUsize::new(1);
 pub struct ActorRef {
     id: usize,
     sender: MailboxSender,
-    terminate_sender: MailboxSender, // Added for dedicated termination
+    terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
 }
 
 impl ActorRef {
     // Creates a new ActorRef with a unique ID and the mailbox sender.
     // This is typically called by the System when an actor is spawned.
-    fn new_internal(id: usize, sender: MailboxSender, terminate_sender: MailboxSender) -> Self {
+    fn new_internal(id: usize, sender: MailboxSender, terminate_sender: mpsc::Sender<ControlSignal>) -> Self { // Changed type
         ActorRef {
             id,
             sender,
@@ -263,15 +295,12 @@ impl ActorRef {
     where
         M: Send + 'static,
     {
-        // We still need to create a oneshot channel because MailboxMessage expects it.
-        // However, the sender part (reply_tx) will be dropped immediately by this method,
-        // and the actor's run loop should handle the case where sending a reply fails.
-        let (reply_tx, _reply_rx) = oneshot::channel::<Result<Box<dyn Any + Send>>>();
+        // For 'tell', no reply is expected, so no need for a reply_channel.
         let msg_any = Box::new(msg) as Box<dyn Any + Send>;
 
         let envelope = MailboxMessage::Envelope {
             payload: msg_any,
-            reply_channel: reply_tx,
+            reply_channel: None, // reply_channel is None for tell
         };
 
         if self.sender.send(envelope).await.is_err() {
@@ -315,7 +344,7 @@ impl ActorRef {
 
         let envelope = MailboxMessage::Envelope {
             payload: msg_any,
-            reply_channel: reply_tx,
+            reply_channel: Some(reply_tx), // reply_channel is Some for ask
         };
 
         // Use the ActorRef's own sender
@@ -350,19 +379,29 @@ impl ActorRef {
     /// though it logs a warning and returns `Ok(())` if the actor is already stopped,
     /// as the desired state (stopped) is met.
     pub async fn kill(&self) -> Result<()> {
-        info!("Sending Terminate message to actor {} via dedicated channel", self.id);
-        // Use the dedicated terminate_sender
-        match self.terminate_sender.send(MailboxMessage::Terminate).await {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                // This error means the actor's terminate mailbox channel is closed,
-                // which implies the actor is already stopping or has stopped.
+        info!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.id);
+        // Use the dedicated terminate_sender with try_send
+        match self.terminate_sender.try_send(ControlSignal::Terminate) { // Changed to ControlSignal::Terminate
+            Ok(_) => {
+                // Successfully sent the terminate message.
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                // The channel is full. Since it has a capacity of 1,
+                // this means a Terminate message is already in the queue.
+                warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.id);
+                // Considered Ok as the desired state (stopping/killed) is effectively met.
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                // The channel is closed, which implies the actor is already stopped or has finished processing.
                 warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.id);
-                // Considered Ok as the desired state (stopped/stopping) is met.
+                // Considered Ok as the desired state (stopped) is met.
                 Ok(())
             }
         }
     }
+
 
     /// Sends a graceful stop signal to the actor.
     ///
@@ -430,7 +469,15 @@ pub trait Actor: Send + 'static {
 
     /// Called when the actor is stopped.
     ///
-    /// This method can be used for cleanup tasks.
+    /// This method can be used for cleanup tasks. It is called in the following situations:
+    /// - After a graceful stop via `ActorRef::stop()`
+    /// - After an immediate termination via `ActorRef::kill()`
+    /// - When the actor fails to start (i.e., `on_start` returns an error)
+    /// - When the actor's mailbox is closed and there are no more messages to process
+    ///
+    /// Note that this method will NOT be called in the following situations:
+    /// - When a panic occurs in a message handler
+    /// - When the Tokio runtime is shut down abruptly
     ///
     /// # Arguments
     ///
@@ -498,7 +545,7 @@ struct Runtime<T: Actor + MessageHandler> {
     actor_ref: ActorRef,
     actor: T, // Actor instance is now owned by Runtime
     receiver: mpsc::Receiver<MailboxMessage>, // Receives messages for this actor
-    terminate_receiver: mpsc::Receiver<MailboxMessage>, // Dedicated receiver for Terminate messages
+    terminate_receiver: mpsc::Receiver<ControlSignal>, // Dedicated receiver for Terminate messages - Changed type
 }
 
 impl<T: Actor + MessageHandler> Runtime<T> {
@@ -514,7 +561,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         actor: T, // Actor is moved into Runtime
         actor_ref: ActorRef,
         receiver: mpsc::Receiver<MailboxMessage>,
-        terminate_receiver: mpsc::Receiver<MailboxMessage>, // Added parameter
+        terminate_receiver: mpsc::Receiver<ControlSignal>, // Added parameter - Changed type
     ) -> Self {
         Runtime {
             actor_ref,
@@ -563,20 +610,21 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                 // Listen for terminate signal on the dedicated channel
                 maybe_terminate_msg = self.terminate_receiver.recv() => {
                     match maybe_terminate_msg {
-                        Some(MailboxMessage::Terminate) => {
-                            info!("Actor {} received Terminate message via dedicated channel. Initiating immediate shutdown.", actor_id);
+                        Some(ControlSignal::Terminate) => { // Changed to ControlSignal::Terminate
+                            info!("Actor {} received Terminate signal.", actor_id);
                             final_reason = ActorStopReason::Killed;
-                            self.receiver.close(); // Stop processing main queue
-                            break; // Exit the loop to proceed to on_stop
-                        }
-                        Some(other_msg) => {
-                            // This should not happen if the channel is used exclusively for Terminate.
-                            warn!("Actor {} received unexpected message {:?} on terminate channel. Ignoring.", actor_id, other_msg);
+                            self.receiver.close(); // Close the main mailbox
+                            self.terminate_receiver.close(); // Close its own channel
+                            break; // Exit message loop immediately
                         }
                         None => {
-                            // Terminate channel closed (e.g., ActorRef dropped).
-                            // If the main receiver is still active, the loop continues.
-                            // If main receiver is also done, the 'else' branch or main receiver's 'None' will break.
+                            // Terminate channel closed, implies actor should stop.
+                            // This might happen if ActorRef is dropped and terminate_sender along with it.
+                            info!("Actor {} terminate channel closed. Shutting down.", actor_id);
+                            if !matches!(final_reason, ActorStopReason::Killed) && !gracefully_stopping { // Avoid overriding Killed or Normal (from StopGracefully)
+                                final_reason = ActorStopReason::Normal; // Or some other appropriate reason
+                            }
+                            break; // Exit message loop
                         }
                     }
                 }
@@ -585,48 +633,42 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                 // Disable this arm if we've already decided to kill to ensure immediate shutdown
                 maybe_actor_message = self.receiver.recv(), if !matches!(final_reason, ActorStopReason::Killed) => {
                     match maybe_actor_message {
-                        Some(actor_message) => {
-                            match actor_message {
-                                MailboxMessage::Envelope { payload, reply_channel } => {
-                                    if gracefully_stopping { // Already implies not Killed due to arm guard
-                                        warn!("Actor {} is stopping gracefully, ignoring new Envelope message.", actor_id);
-                                        drop(reply_channel); // Signal caller that message won't be processed
-                                        continue;
-                                    }
-                                    let result = self.actor.handle(payload).await;
-                                    if reply_channel.send(result).is_err() {
-                                        warn!("Actor {} failed to send reply for an Envelope message: reply channel closed by caller.", actor_id);
+                        Some(MailboxMessage::Envelope { payload, reply_channel }) => {
+                            match self.actor.handle(payload).await {
+                                Ok(reply) => {
+                                    if let Some(tx) = reply_channel {
+                                        if tx.send(Ok(reply)).is_err() {
+                                            info!("Actor {} failed to send reply: receiver dropped for tell or ask.", actor_id);
+                                        }
                                     }
                                 }
-                                MailboxMessage::Terminate => {
-                                    // Terminate received on main channel (fallback or explicit send to main)
-                                    info!("Actor {} received Terminate message via main channel. Initiating immediate shutdown.", actor_id);
-                                    final_reason = ActorStopReason::Killed;
-                                    self.terminate_receiver.close(); // Close the dedicated terminate receiver as well
-                                    break; // Exit the loop
-                                }
-                                MailboxMessage::StopGracefully => {
-                                    // Don't switch to Normal if already Killed (though arm guard should prevent this state change)
-                                    if !matches!(final_reason, ActorStopReason::Killed) {
-                                        info!("Actor {} received StopGracefully message. Will process remaining messages then shut down. New messages will be ignored.", actor_id);
-                                        gracefully_stopping = true;
-                                        self.receiver.close(); // Close the main receiver to drain it.
-                                        final_reason = ActorStopReason::Normal;
+                                Err(e) => {
+                                    error!("Actor {} message handler error: {:?}", actor_id, e);
+                                    if let Some(tx) = reply_channel {
+                                        if tx.send(Err(e)).is_err() {
+                                            info!("Actor {} failed to send error reply: receiver dropped.", actor_id);
+                                        }
                                     }
                                 }
                             }
                         }
+                        Some(MailboxMessage::StopGracefully) => {
+                            info!("Actor {} received StopGracefully signal. Will stop after processing current messages.", actor_id);
+                            gracefully_stopping = true;
+                            final_reason = ActorStopReason::Normal; // Set reason, will stop when mailbox empty
+                            self.receiver.close(); // Close mailbox to stop receiving new messages
+                                                   // Continue loop to process existing messages, then 'None' branch will be hit.
+                        }
                         None => {
-                            // Main receiver channel closed.
-                            info!("Actor {} main mailbox channel closed. Actor will shut down.", actor_id);
-                            break; // Exit the loop
+                            // Mailbox closed, no more messages.
+                            info!("Actor {} mailbox closed. Shutting down.", actor_id);
+                            if !gracefully_stopping && !matches!(final_reason, ActorStopReason::Killed) {
+                                // If not already stopping gracefully or killed, it's a normal shutdown (e.g. ActorRef dropped)
+                                final_reason = ActorStopReason::Normal;
+                            }
+                            break; // Exit message loop
                         }
                     }
-                }
-                // This `else` is reached if all enabled select arms are pending or all arms become disabled.
-                else => {
-                    info!("Actor {} event loop is concluding as all message sources are complete or disabled.", actor_id);
-                    break;
                 }
             }
         }
@@ -677,9 +719,36 @@ impl<T: Actor + MessageHandler> Runtime<T> {
 pub fn spawn<T: Actor + MessageHandler + 'static>(
     actor: T, // Actor instance is taken by value
 ) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) { // Updated return type
+    let buffer_size = MAIN_CHANNEL_BUFFER_SIZE.get().copied().unwrap_or(DEFAULT_MAIN_CHANNEL_BUFFER_SIZE);
+    spawn_with_buffer_size(actor, buffer_size)
+}
+
+/// Spawns a new actor with a specified main channel buffer size and returns an `ActorRef` to it, along with a `JoinHandle`.
+///
+/// The `JoinHandle` can be used to await the actor's termination and retrieve
+/// the actor instance and its `ActorStopReason`.
+///
+/// # Arguments
+///
+/// * `actor`: The actor instance to spawn. The actor type `T` must implement
+///   `Actor`, `MessageHandler`, and be `'static`.
+/// * `buffer_size`: The buffer size for the actor's main message channel.
+///
+/// # Returns
+///
+/// A tuple containing:
+/// * An `ActorRef` for sending messages to the spawned actor.
+/// * A `tokio::task::JoinHandle` that resolves to a tuple `(T, ActorStopReason)`
+///   when the actor terminates. `T` is the actor instance itself, allowing for state
+///   retrieval after the actor stops.
+pub fn spawn_with_buffer_size<T: Actor + MessageHandler + 'static>(
+    actor: T, // Actor instance is taken by value
+    buffer_size: usize,
+) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) {
     let actor_id = ACTOR_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let (tx, rx) = mpsc::channel::<MailboxMessage>(32); // Main channel
-    let (terminate_tx, terminate_rx) = mpsc::channel::<MailboxMessage>(1); // Dedicated terminate channel
+    // let buffer_size = MAIN_CHANNEL_BUFFER_SIZE.get().copied().unwrap_or(DEFAULT_MAIN_CHANNEL_BUFFER_SIZE); // This line is removed as buffer_size is now a parameter
+    let (tx, rx) = mpsc::channel::<MailboxMessage>(buffer_size); // Main channel uses the provided buffer_size
+    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
     let actor_ref = ActorRef::new_internal(actor_id, tx, terminate_tx); // Pass both senders
 
@@ -915,7 +984,7 @@ mod tests {
 
         // Interactions after stop
         assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to stopped actor should fail");
-        assert!(actor_ref.ask::<_, String>(PingMsg("test".to_string())).await.is_err(), "Ask to stopped actor should fail");
+        assert!(actor_ref.ask::<PingMsg, String>(PingMsg("test".to_string())).await.is_err(), "Ask to stopped actor should fail");
     }
 
     #[tokio::test]
