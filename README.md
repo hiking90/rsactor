@@ -33,7 +33,7 @@ Add `rsActor` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rsactor = "0.1"
+rsactor = "0.2"
 ```
 
 ### 2. Basic Usage Example
