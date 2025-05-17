@@ -155,29 +155,55 @@ use anyhow::Result;
 struct MyMessage(String);
 struct MyQuery;
 struct MyActor;
+
 impl Actor for MyActor { type Error = anyhow::Error; }
-impl Message<MyMessage> for MyActor { type Reply = (); async fn handle(&mut self, _msg: MyMessage) -> Self::Reply {} }
-impl Message<MyQuery> for MyActor { type Reply = String; async fn handle(&mut self, _msg: MyQuery) -> Self::Reply { "response".to_string() } }
+
+impl Message<MyMessage> for MyActor {
+    type Reply = ();
+    async fn handle(&mut self, _msg: MyMessage) -> Self::Reply {}
+}
+
+impl Message<MyQuery> for MyActor {
+    type Reply = String;
+    async fn handle(&mut self, _msg: MyQuery) -> Self::Reply {
+        "response".to_string()
+    }
+}
+
 rsactor::impl_message_handler!(MyActor, [MyMessage, MyQuery]);
 
-
 async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
+    // --- tell_blocking example ---
+    // Clone ActorRef for the first blocking task (tell_blocking)
     let actor_ref_clone_tell = actor_ref.clone();
+    // Spawn a blocking task for tell_blocking
     let blocking_task_tell = task::spawn_blocking(move || {
+        // Send a message without waiting for a reply, with a timeout
         actor_ref_clone_tell.tell_blocking(MyMessage("notification".to_string()), Some(Duration::from_secs(1)))
     });
 
+    // --- ask_blocking example ---
+    // Clone ActorRef for the second blocking task (ask_blocking)
     let actor_ref_clone_ask = actor_ref.clone();
+    // Spawn another blocking task for ask_blocking
     let blocking_task_ask = task::spawn_blocking(move || {
+        // Send a query and wait for a reply, with a timeout.
+        // This call will block the current thread (managed by `spawn_blocking`)
+        // until a response is received from the actor or the timeout occurs.
+        // The type parameters for ask_blocking are:
+        // M: The message type (MyQuery). This is the type of the message being sent.
+        // R: The expected reply type (String). This is the type of the response we expect back.
         actor_ref_clone_ask.ask_blocking::<MyQuery, String>(MyQuery, Some(Duration::from_secs(2)))
     });
 
     // Wait for tasks to complete and handle results
+    // Handle the result of the tell_blocking task
     match blocking_task_tell.await? {
         Ok(_) => println!("Tell blocking successful"),
         Err(e) => println!("Tell blocking failed: {:?}", e),
     }
 
+    // Handle the result of the ask_blocking task
     match blocking_task_ask.await? {
         Ok(response) => println!("Ask blocking successful, response: {}", response),
         Err(e) => println!("Ask blocking failed: {:?}", e),
@@ -196,4 +222,8 @@ async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
 ```
 
 **Important**: These functions require an active Tokio runtime.
+
+## License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE-APACHE](LICENSE-APACHE) file for details.
 
