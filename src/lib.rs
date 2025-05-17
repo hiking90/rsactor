@@ -27,8 +27,9 @@
 //! - **`Message<M>`**: Trait for handling a message type `M` and defining its reply type.
 //! - **`ActorRef`**: Handle for sending messages to an actor.
 //! - **`spawn`**: Function to create and start an actor, returning an `ActorRef` and a `JoinHandle`.
-//! - **`MailboxMessage`**: Enum for messages in an actor's mailbox (user messages and control signals).
-//! - **`Runtime`**: Manages an actor's internal lifecycle and message loop.
+//! - **`MessageHandler`**: Trait for type-erased message handling. This is typically implemented automatically by the `impl_message_handler!` macro.
+//! - **`MailboxMessage(Internal)`**: Enum for messages in an actor's mailbox (user messages and control signals).
+//! - **`Runtime(Internal)`**: Manages an actor's internal lifecycle and message loop.
 //!
 //! ## Getting Started
 //!
@@ -234,7 +235,9 @@ static ACTOR_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 // Global configuration for the default mailbox capacity.
 static CONFIGURED_DEFAULT_MAILBOX_CAPACITY: OnceLock<usize> = OnceLock::new();
-const DEFAULT_MAILBOX_CAPACITY: usize = 32;
+
+/// The default mailbox capacity for actors.
+pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 
 /// Sets the global default buffer size for actor mailboxes.
 ///
@@ -295,14 +298,6 @@ impl ActorRef {
     ///
     /// The message is sent to the actor's mailbox for processing.
     /// This method returns immediately.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg`: The message to send. The message type `M` must be `Send` and `'static`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the actor's mailbox is closed (e.g., if the actor has stopped).
     pub async fn tell<M>(&self, msg: M) -> Result<()>
     where
         M: Send + 'static,
@@ -419,26 +414,19 @@ impl ActorRef {
 
     /// # Blocking Functions for Tokio Tasks
     ///
-    /// These functions provide a way to interact with actors from within Tokio blocking tasks.
-    ///
-    /// ## Important Usage Constraints
-    ///
-    /// - These functions are specifically designed for use within `tokio::task::spawn_blocking` tasks
-    /// - They require an active Tokio runtime to be available
-    /// - They are NOT intended for use in general synchronous code or threads created with `std::thread::spawn`
-    ///
-    /// ## Use Case
-    ///
-    /// Use these blocking functions when you need to interact with actors from a CPU-intensive
-    /// task that has been moved off the main async task pool using `tokio::task::spawn_blocking`.
-    /// This allows your CPU-bound code to communicate with the actor system without using async/await.
+    /// These functions are intended for scenarios where CPU-intensive or other blocking operations
+    /// are performed within a `tokio::task::spawn_blocking` task, and communication
+    /// with actors is necessary. They allow such tasks to interact with the actor system
+    /// synchronously, without using `async/await` directly within the blocking task.
     ///
     /// ## Example
+    ///
+    /// The following example illustrates using `tell_blocking`. A similar approach applies to `ask_blocking`.
     ///
     /// ```rust,no_run
     /// # use rsactor::{Actor, ActorRef};
     /// # use std::time::Duration;
-    /// # fn example(actor_ref: ActorRef) {
+    /// # fn example(actor_ref: ActorRef) { // Assuming actor_ref is an ActorRef to a suitable actor
     /// let actor_clone = actor_ref.clone();
     /// tokio::task::spawn_blocking(move || {
     ///     // Perform CPU-intensive work
@@ -450,34 +438,8 @@ impl ActorRef {
     /// # }
     /// ```
     ///
-    /// See the `examples/actor_blocking_task.rs` for a complete demonstration.
-    /// Synchronous version of `tell` that blocks until the message is sent.
-    ///
-    /// The message is sent to the actor's mailbox for processing.
-    /// This method blocks until the message is sent or the timeout expires.
-    ///
-    /// # Important Note
-    ///
-    /// This method is for use within `tokio::task::spawn_blocking` contexts.
-    /// It requires an active Tokio runtime.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use rsactor::ActorRef;
-    /// use std::time::Duration;
-    /// struct MyDataMessage(String);
-    /// fn main() -> anyhow::Result<()> {
-    ///     let actor_ref: ActorRef = panic!(); // Placeholder
-    ///     let _handle = tokio::task::spawn_blocking(move || {
-    ///         let timeout = Some(Duration::from_secs(1));
-    ///         let message = MyDataMessage("some data".to_string());
-    ///         actor_ref.tell_blocking(message, timeout)
-    ///             .expect("tell_blocking should succeed or handle error appropriately");
-    ///     });
-    ///     Ok(())
-    /// }
-    /// ```
+    /// For more comprehensive examples, including `ask_blocking`, refer to
+    /// `examples/actor_blocking_tasks.rs`.
     pub fn tell_blocking<M>(&self, msg: M, timeout: Option<std::time::Duration>) -> Result<()>
     where
         M: Send + 'static,
@@ -502,11 +464,6 @@ impl ActorRef {
     ///
     /// The message is sent to the actor's mailbox, and this method will block until
     /// the actor processes the message and sends a reply or the timeout expires.
-    ///
-    /// # Important Note
-    ///
-    /// This method is for use within `tokio::task::spawn_blocking` contexts.
-    /// It requires an active Tokio runtime.
     ///
     /// # Examples
     ///
@@ -632,13 +589,6 @@ struct Runtime<T: Actor + MessageHandler> {
 
 impl<T: Actor + MessageHandler> Runtime<T> {
     /// Creates a new `Runtime` for the given actor.
-    ///
-    /// # Arguments
-    ///
-    /// * `actor`: The actor instance. It will be owned by the `Runtime`.
-    /// * `actor_ref`: A reference to the actor.
-    /// * `receiver`: The receiving end of the actor's mailbox channel.
-    /// * `terminate_receiver`: The receiving end of the actor's terminate channel.
     fn new(
         actor: T, // Actor is moved into Runtime
         actor_ref: ActorRef,
