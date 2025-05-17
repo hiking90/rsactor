@@ -238,7 +238,7 @@ const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 /// This function can only be called successfully once. Subsequent calls
 /// will return an error. This configured value is used by the `spawn` function
 /// if no specific capacity is provided to `spawn_with_mailbox_capacity`.
-pub fn set_global_default_mailbox_capacity(size: usize) -> Result<(), String> {
+pub fn set_default_mailbox_capacity(size: usize) -> Result<(), String> {
     if size == 0 {
         return Err("Global default mailbox capacity must be greater than 0".to_string());
     }
@@ -323,29 +323,9 @@ impl ActorRef {
 
     /// Sends a message to the actor and awaits a reply.
     ///
-    /// The message is sent to the actor's mailbox, and this method will wait for
+    /// The message is sent to the actor\\'s mailbox, and this method will wait for
     /// the actor to process the message and send a reply.
     pub async fn ask<M, R>(&self, msg: M) -> Result<R>
-    where
-        M: Send + 'static,
-        R: Send + 'static,
-    {
-        self.ask_with_optional_timeout(msg, None).await
-    }
-
-    /// Sends a message to the actor and asynchronously awaits a reply, with a specified timeout.
-    ///
-    /// If the actor does not reply within the `timeout_duration`, the method will return
-    /// an error.
-    pub async fn ask_with_timeout<M, R>(&self, msg: M, timeout_duration: std::time::Duration) -> Result<R>
-    where
-        M: Send + 'static,
-        R: Send + 'static,
-    {
-        self.ask_with_optional_timeout(msg, Some(timeout_duration)).await
-    }
-
-    async fn ask_with_optional_timeout<M, R>(&self, msg: M, timeout_duration: Option<std::time::Duration>) -> Result<R>
     where
         M: Send + 'static,
         R: Send + 'static,
@@ -363,15 +343,8 @@ impl ActorRef {
             ));
         }
 
-        let recv_future = reply_rx;
-        let result = if let Some(duration) = timeout_duration {
-            tokio::time::timeout(duration, recv_future).await
-        } else {
-            Ok(recv_future.await) // No timeout, just await the future
-        };
-
-        match result {
-            Ok(Ok(Ok(reply_any))) => { // Timeout did not occur, recv was Ok, actor reply was Ok
+        match reply_rx.await {
+            Ok(Ok(reply_any)) => { // recv was Ok, actor reply was Ok
                 match reply_any.downcast::<R>() {
                     Ok(reply) => Ok(*reply),
                     Err(_) => Err(anyhow::anyhow!(
@@ -380,13 +353,9 @@ impl ActorRef {
                     )),
                 }
             }
-            Ok(Ok(Err(e))) => Err(e), // Timeout did not occur, recv was Ok, actor reply was Err
-            Ok(Err(_recv_err)) => Err(anyhow::anyhow!( // Timeout did not occur, but recv itself failed
+            Ok(Err(e)) => Err(e), // recv was Ok, actor reply was Err
+            Err(_recv_err) => Err(anyhow::anyhow!( // recv itself failed
                 "Failed to receive reply from actor {}: reply channel closed unexpectedly",
-                self.id
-            )),
-            Err(_timeout_err) => Err(anyhow::anyhow!( // Timeout occurred
-                "Timeout waiting for reply from actor {}",
                 self.id
             )),
         }
@@ -1232,7 +1201,98 @@ mod tests {
         }
     }
 
-    // Test for panic within a message handler
+    #[tokio::test]
+    async fn test_set_default_mailbox_capacity_to_zero() {
+        // This test is independent of whether the capacity has been set before or not.
+        let result = set_default_mailbox_capacity(0);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Global default mailbox capacity must be greater than 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_default_mailbox_capacity_ok_then_error_on_already_set() {
+        // This test handles the OnceLock nature: it tries to set a value.
+        // If successful, it verifies that subsequent sets fail.
+        // If the first attempt to set fails (because it's already set),
+        // it still verifies that another attempt to set also fails.
+
+        // Use a unique capacity for this test if possible, to minimize interference
+        // if this test doesn't run first.
+        let test_capacity_value = 123;
+        let initial_set_result = set_default_mailbox_capacity(test_capacity_value);
+
+        if initial_set_result.is_ok() {
+            // Successfully set it for the first time (globally for this test run, or specifically by this test)
+            assert_eq!(
+                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
+                test_capacity_value,
+                "Capacity should be the value we just set."
+            );
+
+            // Try to set it again with a different value
+            let second_set_result = set_default_mailbox_capacity(456);
+            assert!(second_set_result.is_err(), "Second set attempt should fail.");
+            assert_eq!(
+                second_set_result.unwrap_err(),
+                "Global default mailbox capacity has already been set",
+                "Error message for already set should match."
+            );
+            // Verify the original value is still there
+            assert_eq!(
+                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
+                test_capacity_value,
+                "Capacity should remain the initially set value."
+            );
+
+            // Try to set it again with the same value
+            let third_set_result = set_default_mailbox_capacity(test_capacity_value);
+            assert!(third_set_result.is_err(), "Third set attempt (same value) should fail.");
+            assert_eq!(
+                third_set_result.unwrap_err(),
+                "Global default mailbox capacity has already been set",
+                "Error message for already set (same value) should match."
+            );
+            assert_eq!(
+                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
+                test_capacity_value,
+                "Capacity should still be the initially set value."
+            );
+        } else {
+            // The default capacity was already set before this test (or this part of the test) ran.
+            // This is expected if another test that calls set_default_mailbox_capacity ran first.
+            let current_set_value = CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().expect("OnceLock should be set if initial_set_result failed because it was already set.");
+            println!(
+                "Note: Default mailbox capacity was already set to {:?} before this test scenario.",
+                current_set_value
+            );
+            assert_eq!(
+                initial_set_result.unwrap_err(),
+                "Global default mailbox capacity has already been set",
+                "Error message for initial set attempt (when already set) should match."
+            );
+
+
+            // Even if already set, trying to set it again (e.g. to a different value) must still fail.
+            let subsequent_set_result = set_default_mailbox_capacity(789);
+            assert!(subsequent_set_result.is_err(), "Subsequent set attempt (when already set by other test) should fail.");
+            assert_eq!(
+                subsequent_set_result.unwrap_err(),
+                "Global default mailbox capacity has already been set",
+                "Error message for subsequent set (when already set by other test) should match."
+            );
+            // And the value should remain what it was.
+             assert_eq!(
+                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
+                *current_set_value,
+                "Capacity should remain the value set by a previous test/operation."
+            );
+        }
+    }
+
+    // Test actor panic in message handler
     struct PanicActor { on_stop_called: Arc<Mutex<bool>> }
     struct PanicMsg;
 
@@ -1421,5 +1481,59 @@ mod tests {
         // Counter should reflect UpdateCounterMsg(1) was processed. SlowMsg doesn't change counter.
         // UpdateCounterMsg(2) should not have been sent.
         assert_eq!(*actor_state.counter.lock().await, 1, "Counter should reflect only the message processed before timeout attempt");
+    }
+
+    #[tokio::test]
+    async fn test_actor_ref_ask_blocking_no_timeout() {
+        let (actor_ref, handle, _counter, _lpmt, _on_start, on_stop_called) =
+            setup_actor().await;
+
+        let actor_ref_clone = actor_ref.clone();
+        // Spawn a blocking task to call ask_blocking with None timeout
+        let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
+            let reply: String = actor_ref_clone
+                .ask_blocking(PingMsg("hello_no_timeout".to_string()), None)
+                .expect("ask_blocking with None timeout failed for PingMsg");
+            assert_eq!(reply, "pong: hello_no_timeout");
+
+            let count: i32 = actor_ref_clone
+                .ask_blocking(GetCounterMsg, None)
+                .expect("ask_blocking with None timeout failed for GetCounterMsg");
+            assert_eq!(count, 0);
+        });
+
+        join_handle_blocking_task
+            .await
+            .expect("Blocking task for ask_blocking with None timeout panicked");
+
+        actor_ref.stop().await.expect("Failed to stop actor");
+        handle.await.expect("Actor task failed");
+        assert!(*on_stop_called.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_actor_ref_kill_multiple_times() {
+        let (actor_ref, handle, _counter, _lpmt, on_start_called, _on_stop_called_arc_from_setup) =
+            setup_actor().await;
+        assert!(*on_start_called.lock().await, "on_start should have been called");
+
+        // Call kill multiple times
+        actor_ref.kill().expect("First kill command failed");
+        actor_ref.kill().expect("Second kill command should also succeed (idempotent)");
+        actor_ref.kill().expect("Third kill command should also succeed (idempotent)");
+
+        let (returned_actor, reason) = handle.await.expect("Actor task failed to complete");
+
+        assert!(matches!(reason, ActorStopReason::Killed), "Stop reason was {:?}, expected ActorStopReason::Killed", reason);
+        assert!(*returned_actor.on_stop_called.lock().await, "on_stop should have been called even on multiple kills");
+
+        // Verify that messages sent before or after kill are not processed if kill is effective.
+        // (This part is similar to test_actor_ref_kill, ensuring state consistency)
+        let final_counter = *returned_actor.counter.lock().await;
+        assert_eq!(final_counter, 0, "Counter should be 0, indicating no messages processed due to kill. Got: {}", final_counter);
+
+        // Interactions after kill should still fail
+        assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to killed actor should fail");
+        assert!(actor_ref.ask::<PingMsg, String>(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
     }
 }
