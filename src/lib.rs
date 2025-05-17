@@ -259,6 +259,7 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<(), String> {
 /// - **Blocking Methods for Tokio Blocking Contexts**:
 ///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a reply is received.
 ///   - [`tell_blocking`](ActorRef::tell_blocking): Send a message and block until it is sent.
+///
 ///   These methods are for use within `tokio::task::spawn_blocking` contexts.
 ///
 /// - **Control Methods**:
@@ -389,7 +390,6 @@ impl ActorRef {
         }
     }
 
-
     /// Sends a graceful stop signal to the actor.
     ///
     /// The actor will process all messages currently in its mailbox and then stop.
@@ -447,8 +447,7 @@ impl ActorRef {
     /// # }
     /// ```
     ///
-    /// See the `actor_blocking_task.rs` example for a complete demonstration.
-
+    /// See the `examples/actor_blocking_task.rs` for a complete demonstration.
     /// Synchronous version of `tell` that blocks until the message is sent.
     ///
     /// The message is sent to the actor's mailbox for processing.
@@ -1155,7 +1154,10 @@ mod tests {
             on_start_attempted: on_start_attempted.clone(),
             on_stop_attempted: on_stop_attempted.clone(),
         };
-        let (_actor_ref, handle) = spawn(actor);
+        let (actor_ref, handle) = spawn(actor);
+
+        // Added to increase the test coverage
+        actor_ref.tell(NoOpMsg).await.expect("Tell should succeed");
 
         match handle.await {
             Ok((returned_actor, reason)) => {
@@ -1400,6 +1402,17 @@ mod tests {
                 .expect("ask_blocking failed for GetCounterMsg after update");
             assert_eq!(count_after_update, 15);
         });
+
+        // Added to increase the test coverage
+        let actor_ref_clone = actor_ref.clone();
+        let thread_handle = std::thread::spawn(move || {
+            // Explicitly specify the message type M=PingMsg and reply type R=String
+            // PingMsg is defined to reply with String.
+            assert!(actor_ref_clone.ask_blocking::<PingMsg, String>(PingMsg("hello_blocking".to_string()), None).is_err());
+            assert!(actor_ref_clone.tell_blocking(PingMsg("hello_blocking".to_string()), None).is_err());
+        });
+
+        thread_handle.join().expect("Thread panicked");
 
         join_handle.await.expect("Blocking task panicked");
 
