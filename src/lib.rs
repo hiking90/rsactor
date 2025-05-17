@@ -294,6 +294,12 @@ impl ActorRef {
         self.id
     }
 
+    /// Returns the sender channel for the actor's mailbox.
+    pub fn is_alive(&self) -> bool {
+        // Check if the sender channel is open
+        !self.sender.is_closed() && !self.terminate_sender.is_closed()
+    }
+
     /// Sends a message to the actor without awaiting a reply (fire-and-forget).
     ///
     /// The message is sent to the actor's mailbox for processing.
@@ -1501,5 +1507,37 @@ mod tests {
         // Interactions after kill should still fail
         assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to killed actor should fail");
         assert!(actor_ref.ask::<PingMsg, String>(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
+    }
+
+    #[tokio::test]
+    async fn test_actor_ref_is_alive() {
+        // Test 1: Actor is alive after spawn, and dead after stop
+        let (actor_ref_stop_test, handle_stop_test, _counter_stop, _lpmt_stop, on_start_called_stop, on_stop_called_stop) =
+            setup_actor().await;
+        assert!(*on_start_called_stop.lock().await, "on_start should be called for stop test");
+
+        assert!(actor_ref_stop_test.is_alive(), "Actor should be alive after spawn (stop test)");
+
+        actor_ref_stop_test.stop().await.expect("Failed to stop actor (stop test)");
+        let (_actor_state_stop, reason_stop) = handle_stop_test.await.expect("Actor task failed after stop (stop test)");
+        assert!(matches!(reason_stop, ActorStopReason::Normal), "Stop reason was {:?}, expected ActorStopReason::Normal", reason_stop);
+        assert!(*on_stop_called_stop.lock().await, "on_stop should be called after stop (stop test)");
+
+        assert!(!actor_ref_stop_test.is_alive(), "Actor should not be alive after stop (stop test)");
+
+        // Test 2: Actor is alive after spawn, and dead after kill
+        let (actor_ref_kill_test, handle_kill_test, _counter_kill, _lpmt_kill, on_start_called_kill, on_stop_called_kill) =
+            setup_actor().await;
+        assert!(*on_start_called_kill.lock().await, "on_start should be called for kill test");
+
+        assert!(actor_ref_kill_test.is_alive(), "Actor should be alive before kill (kill test)");
+
+        actor_ref_kill_test.kill().expect("kill command failed (kill test)");
+        let (_actor_state_kill, reason_kill) = handle_kill_test.await.expect("Actor task failed after kill (kill test)");
+        assert!(matches!(reason_kill, ActorStopReason::Killed), "Stop reason was {:?}, expected ActorStopReason::Killed", reason_kill);
+        // on_stop is expected to be called even on kill, as per test_actor_ref_kill
+        assert!(*on_stop_called_kill.lock().await, "on_stop should be called after kill (kill test)");
+
+        assert!(!actor_ref_kill_test.is_alive(), "Actor should not be alive after kill (kill test)");
     }
 }
