@@ -135,8 +135,6 @@ cargo run --example basic
 
 ### When to Use
 - Inside a `tokio::task::spawn_blocking` task.
-- For communication with actors from CPU-bound code.
-- For interaction with actors from synchronous code within the Tokio runtime.
 
 ### Example
 
@@ -173,8 +171,8 @@ async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
     let actor_ref_clone_tell = actor_ref.clone();
     // Spawn a blocking task for tell_blocking
     let blocking_task_tell = task::spawn_blocking(move || {
-        // Send a message without waiting for a reply, with a timeout
-        actor_ref_clone_tell.tell_blocking(MyMessage("notification".to_string()), Some(Duration::from_secs(1)))
+        // Send a message without waiting for a reply, without a timeout
+        actor_ref_clone_tell.tell_blocking(MyMessage("notification".to_string()), None)
     });
 
     // --- ask_blocking example ---
@@ -188,7 +186,9 @@ async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
         // The type parameters for ask_blocking are:
         // M: The message type (MyQuery). This is the type of the message being sent.
         // R: The expected reply type (String). This is the type of the response we expect back.
-        actor_ref_clone_ask.ask_blocking::<MyQuery, String>(MyQuery, Some(Duration::from_secs(2)))
+        actor_ref_clone_ask.ask_blocking::<MyQuery, String>(
+            MyQuery, Some(Duration::from_secs(2))
+        )
     });
 
     // Wait for tasks to complete and handle results

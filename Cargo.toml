@@ -7,7 +7,7 @@ description = "A Simplified Actor Framework for Rust"
 repository = "https://github.com/hiking90/rsactor"
 homepage = "https://github.com/hiking90/rsactor"
 license = "Apache-2.0"
-keywords = ["actor", "rust", "async"]
+keywords = ["actor", "rust", "framework"]
 
 [dependencies]
 anyhow = "1.0"

@@ -1,3 +1,6 @@
+// Copyright 2022 Jeff Kim <hiking90@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 use rsactor::{Actor, ActorRef, Message, ActorStopReason, spawn, impl_message_handler};
 use anyhow::Result;
 use std::collections::HashMap;

@@ -1,4 +1,7 @@
-//! Actor-Sync Task Communication Example
+// Copyright 2022 Jeff Kim <hiking90@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
+//! Actor Blocking Task Communication Example
 //!
 //! This example demonstrates how to:
 //! 1. Spawn a synchronous background task from an actor's on_start lifecycle method using spawn_blocking
