@@ -10,6 +10,8 @@
 //! - **Message Passing**: Actors communicate by sending and receiving messages.
 //!   - `tell`: Send a message without waiting for a reply (fire-and-forget).
 //!   - `ask`: Send a message and await a reply.
+//!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
+//!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
 //! - **Actor Lifecycle**: Actors have `on_start` and `on_stop` lifecycle hooks.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
@@ -169,8 +171,10 @@ use log::{info, error, warn};
 ///
 /// * `$actor_type`: The type of the actor for which to implement `MessageHandler`.
 /// * `[$($msg_type:ty),+]`: A list of message types that the actor can handle.
-///   Each message type must implement `Send + 'static`, and the actor must
-///   implement `Message<MsgType>` for each of them.
+///
+/// # Internals
+/// This macro facilitates dynamic message dispatch by downcasting `Box<dyn std::any::Any + Send>`
+/// message payloads to their concrete types at runtime.
 #[macro_export]
 macro_rules! impl_message_handler {
     ($actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
@@ -229,33 +233,52 @@ type MailboxSender = mpsc::Sender<MailboxMessage>;
 // Counter for generating unique actor IDs.
 static ACTOR_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
-// Global configuration for the main channel buffer size.
-static MAIN_CHANNEL_BUFFER_SIZE: OnceLock<usize> = OnceLock::new();
-const DEFAULT_MAIN_CHANNEL_BUFFER_SIZE: usize = 32;
+// Global configuration for the default mailbox capacity.
+static CONFIGURED_DEFAULT_MAILBOX_CAPACITY: OnceLock<usize> = OnceLock::new();
+const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 
-/// Sets the global buffer size for the main actor mailbox channel.
+/// Sets the global default buffer size for actor mailboxes.
 ///
 /// This function can only be called successfully once. Subsequent calls
-/// will return an error.
+/// will return an error. This configured value is used by the `spawn` function
+/// if no specific capacity is provided to `spawn_with_mailbox_capacity`.
 ///
 /// # Arguments
 ///
-/// * `size`: The desired buffer size for the main channel.
+/// * `size`: The desired default buffer size for mailboxes. Must be greater than 0.
 ///
 /// # Returns
 ///
 /// `Ok(())` if the buffer size was set successfully, or an `Err` with a
-/// message if it has already been set.
-pub fn set_main_channel_buffer_size(size: usize) -> Result<(), String> {
-    MAIN_CHANNEL_BUFFER_SIZE
-        .set(size)
-        .map_err(|_| "Main channel buffer size has already been set.".to_string())
+/// message if it has already been set or if size is 0.
+pub fn set_global_default_mailbox_capacity(size: usize) -> Result<(), String> {
+    if size == 0 {
+        return Err("Global default mailbox capacity must be greater than 0".to_string());
+    }
+    CONFIGURED_DEFAULT_MAILBOX_CAPACITY.set(size).map_err(|_| "Global default mailbox capacity has already been set".to_string())
 }
 
 /// A reference to an actor, allowing messages to be sent to it.
 ///
 /// `ActorRef` provides a way to interact with actors without having direct access
 /// to the actor instance itself. It holds a sender channel to the actor's mailbox.
+///
+/// ## Message Passing Methods
+///
+/// - **Asynchronous Methods**:
+///   - [`ask`](ActorRef::ask): Send a message and await a reply
+///   - [`tell`](ActorRef::tell): Send a message without waiting for a reply
+///
+/// - **Blocking Methods for Tokio Blocking Contexts**:
+///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a reply is received
+///   - [`tell_blocking`](ActorRef::tell_blocking): Send a message and block until it is sent
+///
+///   These methods are designed specifically for use within `tokio::task::spawn_blocking`
+///   contexts, not for general synchronous code. They require an active Tokio runtime.
+///
+/// - **Control Methods**:
+///   - [`stop`](ActorRef::stop): Gracefully stop the actor
+///   - [`kill`](ActorRef::kill): Immediately terminate the actor
 #[derive(Clone, Debug)]
 pub struct ActorRef {
     id: usize,
@@ -334,35 +357,88 @@ impl ActorRef {
     /// * The reply channel is closed before a reply is received.
     /// * The actor's message handler returns an error.
     /// * The received reply cannot be downcast to the expected type `R`.
+    /// * The operation times out (if a timeout is specified).
     pub async fn ask<M, R>(&self, msg: M) -> Result<R>
     where
         M: Send + 'static,
         R: Send + 'static,
     {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let msg_any = Box::new(msg) as Box<dyn Any + Send>;
+        self.ask_with_optional_timeout(msg, None).await
+    }
 
+    /// Sends a message to the actor and asynchronously awaits a reply, with a specified timeout.
+    ///
+    /// If the actor does not reply within the `timeout_duration`, the method will return
+    /// an error.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M`: The type of the message being sent. Must be `Send` and `'static`.
+    /// * `R`: The expected type of the reply. Must be `Send` and `'static`.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg`: The message to send.
+    /// * `timeout_duration`: The maximum duration to wait for a reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * The actor's mailbox is closed.
+    /// * The reply channel is closed before a reply is received.
+    /// * The actor's message handler returns an error.
+    /// * The received reply cannot be downcast to the expected type `R`.
+    /// * The operation times out.
+    pub async fn ask_with_timeout<M, R>(&self, msg: M, timeout_duration: std::time::Duration) -> Result<R>
+    where
+        M: Send + 'static,
+        R: Send + 'static,
+    {
+        self.ask_with_optional_timeout(msg, Some(timeout_duration)).await
+    }
+
+    async fn ask_with_optional_timeout<M, R>(&self, msg: M, timeout_duration: Option<std::time::Duration>) -> Result<R>
+    where
+        M: Send + 'static,
+        R: Send + 'static,
+    {
+        let (reply_tx, reply_rx) = oneshot::channel();
         let envelope = MailboxMessage::Envelope {
-            payload: msg_any,
-            reply_channel: Some(reply_tx), // reply_channel is Some for ask
+            payload: Box::new(msg),
+            reply_channel: Some(reply_tx),
         };
 
-        // Use the ActorRef's own sender
         if self.sender.send(envelope).await.is_err() {
             return Err(anyhow::anyhow!(
-                "Failed to send message to actor {}: mailbox channel closed",
+                "Failed to send message to actor {}: mailbox closed",
                 self.id
             ));
         }
 
-        match reply_rx.await {
-            Ok(Ok(reply_any)) => reply_any
-                .downcast::<R>()
-                .map(|r| *r)
-                .map_err(|_| anyhow::anyhow!("Failed to downcast reply to the expected type")),
-            Ok(Err(e)) => Err(e), // Error from the actor's handler
-            Err(_) => Err(anyhow::anyhow!(
-                "Failed to receive reply from actor {}: reply channel closed",
+        let recv_future = reply_rx;
+        let result = if let Some(duration) = timeout_duration {
+            tokio::time::timeout(duration, recv_future).await
+        } else {
+            Ok(recv_future.await) // No timeout, just await the future
+        };
+
+        match result {
+            Ok(Ok(Ok(reply_any))) => { // Timeout did not occur, recv was Ok, actor reply was Ok
+                match reply_any.downcast::<R>() {
+                    Ok(reply) => Ok(*reply),
+                    Err(_) => Err(anyhow::anyhow!(
+                        "Failed to downcast reply from actor {} to expected type",
+                        self.id
+                    )),
+                }
+            }
+            Ok(Ok(Err(e))) => Err(e), // Timeout did not occur, recv was Ok, actor reply was Err
+            Ok(Err(_recv_err)) => Err(anyhow::anyhow!( // Timeout did not occur, but recv itself failed
+                "Failed to receive reply from actor {}: reply channel closed unexpectedly",
+                self.id
+            )),
+            Err(_timeout_err) => Err(anyhow::anyhow!( // Timeout occurred
+                "Timeout waiting for reply from actor {}",
                 self.id
             )),
         }
@@ -378,7 +454,7 @@ impl ActorRef {
     /// Returns an error if the underlying channel fails to send the message,
     /// though it logs a warning and returns `Ok(())` if the actor is already stopped,
     /// as the desired state (stopped) is met.
-    pub async fn kill(&self) -> Result<()> {
+    pub fn kill(&self) -> Result<()> {
         info!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.id);
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) { // Changed to ControlSignal::Terminate
@@ -426,6 +502,188 @@ impl ActorRef {
                 // Considered Ok as the desired state (stopped/stopping) is met.
                 Ok(())
             }
+        }
+    }
+
+    // =========================================================================
+    // Blocking functions for Tokio blocking tasks
+    // =========================================================================
+
+    /// # Blocking Functions for Tokio Tasks
+    ///
+    /// These functions provide a way to interact with actors from within Tokio blocking tasks.
+    ///
+    /// ## Important Usage Constraints
+    ///
+    /// - These functions are specifically designed for use within `tokio::task::spawn_blocking` tasks
+    /// - They require an active Tokio runtime to be available
+    /// - They are NOT intended for use in general synchronous code or threads created with `std::thread::spawn`
+    ///
+    /// ## Use Case
+    ///
+    /// Use these blocking functions when you need to interact with actors from a CPU-intensive
+    /// task that has been moved off the main async task pool using `tokio::task::spawn_blocking`.
+    /// This allows your CPU-bound code to communicate with the actor system without using async/await.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,no_run
+    /// # use rsactor::{Actor, ActorRef};
+    /// # use std::time::Duration;
+    /// # fn example(actor_ref: ActorRef) {
+    /// let actor_clone = actor_ref.clone();
+    /// tokio::task::spawn_blocking(move || {
+    ///     // Perform CPU-intensive work
+    ///
+    ///     // Send results to actor
+    ///     actor_clone.tell_blocking("Work completed", Some(Duration::from_secs(1)))
+    ///         .expect("Failed to send message");
+    /// });
+    /// # }
+    /// ```
+    ///
+    /// See the `actor_blocking_task.rs` example for a complete demonstration.
+
+    /// Synchronous version of `tell` that blocks until the message is sent.
+    ///
+    /// The message is sent to the actor's mailbox for processing.
+    /// This method blocks until the message is sent to the actor's mailbox or until the timeout expires.
+    ///
+    /// # Important Note
+    ///
+    /// This method is specifically designed for use within `tokio::task::spawn_blocking` contexts,
+    /// not for general synchronous code. It requires an active Tokio runtime to function.
+    /// Use this when you need to communicate with actors from a blocking task that was
+    /// spawned using `tokio::task::spawn_blocking`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use rsactor::ActorRef;
+    /// use std::time::Duration;
+    /// struct MyDataMessage(String); // Define a message type for the example
+    /// fn main() -> anyhow::Result<()> { // For compilable no_run
+    ///     let actor_ref: ActorRef = panic!(); // Placeholder for actual actor_ref
+    ///     // Inside a tokio::task::spawn_blocking task:
+    ///     let _handle = tokio::task::spawn_blocking(move || { // actor_ref is moved here
+    ///         // Send message with 1 second timeout
+    ///         let timeout = Some(Duration::from_secs(1));
+    ///         let message = MyDataMessage("some data".to_string());
+    ///         actor_ref.tell_blocking(message, timeout)
+    ///             .expect("tell_blocking should succeed or handle error appropriately");
+    ///     });
+    ///     // In a real scenario, you might await the handle or store it.
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `msg`: The message to send. The message type `M` must be `Send` and `'static`.
+    /// * `timeout`: Optional timeout duration. If the operation doesn't complete within this time,
+    ///    an error is returned. If `None`, the operation will block indefinitely.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * The actor's mailbox is closed (e.g., if the actor has stopped).
+    /// * There is no tokio runtime available (this function must be called in a context where
+    ///   a tokio runtime is accessible).
+    /// * The operation times out.
+    pub fn tell_blocking<M>(&self, msg: M, timeout: Option<std::time::Duration>) -> Result<()>
+    where
+        M: Send + 'static,
+    {
+        let rt = tokio::runtime::Handle::try_current().map_err(|e| {
+            anyhow::anyhow!("No tokio runtime available for tell_blocking: {}", e)
+        })?;
+
+        match timeout {
+            Some(duration) => {
+                rt.block_on(async {
+                    tokio::time::timeout(duration, self.tell(msg))
+                        .await
+                        .map_err(|_| anyhow::anyhow!("tell_blocking operation timed out after {:?}", duration))?
+                })
+            },
+            None => rt.block_on(self.tell(msg)),
+        }
+    }
+
+    /// Synchronous version of `ask` that blocks until the reply is received.
+    ///
+    /// The message is sent to the actor's mailbox, and this method will block until
+    /// the actor processes the message and sends a reply or until the timeout expires.
+    ///
+    /// # Important Note
+    ///
+    /// This method is specifically designed for use within `tokio::task::spawn_blocking` contexts,
+    /// not for general synchronous code. It requires an active Tokio runtime to function.
+    /// Use this when you need to get a response from an actor while in a blocking task that
+    /// was spawned using `tokio::task::spawn_blocking`.
+    ///
+    /// # Examples
+    ///
+    /// For a complete example, see `examples/actor_blocking_tasks.rs`.
+    ///
+    /// ```rust,no_run
+    /// use rsactor::ActorRef;
+    /// use std::time::Duration;
+    /// struct QueryMessage;
+    /// fn main() -> anyhow::Result<()> {
+    ///     let actor_ref: ActorRef = panic!(); // Placeholder for actual actor_ref
+    ///     // Inside a tokio::task::spawn_blocking task:
+    ///     let result = tokio::task::spawn_blocking(move || {
+    ///         // Send query and wait for response with 2 second timeout
+    ///         let timeout = Some(Duration::from_secs(2));
+    ///         let response: String = actor_ref.ask_blocking(QueryMessage, timeout).unwrap();
+    ///         // Process response...
+    ///         response
+    ///     });
+    ///     Ok(())
+    /// }
+    /// ```
+    /// Refer to the `examples/actor_blocking_tasks.rs` file for a runnable demonstration.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M`: The type of the message being sent. Must be `Send` and `'static`.
+    /// * `R`: The expected type of the reply. Must be `Send` and `'static`.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg`: The message to send.
+    /// * `timeout`: Optional timeout duration. If the operation doesn't complete within this time,
+    ///    an error is returned. If `None`, the operation will block indefinitely.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * The actor's mailbox is closed.
+    /// * The reply channel is closed before a reply is received.
+    /// * The actor's message handler returns an error.
+    /// * The received reply cannot be downcast to the expected type `R`.
+    /// * There is no tokio runtime available (this function must be called in a context where
+    ///   a tokio runtime is accessible).
+    /// * The operation times out.
+    pub fn ask_blocking<M, R>(&self, msg: M, timeout: Option<std::time::Duration>) -> Result<R>
+    where
+        M: Send + 'static,
+        R: Send + 'static,
+    {
+        let rt = tokio::runtime::Handle::try_current().map_err(|e| {
+            anyhow::anyhow!("No tokio runtime available for ask_blocking: {}", e)
+        })?;
+
+        match timeout {
+            Some(duration) => {
+                rt.block_on(async {
+                    tokio::time::timeout(duration, self.ask(msg))
+                        .await
+                        .map_err(|_| anyhow::anyhow!("ask_blocking operation timed out after {:?}", duration))?
+                })
+            },
+            None => rt.block_on(self.ask(msg)),
         }
     }
 }
@@ -476,7 +734,8 @@ pub trait Actor: Send + 'static {
     /// - When the actor's mailbox is closed and there are no more messages to process
     ///
     /// Note that this method will NOT be called in the following situations:
-    /// - When a panic occurs in a message handler
+    /// - When a panic occurs in a message handler. Consider using `std::panic::catch_unwind`
+    ///   within message handlers if cleanup is critical even after a panic.
     /// - When the Tokio runtime is shut down abruptly
     ///
     /// # Arguments
@@ -519,7 +778,7 @@ pub trait Message<T: Send + 'static>: Actor {
 /// them to their concrete types before passing them to the actor's specific `Message::handle`
 /// implementation.
 ///
-/// Implementors of this trait must also be `Send`, `Sync`, and 'static`.
+/// Implementors of this trait must also be `Send`, `Sync`, and 'static'.
 pub trait MessageHandler: Send + Sync + 'static {
     /// Handles a type-erased message.
     ///
@@ -719,11 +978,11 @@ impl<T: Actor + MessageHandler> Runtime<T> {
 pub fn spawn<T: Actor + MessageHandler + 'static>(
     actor: T, // Actor instance is taken by value
 ) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) { // Updated return type
-    let buffer_size = MAIN_CHANNEL_BUFFER_SIZE.get().copied().unwrap_or(DEFAULT_MAIN_CHANNEL_BUFFER_SIZE);
-    spawn_with_buffer_size(actor, buffer_size)
+    let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().copied().unwrap_or(DEFAULT_MAILBOX_CAPACITY);
+    spawn_with_mailbox_capacity(actor, capacity)
 }
 
-/// Spawns a new actor with a specified main channel buffer size and returns an `ActorRef` to it, along with a `JoinHandle`.
+/// Spawns a new actor with a specified mailbox capacity and returns an `ActorRef` to it, along with a `JoinHandle`.
 ///
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor instance and its `ActorStopReason`.
@@ -732,7 +991,7 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
 ///
 /// * `actor`: The actor instance to spawn. The actor type `T` must implement
 ///   `Actor`, `MessageHandler`, and be `'static`.
-/// * `buffer_size`: The buffer size for the actor's main message channel.
+/// * `mailbox_capacity`: The buffer size (capacity) for the actor's main message channel. Must be greater than 0.
 ///
 /// # Returns
 ///
@@ -741,28 +1000,30 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
 /// * A `tokio::task::JoinHandle` that resolves to a tuple `(T, ActorStopReason)`
 ///   when the actor terminates. `T` is the actor instance itself, allowing for state
 ///   retrieval after the actor stops.
-pub fn spawn_with_buffer_size<T: Actor + MessageHandler + 'static>(
+///
+/// # Panics
+///
+/// Panics if `mailbox_capacity` is 0.
+pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>( // Renamed from spawn_with_buffer_size
     actor: T, // Actor instance is taken by value
-    buffer_size: usize,
+    mailbox_capacity: usize, // Renamed from buffer_size
 ) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) {
+    assert!(mailbox_capacity > 0, "Mailbox capacity must be greater than 0"); // Updated assert message
     let actor_id = ACTOR_COUNTER.fetch_add(1, Ordering::SeqCst);
-    // let buffer_size = MAIN_CHANNEL_BUFFER_SIZE.get().copied().unwrap_or(DEFAULT_MAIN_CHANNEL_BUFFER_SIZE); // This line is removed as buffer_size is now a parameter
-    let (tx, rx) = mpsc::channel::<MailboxMessage>(buffer_size); // Main channel uses the provided buffer_size
-    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
+    let (tx, rx) = mpsc::channel::<MailboxMessage>(mailbox_capacity); // Use mailbox_capacity
+    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
 
-    let actor_ref = ActorRef::new_internal(actor_id, tx, terminate_tx); // Pass both senders
+    let actor_ref = ActorRef::new_internal(actor_id, tx, terminate_tx);
 
-    let runtime = Runtime::new(actor, actor_ref.clone(), rx, terminate_rx); // Pass both receivers
-    let id_for_log = runtime.actor_ref.id(); // Capture ID for logging before move
+    let runtime = Runtime::new(actor, actor_ref.clone(), rx, terminate_rx);
+    let id_for_log = runtime.actor_ref.id();
 
-    let handle = tokio::spawn(async move { // runtime is moved into the spawned task
+    let handle = tokio::spawn(async move {
         info!("Spawning task for actor {}.", id_for_log);
-        // run_actor_lifecycle consumes runtime and returns (T, ActorStopReason)
-        // This tuple becomes the result of the JoinHandle on success.
         runtime.run_actor_lifecycle().await
     });
 
-    (actor_ref, handle) // Return ActorRef and JoinHandle
+    (actor_ref, handle)
 }
 
 // ---------------------------------------------------------
@@ -825,6 +1086,7 @@ mod tests {
     struct UpdateCounterMsg(i32);
     #[derive(Debug)]
     struct GetCounterMsg;
+    struct SlowMsg; // Added for timeout tests
 
     impl Message<PingMsg> for TestActor {
         type Reply = String;
@@ -854,7 +1116,17 @@ mod tests {
         }
     }
 
-    impl_message_handler!(TestActor, [PingMsg, UpdateCounterMsg, GetCounterMsg]);
+    // Added for timeout tests
+    impl Message<SlowMsg> for TestActor {
+        type Reply = ();
+        async fn handle(&mut self, _msg: SlowMsg) -> Self::Reply {
+            let mut lpmt = self.last_processed_message_type.lock().await;
+            *lpmt = Some("SlowMsg".to_string());
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await // Sleep for 100ms
+        }
+    }
+
+    impl_message_handler!(TestActor, [PingMsg, UpdateCounterMsg, GetCounterMsg, SlowMsg]);
 
     async fn setup_actor() -> (
         ActorRef,
@@ -999,7 +1271,7 @@ mod tests {
 
         // Immediately send kill, without waiting for the previous message to be processed.
         // The dedicated terminate channel and biased select in Runtime should prioritize this.
-        actor_ref.kill().await.expect("kill command failed");
+        actor_ref.kill().expect("kill command failed");
 
         let (returned_actor, reason) = handle.await.expect("Actor task failed to complete");
 
@@ -1189,5 +1461,143 @@ mod tests {
     }
 
     // Test: Spawning multiple actors
-}
 
+    #[tokio::test]
+    async fn test_actor_ref_tell_blocking() {
+        let (actor_ref, handle, counter, last_processed, _on_start, on_stop_called) =
+            setup_actor().await;
+
+        let actor_ref_clone = actor_ref.clone();
+        let counter_clone = counter.clone();
+        let last_processed_clone = last_processed.clone();
+
+        // Spawn a blocking task to call tell_blocking
+        let join_handle = tokio::task::spawn_blocking(move || {
+            actor_ref_clone
+                .tell_blocking(UpdateCounterMsg(7), Some(std::time::Duration::from_millis(100)))
+                .expect("tell_blocking failed");
+        });
+
+        join_handle.await.expect("Blocking task panicked");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Allow time for processing
+
+        assert_eq!(*counter_clone.lock().await, 7);
+        assert_eq!(
+            *last_processed_clone.lock().await,
+            Some("UpdateCounterMsg".to_string())
+        );
+
+        actor_ref.stop().await.expect("Failed to stop actor");
+        handle.await.expect("Actor task failed");
+        assert!(*on_stop_called.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_actor_ref_ask_blocking() {
+        let (actor_ref, handle, _counter, _lpmt, _on_start, on_stop_called) = setup_actor().await;
+
+        let actor_ref_clone = actor_ref.clone();
+        // Spawn a blocking task to call ask_blocking
+        let join_handle = tokio::task::spawn_blocking(move || {
+            let reply: String = actor_ref_clone
+                .ask_blocking(PingMsg("hello_blocking".to_string()), Some(std::time::Duration::from_millis(100)))
+                .expect("ask_blocking failed for PingMsg");
+            assert_eq!(reply, "pong: hello_blocking");
+
+            let count: i32 = actor_ref_clone
+                .ask_blocking(GetCounterMsg, Some(std::time::Duration::from_millis(100)))
+                .expect("ask_blocking failed for GetCounterMsg");
+            assert_eq!(count, 0);
+
+            let _: () = actor_ref_clone
+                .ask_blocking(UpdateCounterMsg(15), Some(std::time::Duration::from_millis(100)))
+                .expect("ask_blocking failed for UpdateCounterMsg");
+
+            let count_after_update: i32 = actor_ref_clone
+                .ask_blocking(GetCounterMsg, Some(std::time::Duration::from_millis(100)))
+                .expect("ask_blocking failed for GetCounterMsg after update");
+            assert_eq!(count_after_update, 15);
+        });
+
+        join_handle.await.expect("Blocking task panicked");
+
+        actor_ref.stop().await.expect("Failed to stop actor");
+        handle.await.expect("Actor task failed");
+        assert!(*on_stop_called.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_actor_ref_ask_blocking_timeout() {
+        let (actor_ref, handle, _counter, _lpmt, _on_start, on_stop_called) =
+            setup_actor().await;
+
+        // SlowMsg handler sleeps for 100ms. ask_blocking timeout is 10ms.
+        let actor_ref_clone = actor_ref.clone();
+        let join_handle = tokio::task::spawn_blocking(move || {
+            let result: Result<(), _> = actor_ref_clone
+                .ask_blocking(SlowMsg, Some(std::time::Duration::from_millis(10))); // Timeout 10ms
+            assert!(result.is_err(), "ask_blocking should have timed out");
+            if let Err(e) = result {
+                assert!(e.to_string().contains("ask_blocking operation timed out"), "Error message mismatch: {}", e);
+            }
+        });
+
+        join_handle.await.expect("Blocking task panicked for ask timeout test");
+
+        actor_ref.stop().await.expect("Failed to stop actor");
+        handle.await.expect("Actor task failed");
+        assert!(*on_stop_called.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
+        // Spawn an actor with a mailbox capacity of 1.
+        let counter = Arc::new(Mutex::new(0));
+        let last_processed_message_type = Arc::new(Mutex::new(None::<String>));
+        let on_start_called = Arc::new(Mutex::new(false));
+        let on_stop_called = Arc::new(Mutex::new(false));
+
+        let actor_instance = TestActor::new(
+            counter.clone(),
+            last_processed_message_type.clone(),
+            on_start_called.clone(),
+            on_stop_called.clone(),
+        );
+        // Spawn with capacity 1
+        let (actor_ref, handle) = spawn_with_mailbox_capacity(actor_instance, 1);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await; // on_start
+
+        // 1. Send SlowMsg to make the actor busy. Handler sleeps for 100ms.
+        actor_ref.tell(SlowMsg).await.expect("Tell SlowMsg failed");
+        // Give a moment for the actor to pick up SlowMsg and start sleeping.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // 2. Send UpdateCounterMsg(1). This will fill the mailbox (capacity 1)
+        //    because the actor is busy with SlowMsg.
+        actor_ref.tell(UpdateCounterMsg(1)).await.expect("Tell UpdateCounterMsg(1) to fill mailbox failed");
+
+        // 3. Attempt tell_blocking with another message. This should timeout.
+        let actor_ref_clone = actor_ref.clone();
+        let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
+            // Timeout 20ms, which is < 100ms (SlowMsg sleep)
+            let result = actor_ref_clone.tell_blocking(UpdateCounterMsg(2), Some(std::time::Duration::from_millis(20)));
+
+            assert!(result.is_err(), "tell_blocking should have timed out as actor is busy and mailbox is full");
+            if let Err(e) = result {
+                assert!(e.to_string().contains("tell_blocking operation timed out"), "Error message mismatch: {}", e);
+            }
+        });
+
+        join_handle_blocking_task.await.expect("Blocking task for tell_blocking timeout panicked");
+
+        // Allow the actor to process messages (SlowMsg, then UpdateCounterMsg(1))
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg (100ms) + UpdateCounterMsg(1)
+
+        actor_ref.stop().await.expect("Failed to stop actor");
+        let (actor_state, _reason) = handle.await.expect("Actor task failed");
+        assert!(*actor_state.on_stop_called.lock().await);
+        // Counter should reflect UpdateCounterMsg(1) was processed. SlowMsg doesn't change counter.
+        // UpdateCounterMsg(2) should not have been sent.
+        assert_eq!(*actor_state.counter.lock().await, 1, "Counter should reflect only the message processed before timeout attempt");
+    }
+}

@@ -7,9 +7,11 @@
 ## Core Features
 
 *   **Minimalist Actor System**: Focuses on the core actor model primitives.
-*   **Asynchronous Message Passing**:
+*   **Message Passing**:
     *   `ask`: Send a message and asynchronously await a reply.
     *   `tell`: Send a message without waiting for a reply (fire-and-forget).
+    *   `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` contexts.
+    *   `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` contexts.
 *   **Actor Lifecycle**: Actors implement `on_start` and `on_stop` hooks.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully (processing remaining messages) or killed immediately.
 *   **Macro-Assisted Message Handling**: The `impl_message_handler!` macro simplifies routing different message types to their respective handlers within an actor.
@@ -33,7 +35,7 @@ Add `rsActor` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rsactor = "0.2"
+rsactor = "0.2" # Check crates.io for the latest version
 ```
 
 ### 2. Basic Usage Example
@@ -159,6 +161,46 @@ cargo run --example basic
 ```
 
 This will demonstrate actor creation, message passing, and lifecycle logging.
+
+## Using Blocking Functions with Tokio Tasks
+
+rsactor provides blocking versions of the messaging functions (`ask_blocking` and `tell_blocking`), but these are specifically designed for use within Tokio's blocking tasks - not for general synchronous code.
+
+### When to Use Blocking Functions
+
+Use the blocking functions when:
+- You're inside a `tokio::task::spawn_blocking` task
+- You need to communicate with actors from CPU-bound code
+- You need to interact with actors from synchronous code that runs within the Tokio runtime
+
+### Example: Communicating from a Blocking Task
+
+```rust
+use rsactor::{Actor, ActorRef};
+use tokio::task;
+use std::time::Duration;
+
+// Within an actor's implementation or anywhere with access to an ActorRef
+let actor_ref_clone = actor_ref.clone();
+let blocking_task = task::spawn_blocking(move || {
+    // Inside the blocking task we can use the blocking variants
+
+    // Send a message without waiting for a response
+    actor_ref_clone.tell_blocking("notification", Some(Duration::from_secs(1)))
+        .expect("Failed to send message");
+
+    // Send a message and wait for a response
+    let response: String = actor_ref_clone.ask_blocking("query", Some(Duration::from_secs(2)))
+        .expect("Failed to get response");
+
+    // Process the response...
+    println!("Received response: {}", response);
+});
+```
+
+**Important**: These functions require an active Tokio runtime and will return an error if used outside of a Tokio runtime context.
+
+See the `examples/actor_blocking_task.rs` for a complete example.
 
 ## Motivation
 
