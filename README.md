@@ -31,12 +31,7 @@
 
 ```toml
 [dependencies]
-rsactor = "0.2" # Check crates.io for the latest version
-# Add other necessary dependencies like anyhow, tokio, log, env_logger
-anyhow = "1.0"
-tokio = { version = "1", features = ["full"] }
-log = "0.4"
-env_logger = "0.10"
+rsactor = "0.3" # Check crates.io for the latest version
 ```
 
 ### 2. Basic Usage Example
