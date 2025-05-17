@@ -218,6 +218,10 @@ async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
 
 **Important**: These functions require an active Tokio runtime.
 
+## Further Information
+
+For more detailed questions and answers, please see the [FAQ](./docs/FAQ.md).
+
 ## License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE-APACHE](LICENSE-APACHE) file for details.
