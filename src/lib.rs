@@ -20,21 +20,17 @@
 //!
 //! ## Core Concepts
 //!
-//! - **`Actor`**: A trait defining the behavior of an actor, including lifecycle hooks.
-//! - **`Message<M>`**: A trait defining how an actor handles a specific message type `M`
-//!   and what type of reply it produces.
-//! - **`ActorRef`**: A handle to an actor, used to send messages to it.
-//! - **`spawn`**: A function to create and start a new actor. It returns an `ActorRef`
-//!   and a `JoinHandle` to await the actor's completion.
-//! - **`MailboxMessage`**: An enum representing messages in an actor's mailbox,
-//!   including user messages and control signals (Terminate, StopGracefully).
-//! - **`Runtime`**: Manages the internal lifecycle and message loop for an actor.
+//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks.
+//! - **`Message<M>`**: Trait for handling a message type `M` and defining its reply type.
+//! - **`ActorRef`**: Handle for sending messages to an actor.
+//! - **`spawn`**: Function to create and start an actor, returning an `ActorRef` and a `JoinHandle`.
+//! - **`MailboxMessage`**: Enum for messages in an actor's mailbox (user messages and control signals).
+//! - **`Runtime`**: Manages an actor's internal lifecycle and message loop.
 //!
 //! ## Getting Started
 //!
-//! To use `rsactor`, define your actor struct, implement the `Actor` trait, and then
-//! implement the `Message<M>` trait for each message type your actor should handle.
-//! Finally, use the `impl_message_handler!` macro to wire up the message handling.
+//! Define an actor struct, implement `Actor` and `Message<M>` for each message type.
+//! Use `impl_message_handler!` to wire up message handling.
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
@@ -242,15 +238,6 @@ const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 /// This function can only be called successfully once. Subsequent calls
 /// will return an error. This configured value is used by the `spawn` function
 /// if no specific capacity is provided to `spawn_with_mailbox_capacity`.
-///
-/// # Arguments
-///
-/// * `size`: The desired default buffer size for mailboxes. Must be greater than 0.
-///
-/// # Returns
-///
-/// `Ok(())` if the buffer size was set successfully, or an `Err` with a
-/// message if it has already been set or if size is 0.
 pub fn set_global_default_mailbox_capacity(size: usize) -> Result<(), String> {
     if size == 0 {
         return Err("Global default mailbox capacity must be greater than 0".to_string());
@@ -266,19 +253,17 @@ pub fn set_global_default_mailbox_capacity(size: usize) -> Result<(), String> {
 /// ## Message Passing Methods
 ///
 /// - **Asynchronous Methods**:
-///   - [`ask`](ActorRef::ask): Send a message and await a reply
-///   - [`tell`](ActorRef::tell): Send a message without waiting for a reply
+///   - [`ask`](ActorRef::ask): Send a message and await a reply.
+///   - [`tell`](ActorRef::tell): Send a message without waiting for a reply.
 ///
 /// - **Blocking Methods for Tokio Blocking Contexts**:
-///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a reply is received
-///   - [`tell_blocking`](ActorRef::tell_blocking): Send a message and block until it is sent
-///
-///   These methods are designed specifically for use within `tokio::task::spawn_blocking`
-///   contexts, not for general synchronous code. They require an active Tokio runtime.
+///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a reply is received.
+///   - [`tell_blocking`](ActorRef::tell_blocking): Send a message and block until it is sent.
+///   These methods are for use within `tokio::task::spawn_blocking` contexts.
 ///
 /// - **Control Methods**:
-///   - [`stop`](ActorRef::stop): Gracefully stop the actor
-///   - [`kill`](ActorRef::kill): Immediately terminate the actor
+///   - [`stop`](ActorRef::stop): Gracefully stop the actor.
+///   - [`kill`](ActorRef::kill): Immediately terminate the actor.
 #[derive(Clone, Debug)]
 pub struct ActorRef {
     id: usize,
@@ -305,7 +290,7 @@ impl ActorRef {
     /// Sends a message to the actor without awaiting a reply (fire-and-forget).
     ///
     /// The message is sent to the actor's mailbox for processing.
-    /// This method returns immediately and does not wait for the actor to handle the message.
+    /// This method returns immediately.
     ///
     /// # Arguments
     ///
@@ -340,24 +325,6 @@ impl ActorRef {
     ///
     /// The message is sent to the actor's mailbox, and this method will wait for
     /// the actor to process the message and send a reply.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `M`: The type of the message being sent. Must be `Send` and `'static`.
-    /// * `R`: The expected type of the reply. Must be `Send` and `'static`.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg`: The message to send.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The actor's mailbox is closed.
-    /// * The reply channel is closed before a reply is received.
-    /// * The actor's message handler returns an error.
-    /// * The received reply cannot be downcast to the expected type `R`.
-    /// * The operation times out (if a timeout is specified).
     pub async fn ask<M, R>(&self, msg: M) -> Result<R>
     where
         M: Send + 'static,
@@ -370,25 +337,6 @@ impl ActorRef {
     ///
     /// If the actor does not reply within the `timeout_duration`, the method will return
     /// an error.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `M`: The type of the message being sent. Must be `Send` and `'static`.
-    /// * `R`: The expected type of the reply. Must be `Send` and `'static`.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg`: The message to send.
-    /// * `timeout_duration`: The maximum duration to wait for a reply.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The actor's mailbox is closed.
-    /// * The reply channel is closed before a reply is received.
-    /// * The actor's message handler returns an error.
-    /// * The received reply cannot be downcast to the expected type `R`.
-    /// * The operation times out.
     pub async fn ask_with_timeout<M, R>(&self, msg: M, timeout_duration: std::time::Duration) -> Result<R>
     where
         M: Send + 'static,
@@ -448,12 +396,6 @@ impl ActorRef {
     ///
     /// The actor will stop processing messages and shut down as soon as possible.
     /// The `on_stop` lifecycle hook will be called with `ActorStopReason::Killed`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying channel fails to send the message,
-    /// though it logs a warning and returns `Ok(())` if the actor is already stopped,
-    /// as the desired state (stopped) is met.
     pub fn kill(&self) -> Result<()> {
         info!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.id);
         // Use the dedicated terminate_sender with try_send
@@ -485,12 +427,6 @@ impl ActorRef {
     /// New messages sent after this call might be ignored or fail.
     /// The `on_stop` lifecycle hook will be called with `ActorStopReason::Normal`
     /// if no errors occur during shutdown.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying channel fails to send the message,
-    /// though it logs a warning and returns `Ok(())` if the actor is already stopped,
-    /// as the desired state (stopped/stopping) is met.
     pub async fn stop(&self) -> Result<()> {
         info!("Sending StopGracefully message to actor {}", self.id);
         match self.sender.send(MailboxMessage::StopGracefully).await {
@@ -547,49 +483,30 @@ impl ActorRef {
     /// Synchronous version of `tell` that blocks until the message is sent.
     ///
     /// The message is sent to the actor's mailbox for processing.
-    /// This method blocks until the message is sent to the actor's mailbox or until the timeout expires.
+    /// This method blocks until the message is sent or the timeout expires.
     ///
     /// # Important Note
     ///
-    /// This method is specifically designed for use within `tokio::task::spawn_blocking` contexts,
-    /// not for general synchronous code. It requires an active Tokio runtime to function.
-    /// Use this when you need to communicate with actors from a blocking task that was
-    /// spawned using `tokio::task::spawn_blocking`.
+    /// This method is for use within `tokio::task::spawn_blocking` contexts.
+    /// It requires an active Tokio runtime.
     ///
     /// # Examples
     ///
     /// ```rust,no_run
     /// use rsactor::ActorRef;
     /// use std::time::Duration;
-    /// struct MyDataMessage(String); // Define a message type for the example
-    /// fn main() -> anyhow::Result<()> { // For compilable no_run
-    ///     let actor_ref: ActorRef = panic!(); // Placeholder for actual actor_ref
-    ///     // Inside a tokio::task::spawn_blocking task:
-    ///     let _handle = tokio::task::spawn_blocking(move || { // actor_ref is moved here
-    ///         // Send message with 1 second timeout
+    /// struct MyDataMessage(String);
+    /// fn main() -> anyhow::Result<()> {
+    ///     let actor_ref: ActorRef = panic!(); // Placeholder
+    ///     let _handle = tokio::task::spawn_blocking(move || {
     ///         let timeout = Some(Duration::from_secs(1));
     ///         let message = MyDataMessage("some data".to_string());
     ///         actor_ref.tell_blocking(message, timeout)
     ///             .expect("tell_blocking should succeed or handle error appropriately");
     ///     });
-    ///     // In a real scenario, you might await the handle or store it.
     ///     Ok(())
     /// }
     /// ```
-    ///
-    /// # Arguments
-    ///
-    /// * `msg`: The message to send. The message type `M` must be `Send` and `'static`.
-    /// * `timeout`: Optional timeout duration. If the operation doesn't complete within this time,
-    ///    an error is returned. If `None`, the operation will block indefinitely.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The actor's mailbox is closed (e.g., if the actor has stopped).
-    /// * There is no tokio runtime available (this function must be called in a context where
-    ///   a tokio runtime is accessible).
-    /// * The operation times out.
     pub fn tell_blocking<M>(&self, msg: M, timeout: Option<std::time::Duration>) -> Result<()>
     where
         M: Send + 'static,
@@ -613,14 +530,12 @@ impl ActorRef {
     /// Synchronous version of `ask` that blocks until the reply is received.
     ///
     /// The message is sent to the actor's mailbox, and this method will block until
-    /// the actor processes the message and sends a reply or until the timeout expires.
+    /// the actor processes the message and sends a reply or the timeout expires.
     ///
     /// # Important Note
     ///
-    /// This method is specifically designed for use within `tokio::task::spawn_blocking` contexts,
-    /// not for general synchronous code. It requires an active Tokio runtime to function.
-    /// Use this when you need to get a response from an actor while in a blocking task that
-    /// was spawned using `tokio::task::spawn_blocking`.
+    /// This method is for use within `tokio::task::spawn_blocking` contexts.
+    /// It requires an active Tokio runtime.
     ///
     /// # Examples
     ///
@@ -631,10 +546,8 @@ impl ActorRef {
     /// use std::time::Duration;
     /// struct QueryMessage;
     /// fn main() -> anyhow::Result<()> {
-    ///     let actor_ref: ActorRef = panic!(); // Placeholder for actual actor_ref
-    ///     // Inside a tokio::task::spawn_blocking task:
+    ///     let actor_ref: ActorRef = panic!(); // Placeholder
     ///     let result = tokio::task::spawn_blocking(move || {
-    ///         // Send query and wait for response with 2 second timeout
     ///         let timeout = Some(Duration::from_secs(2));
     ///         let response: String = actor_ref.ask_blocking(QueryMessage, timeout).unwrap();
     ///         // Process response...
@@ -644,28 +557,6 @@ impl ActorRef {
     /// }
     /// ```
     /// Refer to the `examples/actor_blocking_tasks.rs` file for a runnable demonstration.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `M`: The type of the message being sent. Must be `Send` and `'static`.
-    /// * `R`: The expected type of the reply. Must be `Send` and `'static`.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg`: The message to send.
-    /// * `timeout`: Optional timeout duration. If the operation doesn't complete within this time,
-    ///    an error is returned. If `None`, the operation will block indefinitely.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The actor's mailbox is closed.
-    /// * The reply channel is closed before a reply is received.
-    /// * The actor's message handler returns an error.
-    /// * The received reply cannot be downcast to the expected type `R`.
-    /// * There is no tokio runtime available (this function must be called in a context where
-    ///   a tokio runtime is accessible).
-    /// * The operation times out.
     pub fn ask_blocking<M, R>(&self, msg: M, timeout: Option<std::time::Duration>) -> Result<R>
     where
         M: Send + 'static,
@@ -709,7 +600,6 @@ pub enum ActorStopReason {
 /// Implementors of this trait must also be `Send + 'static`.
 pub trait Actor: Send + 'static {
     /// The error type that can be returned by the actor's lifecycle methods.
-    /// Must be `Send`, `Debug`, and `'static`.
     type Error: Send + Debug + 'static;
 
     /// Called when the actor is started.
@@ -717,31 +607,13 @@ pub trait Actor: Send + 'static {
     /// This method can be used for initialization tasks.
     /// If it returns an error, the actor will fail to start, and `on_stop` will be called
     /// with an `ActorStopReason::Error`.
-    ///
-    /// # Arguments
-    ///
-    /// * `_actor_ref`: A reference to the actor itself.
     fn on_start(&mut self, _actor_ref: ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
 
     /// Called when the actor is stopped.
     ///
-    /// This method can be used for cleanup tasks. It is called in the following situations:
-    /// - After a graceful stop via `ActorRef::stop()`
-    /// - After an immediate termination via `ActorRef::kill()`
-    /// - When the actor fails to start (i.e., `on_start` returns an error)
-    /// - When the actor's mailbox is closed and there are no more messages to process
-    ///
-    /// Note that this method will NOT be called in the following situations:
-    /// - When a panic occurs in a message handler. Consider using `std::panic::catch_unwind`
-    ///   within message handlers if cleanup is critical even after a panic.
-    /// - When the Tokio runtime is shut down abruptly
-    ///
-    /// # Arguments
-    ///
-    /// * `_actor_ref`: A reference to the actor itself.
-    /// * `_stop_reason`: The reason why the actor is stopping.
+    /// This method can be used for cleanup tasks.
     fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
@@ -749,25 +621,15 @@ pub trait Actor: Send + 'static {
 
 /// A trait for messages that an actor can handle, defining the reply type.
 ///
-/// An actor struct (e.g., `MyActor`) implements this trait for each specific
-/// message type it can process.
-///
-/// # Type Parameters
-///
-/// * `T`: The type of the message. Must be `Send` and `'static`.
+/// An actor struct implements this trait for each specific message type it can process.
 pub trait Message<T: Send + 'static>: Actor {
     /// The type of the reply that will be sent back to the caller.
-    /// Must be `Send` and `'static` to be sent over a `oneshot` channel.
     type Reply: Send + 'static;
 
     /// Handles the incoming message and produces a reply.
     ///
     /// This is an asynchronous method where the actor's business logic for
     /// processing the message `T` resides.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg`: The message instance to handle.
     fn handle(&mut self, msg: T) -> impl Future<Output = Self::Reply> + Send;
 }
 
@@ -777,22 +639,12 @@ pub trait Message<T: Send + 'static>: Actor {
 /// It allows the `Runtime` to handle messages of different types by downcasting
 /// them to their concrete types before passing them to the actor's specific `Message::handle`
 /// implementation.
-///
-/// Implementors of this trait must also be `Send`, `Sync`, and 'static'.
 pub trait MessageHandler: Send + Sync + 'static {
     /// Handles a type-erased message.
     ///
     /// The implementation should attempt to downcast `msg_any` to one of the
     /// message types the actor supports and then call the corresponding
     /// `Message::handle` method.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg_any`: A `Box<dyn Any + Send>` containing the message.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `Box<dyn Any + Send>` with the reply, or an error.
     fn handle(
         &mut self,
         msg_any: Box<dyn Any + Send>,
@@ -962,22 +814,9 @@ impl<T: Actor + MessageHandler> Runtime<T> {
 ///
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor instance and its `ActorStopReason`.
-///
-/// # Arguments
-///
-/// * `actor`: The actor instance to spawn. The actor type `T` must implement
-///   `Actor`, `MessageHandler`, and be `'static`.
-///
-/// # Returns
-///
-/// A tuple containing:
-/// * An `ActorRef` for sending messages to the spawned actor.
-/// * A `tokio::task::JoinHandle` that resolves to a tuple `(T, ActorStopReason)`
-///   when the actor terminates. `T` is the actor instance itself, allowing for state
-///   retrieval after the actor stops.
 pub fn spawn<T: Actor + MessageHandler + 'static>(
-    actor: T, // Actor instance is taken by value
-) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) { // Updated return type
+    actor: T,
+) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) {
     let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().copied().unwrap_or(DEFAULT_MAILBOX_CAPACITY);
     spawn_with_mailbox_capacity(actor, capacity)
 }
@@ -986,44 +825,27 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
 ///
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor instance and its `ActorStopReason`.
-///
-/// # Arguments
-///
-/// * `actor`: The actor instance to spawn. The actor type `T` must implement
-///   `Actor`, `MessageHandler`, and be `'static`.
-/// * `mailbox_capacity`: The buffer size (capacity) for the actor's main message channel. Must be greater than 0.
-///
-/// # Returns
-///
-/// A tuple containing:
-/// * An `ActorRef` for sending messages to the spawned actor.
-/// * A `tokio::task::JoinHandle` that resolves to a tuple `(T, ActorStopReason)`
-///   when the actor terminates. `T` is the actor instance itself, allowing for state
-///   retrieval after the actor stops.
-///
-/// # Panics
-///
-/// Panics if `mailbox_capacity` is 0.
-pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>( // Renamed from spawn_with_buffer_size
-    actor: T, // Actor instance is taken by value
-    mailbox_capacity: usize, // Renamed from buffer_size
-) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) {
-    assert!(mailbox_capacity > 0, "Mailbox capacity must be greater than 0"); // Updated assert message
-    let actor_id = ACTOR_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let (tx, rx) = mpsc::channel::<MailboxMessage>(mailbox_capacity); // Use mailbox_capacity
-    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
+pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
+    actor: T,
+    mailbox_capacity: usize,
+) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) { // Updated return type
+    if mailbox_capacity == 0 {
+        panic!("Mailbox capacity must be greater than 0");
+    }
 
-    let actor_ref = ActorRef::new_internal(actor_id, tx, terminate_tx);
+    let id = ACTOR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
+    // Create a dedicated channel for the Terminate signal with a small capacity (e.g., 1 or 2)
+    // This ensures that a kill signal can be sent even if the main mailbox is full.
+    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
-    let runtime = Runtime::new(actor, actor_ref.clone(), rx, terminate_rx);
-    let id_for_log = runtime.actor_ref.id();
+    let actor_ref = ActorRef::new_internal(id, mailbox_tx, terminate_tx); // Pass terminate_tx
 
-    let handle = tokio::spawn(async move {
-        info!("Spawning task for actor {}.", id_for_log);
-        runtime.run_actor_lifecycle().await
-    });
+    let runtime = Runtime::new(actor, actor_ref.clone(), mailbox_rx, terminate_rx); // Pass terminate_rx
 
-    (actor_ref, handle)
+    let join_handle = tokio::spawn(runtime.run_actor_lifecycle());
+
+    (actor_ref, join_handle)
 }
 
 // ---------------------------------------------------------
