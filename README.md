@@ -12,18 +12,17 @@
     *   `tell`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
 *   **Actor Lifecycle**: `on_start`, `on_stop`, and `run_loop` hooks. The `run_loop` method is called after `on_start` and contains the main execution logic of the actor, running for its lifetime. All lifecycle hooks are optional and have default implementations.
+*   **Built-in Task Management**: The `run_loop` feature eliminates the need for separate `tokio::spawn` calls for actor tasks, as the framework handles spawning and managing actor tasks internally.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
 
-## Comparison with Kameo
+## Version Differences
 
-`rsActor` differs from Kameo by:
-*   Supporting local actors only (no remote actor support).
-*   Using a concrete `ActorRef` with runtime type checking for replies.
-*   Not including built-in actor linking or supervision.
-*   Being tightly coupled with Tokio.
-*   Using the `impl_message_handler!` macro for message handling.
+### Key Changes in v0.4.0 (compared to v0.3.0 and below)
+
+* **Reference-Based Actor Reference**: In v0.4.0, `ActorRef` is passed as a reference (`&ActorRef`) in lifecycle methods (`on_start`, `on_stop`), making API usage more ergonomic.
+* **Run Loop Support**: v0.4.0 introduces the `run_loop` method, which provides a dedicated execution context for actor's long-running tasks or continuous operations.
 
 ## Getting Started
 
