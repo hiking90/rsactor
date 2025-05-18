@@ -171,27 +171,58 @@ A20: Yes. Actors can hold `ActorRef`s to other actors and send messages to them 
 
 A21: No, `rsActor` is designed for local, in-process actor systems only. It does not provide features for network transparency or communication between actors in different processes or on different machines.
 
-**Q22: When might I need to spawn a new Tokio task from within an actor (e.g., in `on_start`, `run_loop`, or a message handler `async fn handle`)?**
+**Q22: How can I effectively use the `run_loop` method in my actors?**
 
-A22: While an actor itself runs within a dedicated Tokio task, and its message handlers (`async fn handle`) or lifecycle methods (`on_start`, `run_loop`, `on_stop`) are executed as part of this main actor task, there are scenarios where you might want to spawn additional Tokio tasks from within these actor methods:
+A22: The `run_loop` method is a powerful feature of the `rsActor` framework that provides a clean way to implement continuous or periodic tasks within an actor. It is called after `on_start` and runs for the entire lifetime of the actor. Here's how to use it effectively:
 
-*   **Performing Long-Running, Non-Blocking Operations Concurrently:** If an actor method (like `on_start` for initial setup, `run_loop` for continuous work, or `handle` for processing a message) needs to initiate a long-running operation that is itself asynchronous and non-blocking (e.g., making multiple independent network requests, complex calculations that can be broken down), spawning new tasks for these operations allows the actor method to return quickly. This is crucial for `handle` to keep the actor's mailbox from being blocked, enabling responsiveness. For `on_start`, it might mean the actor becomes "ready" (from `on_start`'s perspective) sooner, while background initialization continues.
-*   **Offloading Work to Avoid Blocking Actor Methods:** If an operation within `on_start`, `run_loop`, or `handle` might take a significant amount of time, even if asynchronous, spawning it in a separate task ensures the method itself completes swiftly. The actor can then proceed (e.g., start processing messages after `on_start`, or process other messages if in `handle`). The spawned task can later send a message back to the actor (or another actor) with its result or status.
-*   **Fire-and-Forget Background Tasks:** For operations initiated from any actor method where the actor doesn't need to wait for a direct reply before continuing its primary function, spawning a task is a good way to offload the work.
-*   **Parallelism within an Actor Method:** If a single message or an initialization step requires performing several independent asynchronous sub-tasks, `tokio::spawn` can be used to run them concurrently. Tools like `tokio::join!` or `futures::future::join_all` can then be used to await their collective completion if the actor method needs these results before proceeding.
+*   **Continuous Processing:** The `run_loop` method is ideal for implementing continuous processing logic that should run throughout the actor's lifetime. Unlike spawning separate tasks, work in the `run_loop` is part of the actor's main execution flow.
+
+*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `run_loop`. For example:
+
+    ```rust
+    async fn run_loop(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            // Perform periodic work here
+        }
+    }
+    ```
+
+*   **Graceful Termination:** When you want the actor to stop normally, you can break out of the loop in `run_loop` or simply return `Ok(())`. This will trigger the normal shutdown sequence, calling `on_stop` with `ActorStopReason::Normal`.
+
+*   **Error Handling:** If the `run_loop` returns an error (`Err(_)`), the actor will stop and `on_stop` will be called with `ActorStopReason::Error`.
+
+*   **Integration with Message Handling:** The `run_loop` runs concurrently with message processing. The actor will continue to handle messages from its mailbox while the `run_loop` is executing. This allows for a nice separation of concerns where long-running tasks are in the `run_loop` and message-specific logic is in the message handlers.
 
 **Important Considerations:**
-*   **Task Lifecycle Management:** If you spawn tasks, consider how their lifecycle is managed. Do they need to be cancelled if the actor stops? How are their results or errors handled? Often, spawned tasks might send a new message back to the originating actor (or another designated actor) upon completion or error. This is particularly important for tasks spawned from `on_start` – if they are critical for the actor's function, their failure might necessitate stopping the actor.
-*   **Resource Management:** Spawning an excessive number of tasks without control can lead to resource exhaustion. Ensure your design doesn't lead to unbounded task creation.
-*   **`ActorRef` Cloning:** Remember to clone the `ActorRef` if the spawned task needs to communicate back with the actor or other actors.
-*   **Error Handling:** Errors occurring in tasks spawned via `tokio::spawn` operate in their own context and won't automatically propagate to the actor's main error handling mechanisms or influence its `ActorStopReason`. You must explicitly design how these errors are managed. Common patterns include having the spawned task send an error message back to the originating actor (or another designated error-handling actor), or if a critical task spawned from `on_start` fails, the actor might be designed to stop itself upon receiving notification of this failure.
-*   **CPU-Bound or Blocking I/O Work (Using `spawn_blocking`):**
-    *   If the work you need to perform from an actor method is CPU-bound (e.g., complex calculations that don\'t yield control to the Tokio runtime) or involves blocking I/O operations (e.g., traditional file system operations, some database drivers not designed for async), you **must** offload this work to Tokio\'s blocking thread pool using `tokio::task::spawn_blocking`.
-    *   Directly performing such blocking operations within an actor\'s asynchronous method (`on_start`, `handle`, `on_stop`) will block the Tokio worker thread that the actor is running on. This can lead to the actor becoming unresponsive and can even stall other tasks sharing the same worker thread, potentially degrading the performance of the entire Tokio runtime.
-    *   `spawn_blocking` moves the blocking code to a separate thread pool designed for such tasks, allowing the main Tokio worker threads to continue processing other asynchronous operations, including the actor\'s mailbox.
-    *   Once its blocking work is complete, the task spawned with `spawn_blocking` can communicate its result back to an actor. If the blocking task itself needs to send a message synchronously, it can use `actor_ref.tell_blocking` or `actor_ref.ask_blocking`. Alternatively, and more commonly, the `Future` returned by `spawn_blocking` is `.await`ed in an asynchronous context (e.g., within the actor method that called `spawn_blocking`, or a new task), and then a standard asynchronous message (`actor_ref.tell` or `actor_ref.ask`) is sent with the result.
 
-In summary, spawn new Tokio tasks (`tokio::spawn`) from an actor\'s methods for concurrent, non-blocking asynchronous operations. Use `tokio::task::spawn_blocking` for CPU-Bound or blocking I/O operations to prevent stalling the Tokio runtime and ensure actor responsiveness.
+*   **Responsiveness:** The `run_loop` and message handlers share the same execution context. This means that if your `run_loop` doesn't yield control by using `.await` points, it can block message processing. Always ensure your loop includes sufficient `.await` points.
+
+*   **State Sharing:** Both the `run_loop` and message handlers have access to the actor's state (`self`), allowing them to share data without additional synchronization mechanisms.
+
+*   **CPU-Bound or Blocking Work:**
+    *   For CPU-bound or blocking I/O operations that would otherwise block the Tokio runtime, you **must** use `tokio::task::spawn_blocking` even within the `run_loop`.
+    *   Directly performing blocking operations in the `run_loop` will block the Tokio worker thread that the actor is running on, making the actor unresponsive to messages and potentially affecting other tasks.
+    *   When using `spawn_blocking` from the `run_loop`, you can `.await` its result directly:
+
+        ```rust
+        async fn run_loop(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
+            loop {
+                // Offload CPU-intensive or blocking I/O work
+                let result = tokio::task::spawn_blocking(|| {
+                    // Perform CPU-bound or blocking I/O work
+                    // Return the result
+                }).await?;
+
+                // Process the result
+            }
+        }
+        ```
+
+*   **Coordination with `on_stop`:** If your `run_loop` spawns tasks or acquires resources, ensure they are properly managed when the actor stops. You can use flags (like `self.running` in the example above) to signal the `run_loop` to gracefully terminate when the actor receives a stop signal.
+
+In summary, the `run_loop` method provides an elegant way to implement continuous or periodic tasks within an actor without spawning separate Tokio tasks. It runs as part of the actor's main execution flow, has access to the actor's state, and can use the full range of async features available in the Tokio ecosystem. By using the `run_loop`, you often eliminate the need to spawn separate tasks from an actor's methods, resulting in cleaner and more manageable actor implementations.
 
 ---
 
