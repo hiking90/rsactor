@@ -86,7 +86,7 @@ impl Actor for DataProcessorActor {
         Ok(())
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
         loop {
             self.interval.tick().await;
 
@@ -105,7 +105,6 @@ impl Actor for DataProcessorActor {
                 raw_value,
                 processed_value
             );
-
         }
     }
 }

@@ -11,7 +11,7 @@
     *   `ask`: Send a message and asynchronously await a reply.
     *   `tell`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Actor Lifecycle**: `on_start`, `on_stop`, and `on_run` hooks. The `on_run` hook facilitates continuous or periodic work within the actor, reducing the need for manual `tokio::spawn` for such tasks. All lifecycle hooks are optional and have default implementations.
+*   **Actor Lifecycle**: `on_start`, `on_stop`, and `run_loop` hooks. The `run_loop` method is called after `on_start` and contains the main execution logic of the actor, running for its lifetime. All lifecycle hooks are optional and have default implementations.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
@@ -52,7 +52,7 @@ struct CounterActor {
 impl Actor for CounterActor {
     type Error = anyhow::Error;
 
-    // on_start, on_stop, and on_run are optional and have default implementations.
+    // on_start, on_stop, and run_loop are optional and have default implementations.
     // You can uncomment and implement them if needed.
 
     // async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
@@ -65,11 +65,15 @@ impl Actor for CounterActor {
     //     Ok(())
     // }
 
-    // async fn on_run(&mut self, actor_ref: &ActorRef) -> Result<bool, Self::Error> {
-    //     // Example: Log a message periodically
-    //     // info!("CounterActor (id: {}) on_run called.", actor_ref.id());
-    //     // Return Ok(true) to continue running, Ok(false) to stop.
-    //     Ok(true)
+    // async fn run_loop(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
+    //     // Example: Log a message periodically or perform a long-running task.
+    //     // info!("CounterActor (id: {}) run_loop called.", actor_ref.id());
+    //     // The actor will stop when this method returns Ok(()) or Err(_).
+    //     loop {
+    //         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    //         // if some_condition { break; } // Or return Ok(()) to stop.
+    //     }
+    //     Ok(()) // Actor stops when run_loop completes.
     // }
 }
 
@@ -161,7 +165,7 @@ struct MyActor;
 
 impl Actor for MyActor {
     type Error = anyhow::Error;
-    // on_start, on_stop, and on_run are optional
+    // on_start, on_stop, and run_loop are optional
 }
 
 impl Message<MyMessage> for MyActor {

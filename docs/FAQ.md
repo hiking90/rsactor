@@ -26,7 +26,7 @@ A3:
 
 A4: To define an actor, you need to:
 1.  Create a struct for your actor's state.
-2.  Implement the `Actor` trait for this struct. This involves defining an `Error` type and optionally implementing `on_start` and `on_stop` lifecycle hooks.
+2.  Implement the `Actor` trait for this struct. This involves defining an `Error` type and optionally implementing `on_start`, `run_loop`, and `on_stop` lifecycle hooks.
 3.  For each specific message type (e.g., `PingRequest`) your actor will handle, you need to implement the `Message<PingRequest>` trait *for your actor struct*. This trait implementation involves defining an associated `Reply` type (e.g., `PongResponse`) and the `async fn handle(&mut self, message: PingRequest, ...)` method that dictates how the actor processes this specific message type.
 4.  Use the `impl_message_handler!(YourActorType, [MessageType1, MessageType2]);` macro to generate the necessary boilerplate for routing messages to their respective handlers.
 
@@ -117,8 +117,9 @@ If you need to communicate with an actor within `tokio::task::spawn_blocking` an
 
 **Q13: How do I manage an actor's lifecycle?**
 
-A13: The `Actor` trait provides two lifecycle hooks:
+A13: The `Actor` trait provides three lifecycle hooks:
 *   `on_start(&mut self, actor_ref: ActorRef)`: Called when the actor is started, before it begins processing messages. Useful for initialization.
+*   `run_loop(&mut self, actor_ref: ActorRef)`: Called after `on_start` and contains the main execution logic of the actor. It runs for the entire lifetime of the actor. If this method returns `Ok(())`, the actor will stop normally. If it returns `Err(_)`, the actor will stop due to an error.
 *   `on_stop(&mut self, actor_ref: ActorRef, reason: &ActorStopReason)`: Called when the actor is about to stop. Useful for cleanup. The `reason` argument indicates why the actor is stopping.
 
 **Q14: How do I stop an actor? What's the difference between `stop()` and `kill()`?**
@@ -170,12 +171,12 @@ A20: Yes. Actors can hold `ActorRef`s to other actors and send messages to them 
 
 A21: No, `rsActor` is designed for local, in-process actor systems only. It does not provide features for network transparency or communication between actors in different processes or on different machines.
 
-**Q22: When might I need to spawn a new Tokio task from within an actor (e.g., in `on_start` or a message handler `async fn handle`)?**
+**Q22: When might I need to spawn a new Tokio task from within an actor (e.g., in `on_start`, `run_loop`, or a message handler `async fn handle`)?**
 
-A22: While an actor itself runs within a dedicated Tokio task, and its message handlers (`async fn handle`) or lifecycle methods (`on_start`, `on_stop`) are executed as part of this main actor task, there are scenarios where you might want to spawn additional Tokio tasks from within these actor methods:
+A22: While an actor itself runs within a dedicated Tokio task, and its message handlers (`async fn handle`) or lifecycle methods (`on_start`, `run_loop`, `on_stop`) are executed as part of this main actor task, there are scenarios where you might want to spawn additional Tokio tasks from within these actor methods:
 
-*   **Performing Long-Running, Non-Blocking Operations Concurrently:** If an actor method (like `on_start` for initial setup, or `handle` for processing a message) needs to initiate a long-running operation that is itself asynchronous and non-blocking (e.g., making multiple independent network requests, complex calculations that can be broken down), spawning new tasks for these operations allows the actor method to return quickly. This is crucial for `handle` to keep the actor's mailbox from being blocked, enabling responsiveness. For `on_start`, it might mean the actor becomes "ready" (from `on_start`'s perspective) sooner, while background initialization continues.
-*   **Offloading Work to Avoid Blocking Actor Methods:** If an operation within `on_start` or `handle` might take a significant amount of time, even if asynchronous, spawning it in a separate task ensures the method itself completes swiftly. The actor can then proceed (e.g., start processing messages after `on_start`, or process other messages if in `handle`). The spawned task can later send a message back to the actor (or another actor) with its result or status.
+*   **Performing Long-Running, Non-Blocking Operations Concurrently:** If an actor method (like `on_start` for initial setup, `run_loop` for continuous work, or `handle` for processing a message) needs to initiate a long-running operation that is itself asynchronous and non-blocking (e.g., making multiple independent network requests, complex calculations that can be broken down), spawning new tasks for these operations allows the actor method to return quickly. This is crucial for `handle` to keep the actor's mailbox from being blocked, enabling responsiveness. For `on_start`, it might mean the actor becomes "ready" (from `on_start`'s perspective) sooner, while background initialization continues.
+*   **Offloading Work to Avoid Blocking Actor Methods:** If an operation within `on_start`, `run_loop`, or `handle` might take a significant amount of time, even if asynchronous, spawning it in a separate task ensures the method itself completes swiftly. The actor can then proceed (e.g., start processing messages after `on_start`, or process other messages if in `handle`). The spawned task can later send a message back to the actor (or another actor) with its result or status.
 *   **Fire-and-Forget Background Tasks:** For operations initiated from any actor method where the actor doesn't need to wait for a direct reply before continuing its primary function, spawning a task is a good way to offload the work.
 *   **Parallelism within an Actor Method:** If a single message or an initialization step requires performing several independent asynchronous sub-tasks, `tokio::spawn` can be used to run them concurrently. Tools like `tokio::join!` or `futures::future::join_all` can then be used to await their collective completion if the actor method needs these results before proceeding.
 

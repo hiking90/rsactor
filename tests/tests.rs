@@ -323,14 +323,17 @@ impl Actor for LifecycleErrorActor {
         *self.on_stop_attempted.lock().await = true;
         if self.fail_on_stop { Err(anyhow::anyhow!("simulated on_stop failure")) } else { Ok(()) }
     }
-    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
         *self.on_run_attempted.lock().await = true;
         if self.fail_on_run {
             Err(anyhow::anyhow!("simulated on_run failure"))
         } else if self.return_false_on_run {
-            Ok(false) // Actor requests to stop
+            Ok(()) // Actor requests to stop
         } else {
-            Ok(true) // Actor requests to continue
+            loop {
+                // Simulate some work
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
         }
     }
 }
@@ -373,6 +376,37 @@ async fn test_actor_fail_on_start() {
 }
 
 #[tokio::test]
+async fn test_actor_fail_on_stop() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let actor = LifecycleErrorActor {
+        id: 0,
+        fail_on_start: false,
+        fail_on_stop: true,
+        fail_on_run: false,
+        return_false_on_run: true, // This would be normal stop.
+        on_start_attempted: on_start_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+    };
+    let (_actor_ref, handle) = spawn(actor);
+
+    match handle.await {
+        Ok((returned_actor, reason)) => {
+            assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
+            if let ActorStopReason::Error(e) = reason {
+                assert!(e.to_string().contains("on_stop error"));
+            }
+            assert!(*returned_actor.on_start_attempted.lock().await);
+            assert!(*returned_actor.on_run_attempted.lock().await);
+            assert!(*returned_actor.on_stop_attempted.lock().await);
+        }
+        Err(e) => panic!("Expected Ok with Panicked reason, got JoinError: {:?}", e),
+    }
+}
+
+#[tokio::test]
 async fn test_actor_fail_on_run() {
     let on_start_attempted = Arc::new(Mutex::new(false));
     let on_stop_attempted = Arc::new(Mutex::new(false));
@@ -393,7 +427,6 @@ async fn test_actor_fail_on_run() {
         Ok((returned_actor, reason)) => {
             assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
             if let ActorStopReason::Error(e) = reason {
-                println!("Error: ---- {:?}", e);
                 assert!(e.to_string().contains("simulated on_run failure"));
             }
             assert!(*returned_actor.on_start_attempted.lock().await);
@@ -405,41 +438,38 @@ async fn test_actor_fail_on_run() {
 }
 
 #[tokio::test]
-async fn test_actor_fail_on_stop() {
+async fn test_actor_fail_on_run_then_fail_on_stop() {
     let on_start_attempted = Arc::new(Mutex::new(false));
     let on_stop_attempted = Arc::new(Mutex::new(false));
     let on_run_attempted = Arc::new(Mutex::new(false));
     let actor = LifecycleErrorActor {
         id: 0,
         fail_on_start: false,
-        fail_on_run: false,
-        fail_on_stop: true,
-        return_false_on_run: false, // Default to false
+        fail_on_run: true,     // on_run will fail
+        fail_on_stop: true,    // on_stop will also fail
+        return_false_on_run: false,
         on_start_attempted: on_start_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
     };
-    let (actor_ref, handle) = spawn(actor);
-
-    // Added to increase the test coverage
-    actor_ref.tell(NoOpMsg).await.expect("Tell should succeed");
-
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Ensure on_start runs
-    assert!(*on_start_attempted.lock().await);
-
-    actor_ref.stop().await.expect("Stop command should succeed");
+    let (_actor_ref, handle) = spawn(actor);
 
     match handle.await {
         Ok((returned_actor, reason)) => {
             assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
             if let ActorStopReason::Error(e) = reason {
-                assert!(e.to_string().contains("on_stop failed"));
+                // The error from on_run should be the primary reason for stopping
+                // Check if "simulated on_run failure" is present in the error chain
+                let found_on_run_failure = e.chain().any(|cause| {
+                    cause.to_string().contains("simulated on_run failure")
+                });
+                assert!(found_on_run_failure, "Expected 'simulated on_run failure' in the error chain. Full error: {:?}", e);
             }
-            assert!(*returned_actor.on_start_attempted.lock().await);
-            assert!(*returned_actor.on_run_attempted.lock().await);
-            assert!(*returned_actor.on_stop_attempted.lock().await);
+            assert!(*returned_actor.on_start_attempted.lock().await, "on_start should have been attempted");
+            assert!(*returned_actor.on_run_attempted.lock().await, "on_run should have been attempted");
+            assert!(*returned_actor.on_stop_attempted.lock().await, "on_stop should have been attempted despite its own failure");
         }
-        Err(e) => panic!("Expected Ok with Panicked reason, got JoinError: {:?}", e),
+        Err(e) => panic!("Expected Ok with Error reason, got JoinError: {:?}", e),
     }
 }
 

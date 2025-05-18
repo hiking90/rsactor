@@ -15,9 +15,9 @@
 //!   - `ask`: Send a message and await a reply.
 //!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
 //!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
-//! - **Actor Lifecycle**: Actors have `on_start`, `on_stop`, and `on_run` lifecycle hooks.
-//!   The `on_run` hook allows actors to perform periodic or continuous work without
-//!   requiring explicit `tokio::spawn` calls within the actor's logic for such tasks.
+//! - **Actor Lifecycle**: Actors have `on_start`, `on_stop`, and `run_loop` lifecycle hooks.
+//!   The `run_loop` method is called after `on_start` and contains the main execution
+//!   logic of the actor, running for its lifetime.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
 //! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
@@ -25,7 +25,7 @@
 //!
 //! ## Core Concepts
 //!
-//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks (`on_start`, `on_stop`, `on_run`).
+//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks (`on_start`, `on_stop`, `run_loop`).
 //! - **`Message<M>`**: Trait for handling a message type `M` and defining its reply type.
 //! - **`ActorRef`**: Handle for sending messages to an actor.
 //! - **`spawn`**: Function to create and start an actor, returning an `ActorRef` and a `JoinHandle`.
@@ -37,7 +37,7 @@
 //!
 //! Define an actor struct, implement `Actor` and `Message<M>` for each message type.
 //! Use `impl_message_handler!` to wire up message handling.
-//! All `Actor` lifecycle methods (`on_start`, `on_stop`, `on_run`) are optional
+//! All `Actor` lifecycle methods (`on_start`, `on_stop`, `run_loop`) are optional
 //! and have default implementations.
 //!
 //! ```rust
@@ -71,11 +71,16 @@
 //!     //     Ok(())
 //!     // }
 //!
-//!     // Optional: Implement on_run for periodic/continuous work
-//!     // async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
-//!     //     // Perform some work...
-//!     //     // Return Ok(true) to continue running, Ok(false) to stop the actor.
-//!     //     Ok(true)
+//!     // Optional: Implement run_loop for the actor's main execution logic.
+//!     // This method is called after on_start. If it returns Ok(()), the actor stops normally.
+//!     // If it returns Err(_), the actor stops due to an error.
+//!     // async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+//!     //     // Example: Perform some work in a loop or a long-running task.
+//!     //     // loop {
+//!     //     //     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+//!     //     //     // if some_condition { break; } // Or return Ok(()) to stop.
+//!     //     // }
+//!     //     Ok(()) // Actor stops when run_loop completes.
 //!     // }
 //! }
 //!
@@ -143,6 +148,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         OnceLock,
     },
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -556,8 +562,7 @@ pub trait Actor: Send + 'static {
     /// This method can be used for initialization tasks.
     /// If it returns an error, the actor will fail to start, and `on_stop` will be called
     /// with an `ActorStopReason::Error`.
-    fn on_start(&mut self, actor_ref: &ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        let _ = actor_ref; // Mark as used
+    fn on_start(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
 
@@ -566,30 +571,28 @@ pub trait Actor: Send + 'static {
     /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
     /// The `stop_reason` parameter indicates why the actor is stopping.
     /// This method can be used for cleanup tasks.
-    fn on_stop(&mut self, actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        let _ = actor_ref; // Mark as used
-        let _ = stop_reason; // Mark as used
+    fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
 
-    /// Called periodically by the actor's runtime. This is optional and has a default implementation.
+    /// The main execution loop for the actor.
+    ///
+    /// This method is called after `on_start` and is expected to contain the primary logic
+    /// of the actor. It typically runs for the entire lifetime of the actor.
     ///
     /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
-    /// This method allows the actor to perform background tasks, polling, or other
-    /// continuous work without needing to spawn separate Tokio tasks.
     ///
-    /// Return `Ok(true)` to continue execution of the actor's message loop and
-    /// to have `on_run` called again.
-    /// Return `Ok(false)` to signal that the actor should stop gracefully. The actor
-    /// will then proceed to its `on_stop` lifecycle hook.
-    /// Return `Err(e)` if an error occurs; this will also cause the actor to stop,
-    /// and the error will be propagated as an `ActorStopReason::Error`.
-    ///
-    /// The frequency of `on_run` calls is managed by the actor's internal loop,
-    /// which yields to the Tokio scheduler between calls, ensuring fair execution.
-    fn on_run(&mut self, actor_ref: &ActorRef) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-        let _ = actor_ref; // Mark as used
-        async { Ok(true) } // Default behavior is to continue running
+    /// If this method returns `Ok(())` or `Err(_)`, the actor will be stopped.
+    /// If it returns `Ok(())`, `on_stop` will be called with `ActorStopReason::Normal`.
+    /// If it returns `Err(_)`, `on_stop` will be called with `ActorStopReason::Error`.
+    fn run_loop(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        async {
+            loop {
+                // Placeholder for the actor's main loop logic.
+                // This could be a long-running task or periodic work.
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
     }
 }
 
@@ -732,23 +735,19 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                     }
                 }
 
-                maybe_result = self.actor.on_run(&self.actor_ref) => {
+                maybe_result = self.actor.run_loop(&self.actor_ref) => {
                     match maybe_result {
-                        Ok(should_continue) => {
-                            if !should_continue {
-                                info!("Actor {} on_run returned false. Stopping.", actor_id);
-                                break; // Exit loop, proceed to on_stop
-                            }
+                        Ok(_) => {
+                            // If None is returned, we stop the actor.
+                            info!("Actor {} is stopping.", actor_id);
                         }
                         Err(e) => {
                             let error_msg = format!("Actor {} on_run error: {:?}", actor_id, e);
                             error!("{}", error_msg);
                             final_reason = ActorStopReason::Error(anyhow::anyhow!(error_msg));
-                            break; // Exit loop, proceed to on_stop
                         }
                     }
-                    // If on_run returns false, we stop the actor.
-                    tokio::task::yield_now().await;
+                    break; // Exit loop, proceed to on_stop
                 }
             }
         }
@@ -770,7 +769,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                     final_reason = ActorStopReason::Error(existing_err);
                 }
                 _ => {
-                    final_reason = ActorStopReason::Error(anyhow::Error::msg(format!("on_stop failed: {:?}", e_on_stop)));
+                    final_reason = ActorStopReason::Error(anyhow::Error::msg(error_msg));
                 }
             }
         }

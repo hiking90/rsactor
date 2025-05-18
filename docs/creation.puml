@@ -11,6 +11,7 @@ participant "Runtime" as Runtime_type
 participant "tokio::spawn" as tokio_spawn
 participant "Runtime::run_actor_lifecycle()" as run_lifecycle
 participant "Actor::on_start()" as on_start_method
+participant "Actor::run_loop()" as run_loop_method
 
 User -> UserActor: Defines struct & impl Actor, Message<M>
 User -> spawn_func: Calls spawn(user_actor_instance)
@@ -31,7 +32,11 @@ run_lifecycle -> on_start_method: Calls actor.on_start(actor_ref)
 activate on_start_method
 on_start_method --> run_lifecycle: Returns Result
 deactivate on_start_method
-note right of run_lifecycle: Proceeds to message loop if on_start is Ok
+run_lifecycle -> run_loop_method: Calls actor.run_loop(actor_ref) if on_start is Ok
+activate run_loop_method
+run_loop_method --> run_lifecycle: Eventually returns Result
+deactivate run_loop_method
+note right of run_lifecycle: Processes messages concurrently with run_loop
 
 run_lifecycle --> tokio_spawn: (Eventually completes)
 deactivate run_lifecycle
