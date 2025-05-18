@@ -15,7 +15,9 @@
 //!   - `ask`: Send a message and await a reply.
 //!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
 //!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
-//! - **Actor Lifecycle**: Actors have `on_start` and `on_stop` lifecycle hooks.
+//! - **Actor Lifecycle**: Actors have `on_start`, `on_stop`, and `on_run` lifecycle hooks.
+//!   The `on_run` hook allows actors to perform periodic or continuous work without
+//!   requiring explicit `tokio::spawn` calls within the actor's logic for such tasks.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
 //! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
@@ -23,7 +25,7 @@
 //!
 //! ## Core Concepts
 //!
-//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks.
+//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks (`on_start`, `on_stop`, `on_run`).
 //! - **`Message<M>`**: Trait for handling a message type `M` and defining its reply type.
 //! - **`ActorRef`**: Handle for sending messages to an actor.
 //! - **`spawn`**: Function to create and start an actor, returning an `ActorRef` and a `JoinHandle`.
@@ -35,6 +37,8 @@
 //!
 //! Define an actor struct, implement `Actor` and `Message<M>` for each message type.
 //! Use `impl_message_handler!` to wire up message handling.
+//! All `Actor` lifecycle methods (`on_start`, `on_stop`, `on_run`) are optional
+//! and have default implementations.
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
@@ -51,19 +55,28 @@
 //!     }
 //! }
 //!
-//! // 2. Implement the Actor trait
+//! // 2. Implement the Actor trait (on_start, on_stop, on_run are optional)
 //! impl Actor for MyActor {
 //!     type Error = anyhow::Error; // Define an error type
 //!
-//!     async fn on_start(&mut self, _actor_ref: ActorRef) -> Result<(), Self::Error> {
-//!         println!("MyActor (data: '{}') started!", self.data);
-//!         Ok(())
-//!     }
+//!     // Optional: Implement on_start for initialization
+//!     // async fn on_start(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+//!     //     println!("MyActor (data: '{}') started!", self.data);
+//!     //     Ok(())
+//!     // }
 //!
-//!     async fn on_stop(&mut self, _actor_ref: ActorRef, _reason: &rsactor::ActorStopReason) -> Result<(), Self::Error> {
-//!         println!("MyActor (data: '{}') stopped!", self.data);
-//!         Ok(())
-//!     }
+//!     // Optional: Implement on_stop for cleanup
+//!     // async fn on_stop(&mut self, _actor_ref: &ActorRef, _reason: &rsactor::ActorStopReason) -> Result<(), Self::Error> {
+//!     //     println!("MyActor (data: '{}') stopped!", self.data);
+//!     //     Ok(())
+//!     // }
+//!
+//!     // Optional: Implement on_run for periodic/continuous work
+//!     // async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+//!     //     // Perform some work...
+//!     //     // Return Ok(true) to continue running, Ok(false) to stop the actor.
+//!     //     Ok(true)
+//!     // }
 //! }
 //!
 //! // 3. Define your message types
@@ -537,24 +550,46 @@ pub trait Actor: Send + 'static {
     /// The error type that can be returned by the actor's lifecycle methods.
     type Error: Send + Debug + 'static;
 
-    /// Called when the actor is started.
+    /// Called when the actor is started. This is optional and has a default implementation.
     ///
+    /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
     /// This method can be used for initialization tasks.
     /// If it returns an error, the actor will fail to start, and `on_stop` will be called
     /// with an `ActorStopReason::Error`.
-    fn on_start(&mut self, _actor_ref: ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    fn on_start(&mut self, actor_ref: &ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        let _ = actor_ref; // Mark as used
         async { Ok(()) }
     }
 
-    /// Called when the actor is stopped.
+    /// Called when the actor is stopped. This is optional and has a default implementation.
     ///
+    /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
+    /// The `stop_reason` parameter indicates why the actor is stopping.
     /// This method can be used for cleanup tasks.
-    fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    fn on_stop(&mut self, actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        let _ = actor_ref; // Mark as used
+        let _ = stop_reason; // Mark as used
         async { Ok(()) }
     }
 
-    fn on_run(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-        async { Ok(true) }
+    /// Called periodically by the actor's runtime. This is optional and has a default implementation.
+    ///
+    /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
+    /// This method allows the actor to perform background tasks, polling, or other
+    /// continuous work without needing to spawn separate Tokio tasks.
+    ///
+    /// Return `Ok(true)` to continue execution of the actor's message loop and
+    /// to have `on_run` called again.
+    /// Return `Ok(false)` to signal that the actor should stop gracefully. The actor
+    /// will then proceed to its `on_stop` lifecycle hook.
+    /// Return `Err(e)` if an error occurs; this will also cause the actor to stop,
+    /// and the error will be propagated as an `ActorStopReason::Error`.
+    ///
+    /// The frequency of `on_run` calls is managed by the actor's internal loop,
+    /// which yields to the Tokio scheduler between calls, ensuring fair execution.
+    fn on_run(&mut self, actor_ref: &ActorRef) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+        let _ = actor_ref; // Mark as used
+        async { Ok(true) } // Default behavior is to continue running
     }
 }
 
@@ -567,9 +602,10 @@ pub trait Message<T: Send + 'static>: Actor {
 
     /// Handles the incoming message and produces a reply.
     ///
+    /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
     /// This is an asynchronous method where the actor's business logic for
     /// processing the message `T` resides.
-    fn handle(&mut self, msg: T, _actor_ref: &ActorRef) -> impl Future<Output = Self::Reply> + Send;
+    fn handle(&mut self, msg: T, actor_ref: &ActorRef) -> impl Future<Output = Self::Reply> + Send;
 }
 
 /// A trait for type-erased message handling within the actor's `Runtime`.
@@ -622,23 +658,12 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         let actor_id = self.actor_ref.id();
 
         // Call on_start
-        if let Err(e_on_start) = self.actor.on_start(self.actor_ref.clone()).await {
+        if let Err(e_on_start) = self.actor.on_start(&self.actor_ref).await {
             let error_msg = format!("Actor {} on_start error: {:?}", actor_id, e_on_start);
             error!("{}", error_msg);
-            // let base_error_msg = format!("on_start failed for actor {}: {:?}", actor_id, e_on_start);
-            let mut combined_error = anyhow::Error::msg(error_msg); // Initial error from on_start
 
-            // Attempt to call on_stop, its error (if any) should be chained.
-            let on_start_failure_reason = ActorStopReason::Error(anyhow::Error::msg(format!("on_start failed for actor {}", actor_id)));
-
-            if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &on_start_failure_reason).await {
-                let error_msg = format!("Actor {} on_stop error following on_start error: {:?}", actor_id, e_on_stop);
-                error!("{}", error_msg);
-                // Add context about the on_stop failure to the combined_error
-                combined_error = combined_error.context(error_msg);
-            }
             info!("Actor {} task finishing prematurely due to error(s) during startup.", actor_id);
-            return (self.actor, ActorStopReason::Error(combined_error));
+            return (self.actor, ActorStopReason::Error(anyhow::Error::msg(error_msg)));
         }
 
         info!("Runtime for actor {} is running.", actor_id);
@@ -734,7 +759,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         info!("Actor {} message loop ended. Reason: {:?}", actor_id, final_reason);
 
         // Call on_stop
-        if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &final_reason).await {
+        if let Err(e_on_stop) = self.actor.on_stop(&self.actor_ref, &final_reason).await {
             let error_msg = format!("Actor {} on_stop error: {:?}", actor_id, e_on_stop);
             error!("{}", error_msg);
             // If final_reason was already an error, chain this new error.
@@ -791,6 +816,7 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
 
     (actor_ref, join_handle)
 }
+
 
 #[cfg(test)]
 mod tests {

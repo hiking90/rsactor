@@ -37,7 +37,7 @@ impl TestActor {
 impl Actor for TestActor {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
         self.id = actor_ref.id();
         let mut called = self.on_start_called.lock().await;
         *called = true;
@@ -45,7 +45,7 @@ impl Actor for TestActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         let mut called = self.on_stop_called.lock().await;
         *called = true;
         debug!("TestActor (id: {}) stopped. Final count: {}", self.id, *self.counter.lock().await);
@@ -306,6 +306,7 @@ struct LifecycleErrorActor {
     fail_on_start: bool,
     fail_on_stop: bool,
     fail_on_run: bool,
+    return_false_on_run: bool, // Added field
     on_start_attempted: Arc<Mutex<bool>>,
     on_stop_attempted: Arc<Mutex<bool>>,
     on_run_attempted: Arc<Mutex<bool>>,
@@ -313,18 +314,24 @@ struct LifecycleErrorActor {
 impl Actor for LifecycleErrorActor {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
         self.id = actor_ref.id();
         *self.on_start_attempted.lock().await = true;
         if self.fail_on_start { Err(anyhow::anyhow!("simulated on_start failure")) } else { Ok(()) }
     }
-    async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         *self.on_stop_attempted.lock().await = true;
         if self.fail_on_stop { Err(anyhow::anyhow!("simulated on_stop failure")) } else { Ok(()) }
     }
     async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
         *self.on_run_attempted.lock().await = true;
-        if self.fail_on_run { Err(anyhow::anyhow!("simulated on_run failure")) } else { Ok(true) }
+        if self.fail_on_run {
+            Err(anyhow::anyhow!("simulated on_run failure"))
+        } else if self.return_false_on_run {
+            Ok(false) // Actor requests to stop
+        } else {
+            Ok(true) // Actor requests to continue
+        }
     }
 }
 struct NoOpMsg; // Dummy message for LifecycleErrorActor
@@ -344,6 +351,7 @@ async fn test_actor_fail_on_start() {
         fail_on_start: true,
         fail_on_stop: false,
         fail_on_run: false,
+        return_false_on_run: false, // Default to false
         on_start_attempted: on_start_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
@@ -358,13 +366,13 @@ async fn test_actor_fail_on_start() {
             }
             assert!(*returned_actor.on_start_attempted.lock().await);
             assert!(!*returned_actor.on_run_attempted.lock().await);
-            assert!(*returned_actor.on_stop_attempted.lock().await);
+            assert!(!*returned_actor.on_stop_attempted.lock().await);
         }
         Err(e) => panic!("Expected Ok with Panicked reason, got JoinError: {:?}", e),
     }
 }
 
-    #[tokio::test]
+#[tokio::test]
 async fn test_actor_fail_on_run() {
     let on_start_attempted = Arc::new(Mutex::new(false));
     let on_stop_attempted = Arc::new(Mutex::new(false));
@@ -374,6 +382,7 @@ async fn test_actor_fail_on_run() {
         fail_on_start: false,
         fail_on_run: true,
         fail_on_stop: false,
+        return_false_on_run: false, // Default to false
         on_start_attempted: on_start_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
@@ -405,6 +414,7 @@ async fn test_actor_fail_on_stop() {
         fail_on_start: false,
         fail_on_run: false,
         fail_on_stop: true,
+        return_false_on_run: false, // Default to false
         on_start_attempted: on_start_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
@@ -434,6 +444,36 @@ async fn test_actor_fail_on_stop() {
 }
 
 #[tokio::test]
+async fn test_actor_return_false_on_run() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let actor = LifecycleErrorActor {
+        id: 0,
+        fail_on_start: false,
+        fail_on_run: false,
+        fail_on_stop: false,
+        return_false_on_run: true, // Configure actor to return false from on_run
+        on_start_attempted: on_start_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+    };
+    let (_actor_ref, handle) = spawn(actor);
+
+    match handle.await {
+        Ok((returned_actor, reason)) => {
+            // Expect Normal stop because on_run returning false is a graceful shutdown
+            assert!(matches!(reason, ActorStopReason::Normal), "Expected ActorStopReason::Normal, got {:?}", reason);
+            assert!(*returned_actor.on_start_attempted.lock().await, "on_start should be attempted");
+            assert!(*returned_actor.on_run_attempted.lock().await, "on_run should be attempted");
+            // on_stop is called as part of the normal shutdown process initiated by on_run returning false
+            assert!(*returned_actor.on_stop_attempted.lock().await, "on_stop should be attempted");
+        }
+        Err(e) => panic!("Expected Ok with Normal reason, got JoinError: {:?}", e),
+    }
+}
+
+#[tokio::test]
 async fn test_set_default_mailbox_capacity_to_zero() {
     // This test is independent of whether the capacity has been set before or not.
     let result = set_default_mailbox_capacity(0);
@@ -451,11 +491,11 @@ struct PanicActor {
 impl Actor for PanicActor {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, _actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         let mut called = self.on_stop_called.lock().await;
         *called = true;
         Ok(())
@@ -516,9 +556,7 @@ impl Actor for DummyActor {
     // Default on_start and on_stop are used
 }
 
-// Even if the actor handles no messages, impl_message_handler is needed.
-// We can define a dummy message or leave it empty if the macro supports it.
-// For simplicity, let's assume it needs at least one message or an empty call.
+// Even if the actor handles no messages, impl_message_handler is needed
 impl_message_handler!(DummyActor, []); // Assuming this is valid for no messages
 
 #[tokio::test]

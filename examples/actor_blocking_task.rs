@@ -74,7 +74,7 @@ impl SyncDataProcessorActor {
 impl Actor for SyncDataProcessorActor {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
         info!("SyncDataProcessorActor (id: {}) starting...", actor_ref.id());
 
         // Create a tokio channel for actor -> task communication
@@ -158,7 +158,7 @@ impl Actor for SyncDataProcessorActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         info!("SyncDataProcessorActor stopping: {:?}", stop_reason);
 
         // Signal the background task to stop if we still have a sender

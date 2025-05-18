@@ -75,7 +75,7 @@ impl std::fmt::Debug for Philosopher {
 impl Actor for Philosopher {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
         println!("Philosopher {} ({}) is joining the table.", self.id, self.name);
 
         // Register with the table
@@ -94,7 +94,7 @@ impl Actor for Philosopher {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
         println!(
             "Philosopher {} ({}) is leaving. Eaten: {}. Reason: {:?}.",
             self.id, self.name, self.eat_count, reason
@@ -273,13 +273,13 @@ struct Table {
 impl Actor for Table {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, _actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
         // self.self_ref = Some(actor_ref);
         println!("Table actor is ready with {} forks.", self.forks.len());
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
         println!("Table actor is shutting down. Reason: {:?}", reason);
         Ok(())
     }

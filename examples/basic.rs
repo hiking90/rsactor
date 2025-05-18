@@ -19,7 +19,7 @@ impl Actor for MyActor {
     type Error = anyhow::Error; // Define the error type for actor operations
 
     // Called when the actor is started
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
         self.count = 0; // Initialize count on start
         info!(
             "MyActor (id: {}) started. Initial count: {}.",
@@ -30,7 +30,7 @@ impl Actor for MyActor {
     }
 
     // Called when the actor is stopped
-    async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         info!("MyActor stopping. Final count: {}.", self.count);
         Ok(())
     }

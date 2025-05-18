@@ -11,7 +11,7 @@
     *   `ask`: Send a message and asynchronously await a reply.
     *   `tell`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Actor Lifecycle**: `on_start` and `on_stop` hooks.
+*   **Actor Lifecycle**: `on_start`, `on_stop`, and `on_run` hooks. The `on_run` hook facilitates continuous or periodic work within the actor, reducing the need for manual `tokio::spawn` for such tasks. All lifecycle hooks are optional and have default implementations.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
@@ -52,15 +52,25 @@ struct CounterActor {
 impl Actor for CounterActor {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
-        info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.count);
-        Ok(())
-    }
+    // on_start, on_stop, and on_run are optional and have default implementations.
+    // You can uncomment and implement them if needed.
 
-    async fn on_stop(&mut self, actor_ref: ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
-        info!("CounterActor (id: {}) stopping. Final count: {}. Reason: {:?}", actor_ref.id(), self.count, stop_reason);
-        Ok(())
-    }
+    // async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
+    //     info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.count);
+    //     Ok(())
+    // }
+
+    // async fn on_stop(&mut self, actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    //     info!("CounterActor (id: {}) stopping. Final count: {}. Reason: {:?}", actor_ref.id(), self.count, stop_reason);
+    //     Ok(())
+    // }
+
+    // async fn on_run(&mut self, actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+    //     // Example: Log a message periodically
+    //     // info!("CounterActor (id: {}) on_run called.", actor_ref.id());
+    //     // Return Ok(true) to continue running, Ok(false) to stop.
+    //     Ok(true)
+    // }
 }
 
 // Define message types
@@ -71,7 +81,7 @@ struct GetCountMsg;
 impl Message<IncrementMsg> for CounterActor {
     type Reply = u32; // New count
 
-    async fn handle(&mut self, msg: IncrementMsg) -> Self::Reply {
+    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef) -> Self::Reply {
         self.count += msg.0;
         self.count
     }
@@ -81,7 +91,7 @@ impl Message<IncrementMsg> for CounterActor {
 impl Message<GetCountMsg> for CounterActor {
     type Reply = u32; // Current count
 
-    async fn handle(&mut self, _msg: GetCountMsg) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetCountMsg, _actor_ref: &ActorRef) -> Self::Reply {
         self.count
     }
 }
@@ -149,16 +159,19 @@ struct MyMessage(String);
 struct MyQuery;
 struct MyActor;
 
-impl Actor for MyActor { type Error = anyhow::Error; }
+impl Actor for MyActor {
+    type Error = anyhow::Error;
+    // on_start, on_stop, and on_run are optional
+}
 
 impl Message<MyMessage> for MyActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: MyMessage) -> Self::Reply {}
+    async fn handle(&mut self, _msg: MyMessage, _actor_ref: &ActorRef) -> Self::Reply {}
 }
 
 impl Message<MyQuery> for MyActor {
     type Reply = String;
-    async fn handle(&mut self, _msg: MyQuery) -> Self::Reply {
+    async fn handle(&mut self, _msg: MyQuery, _actor_ref: &ActorRef) -> Self::Reply {
         "response".to_string()
     }
 }
