@@ -20,9 +20,8 @@
 ## Version Differences
 
 ### Key Changes in v0.4.0 (compared to v0.3.0 and below)
-
-* **Reference-Based Actor Reference**: In v0.4.0, `ActorRef` is passed as a reference (`&ActorRef`) in lifecycle methods (`on_start`, `on_stop`), making API usage more ergonomic.
-* **Run Loop Support**: v0.4.0 introduces the `run_loop` method, which provides a dedicated execution context for actor's long-running tasks or continuous operations.
+*   **Optimized `ActorRef` Passing (Reference-Based)**: In v0.4.0, `ActorRef` is passed by reference (`&ActorRef`) to lifecycle methods like `on_start` and `on_stop`. This change focuses on optimization by reducing `ActorRef` cloning in these common method calls, rather than being a substantial performance gain across the board. `ActorRef` remains clonable for explicit duplication if needed.
+*   **`run_loop` Introduction for Optimized Task Management**: v0.4.0 adds the `run_loop` method. This provides a dedicated, framework-managed execution context for an actor's primary logic. This optimizes actor implementation by centralizing its core task management within the framework, removing the need for developers to manually `tokio::spawn` the actor's main processing loop.
 
 ## Getting Started
 
