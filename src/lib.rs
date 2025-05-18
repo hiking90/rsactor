@@ -578,7 +578,75 @@ pub trait Actor: Send + 'static {
     /// The main execution loop for the actor.
     ///
     /// This method is called after `on_start` and is expected to contain the primary logic
-    /// of the actor. It typically runs for the entire lifetime of the actor.
+    /// of the actor. It typically runs for the entire lifetime of the actor. The `run_loop`
+    /// method executes concurrently with message handling, allowing actors to perform background
+    /// work while remaining responsive to incoming messages.
+    ///
+    /// # Key characteristics:
+    ///
+    /// - **Continuous Processing**: Ideal for implementing long-running tasks or periodic work
+    ///   that should execute throughout the actor's lifetime.
+    ///
+    /// - **Integration with Message Handling**: While `run_loop` is running, the actor will
+    ///   continue to process messages from its mailbox normally.
+    ///
+    /// - **State Access**: Has full access to the actor's state (`self`) and can modify it,
+    ///   with changes visible to message handlers and vice versa.
+    ///
+    /// - **Asynchronous Operations**: Should use `.await` points regularly to cooperatively
+    ///   yield control to the Tokio runtime, ensuring message handling remains responsive.
+    ///
+    /// # Common patterns:
+    ///
+    /// 1. **Periodic tasks**: For executing work at regular intervals
+    ///    ```rust,no_run
+    ///    # use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+    ///    # use anyhow::Result;
+    ///    # use std::time::Duration;
+    ///    # struct MyActor {}
+    ///    # impl Actor for MyActor {
+    ///    # type Error = anyhow::Error;
+    ///    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+    ///        let mut interval = tokio::time::interval(Duration::from_secs(5));
+    ///        loop {
+    ///            interval.tick().await;
+    ///            // Perform periodic task here
+    ///        }
+    ///    }
+    ///    # }
+    ///    ```
+    ///
+    /// 2. **Handling blocking work**: For CPU-intensive or I/O blocking operations
+    ///    ```rust,no_run
+    ///    # use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+    ///    # use anyhow::Result;
+    ///    # struct MyActor {}
+    ///    # impl Actor for MyActor {
+    ///    # type Error = anyhow::Error;
+    ///    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+    ///        loop {
+    ///            // Offload blocking operations to Tokio's blocking threadpool
+    ///            let result = tokio::task::spawn_blocking(|| {
+    ///                // CPU-bound or blocking I/O work here
+    ///                "computation result"
+    ///            }).await?;
+    ///
+    ///            // Process the result
+    ///            println!("Got result: {}", result);
+    ///            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    ///        }
+    ///    }
+    ///    # }
+    ///    ```
+    ///
+    /// # Termination:
+    ///
+    /// The `run_loop` method can trigger actor termination in two ways:
+    /// - Return `Ok(())` for normal termination
+    /// - Return `Err(_)` to indicate an error condition
+    ///
+    /// Any active loops must be cleanly broken for the method to return. Actors can maintain a
+    /// `running` flag that can be toggled by message handlers to signal termination.
     ///
     /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
     ///
