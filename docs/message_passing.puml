@@ -1,0 +1,67 @@
+@startuml Message Passing
+title Message Passing (tell and ask)
+
+actor Client
+participant "ActorRef" as ActorRef_obj
+participant "MailboxChannel (mpsc)" as MailboxChannel
+participant "Runtime" as Runtime_obj
+participant "MessageHandler::handle()" as DynMsgHandler
+participant "UserActor::handle(msg)" as UserHandler
+participant "oneshot::channel" as OneshotChannel
+
+box "Actor Task" #LightBlue
+    participant Runtime_obj
+    participant DynMsgHandler
+    participant UserHandler
+end box
+
+== Tell Operation ==
+Client -> ActorRef_obj: actor_ref.tell(MyMessage)
+activate ActorRef_obj
+ActorRef_obj -> ActorRef_obj: Wraps MyMessage in MailboxMessage::Envelope (no reply_channel)
+ActorRef_obj -> MailboxChannel: sender.send(envelope).await
+deactivate ActorRef_obj
+Client <-- ActorRef_obj: Returns Result<()>
+
+MailboxChannel -> Runtime_obj: receiver.recv() gets Envelope
+activate Runtime_obj
+Runtime_obj -> DynMsgHandler: actor.handle(boxed_payload)
+activate DynMsgHandler
+DynMsgHandler -> UserHandler: Calls specific actor.handle(MyMessage)
+activate UserHandler
+UserHandler --> DynMsgHandler: Returns Reply (e.g., ())
+deactivate UserHandler
+DynMsgHandler --> Runtime_obj: Returns Boxed Reply
+deactivate DynMsgHandler
+note right of Runtime_obj: For tell, reply is not sent back to client
+deactivate Runtime_obj
+
+== Ask Operation ==
+Client -> ActorRef_obj: actor_ref.ask(MyQuery).await
+activate ActorRef_obj
+ActorRef_obj -> OneshotChannel: Creates (reply_tx, reply_rx)
+ActorRef_obj -> ActorRef_obj: Wraps MyQuery in MailboxMessage::Envelope (with reply_tx)
+ActorRef_obj -> MailboxChannel: sender.send(envelope).await
+ActorRef_obj -> OneshotChannel: reply_rx.await (waits for reply)
+activate OneshotChannel
+
+MailboxChannel -> Runtime_obj: receiver.recv() gets Envelope
+activate Runtime_obj
+Runtime_obj -> DynMsgHandler: actor.handle(boxed_payload)
+activate DynMsgHandler
+DynMsgHandler -> UserHandler: Calls specific actor.handle(MyQuery)
+activate UserHandler
+UserHandler --> DynMsgHandler: Returns QueryReply
+deactivate UserHandler
+DynMsgHandler --> Runtime_obj: Returns Boxed QueryReply
+deactivate DynMsgHandler
+
+Runtime_obj -> OneshotChannel: reply_tx.send(Ok(Boxed QueryReply))
+deactivate Runtime_obj
+OneshotChannel --> ActorRef_obj: Receives reply
+deactivate OneshotChannel
+ActorRef_obj -> ActorRef_obj: Downcasts reply
+ActorRef_obj --> Client: Returns Result<QueryReply>
+deactivate ActorRef_obj
+
+@enduml

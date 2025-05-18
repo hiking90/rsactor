@@ -1,0 +1,41 @@
+@startuml Actor Cration and Spawning
+title Actor Creation and Spawning
+
+actor User
+participant "UserActor Struct" as UserActor
+participant "spawn()" as spawn_func
+participant "ActorRef" as ActorRef_type
+participant "mpsc::channel (mailbox)" as MailboxChannel
+participant "mpsc::channel (terminate)" as TerminateChannel
+participant "Runtime" as Runtime_type
+participant "tokio::spawn" as tokio_spawn
+participant "Runtime::run_actor_lifecycle()" as run_lifecycle
+participant "Actor::on_start()" as on_start_method
+
+User -> UserActor: Defines struct & impl Actor, Message<M>
+User -> spawn_func: Calls spawn(user_actor_instance)
+activate spawn_func
+
+spawn_func -> MailboxChannel: Creates (mailbox_tx, mailbox_rx)
+spawn_func -> TerminateChannel: Creates (terminate_tx, terminate_rx)
+spawn_func -> ActorRef_type: Creates ActorRef (with id, mailbox_tx, terminate_tx)
+spawn_func -> Runtime_type: Creates Runtime (with actor_instance, actor_ref_clone, mailbox_rx, terminate_rx)
+spawn_func -> tokio_spawn: Spawns Runtime::run_actor_lifecycle()
+activate tokio_spawn
+spawn_func --> User: Returns (ActorRef, JoinHandle)
+deactivate spawn_func
+
+tokio_spawn -> run_lifecycle: Executes
+activate run_lifecycle
+run_lifecycle -> on_start_method: Calls actor.on_start(actor_ref)
+activate on_start_method
+on_start_method --> run_lifecycle: Returns Result
+deactivate on_start_method
+note right of run_lifecycle: Proceeds to message loop if on_start is Ok
+
+run_lifecycle --> tokio_spawn: (Eventually completes)
+deactivate run_lifecycle
+tokio_spawn --> User: (JoinHandle resolves when task finishes)
+deactivate tokio_spawn
+
+@enduml

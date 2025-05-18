@@ -1,0 +1,59 @@
+@startuml Actor Termination
+title Actor Termination (stop and kill)
+
+actor Client
+participant "ActorRef" as ActorRef_obj
+participant "MailboxChannel (mpsc)" as MailboxChannel
+participant "TerminateChannel (mpsc)" as TerminateChannel
+participant "Runtime" as Runtime_obj
+participant "Actor::on_stop()" as on_stop_method
+participant "JoinHandle" as JoinHandle_obj
+
+box "Actor Task" #LightCoral
+    participant Runtime_obj
+    participant on_stop_method
+end box
+
+== Stop Operation (Graceful) ==
+Client -> ActorRef_obj: actor_ref.stop().await
+activate ActorRef_obj
+ActorRef_obj -> MailboxChannel: sender.send(MailboxMessage::StopGracefully).await
+deactivate ActorRef_obj
+note right of Client: Client awaits JoinHandle or stop() completion
+
+MailboxChannel -> Runtime_obj: receiver.recv() gets StopGracefully
+activate Runtime_obj
+Runtime_obj -> Runtime_obj: Sets gracefully_stopping = true, final_reason = Normal
+Runtime_obj -> MailboxChannel: receiver.close() (stops new messages)
+note right of Runtime_obj: Continues processing existing messages in mailbox
+Runtime_obj -> Runtime_obj: Loop breaks when mailbox is empty (recv() returns None)
+
+Runtime_obj -> on_stop_method: Calls actor.on_stop(actor_ref, &ActorStopReason::Normal)
+activate on_stop_method
+on_stop_method --> Runtime_obj: Returns Result
+deactivate on_stop_method
+Runtime_obj --> JoinHandle_obj: Task finishes, JoinHandle resolves with (actor_state, ActorStopReason::Normal)
+deactivate Runtime_obj
+
+
+== Kill Operation (Immediate) ==
+Client -> ActorRef_obj: actor_ref.kill()
+activate ActorRef_obj
+ActorRef_obj -> TerminateChannel: terminate_sender.try_send(ControlSignal::Terminate)
+deactivate ActorRef_obj
+
+TerminateChannel -> Runtime_obj: terminate_receiver.recv() gets Terminate (prioritized via biased select!)
+activate Runtime_obj
+Runtime_obj -> Runtime_obj: Sets final_reason = Killed
+Runtime_obj -> MailboxChannel: receiver.close()
+Runtime_obj -> TerminateChannel: terminate_receiver.close()
+Runtime_obj -> Runtime_obj: Breaks message loop immediately
+
+Runtime_obj -> on_stop_method: Calls actor.on_stop(actor_ref, &ActorStopReason::Killed)
+activate on_stop_method
+on_stop_method --> Runtime_obj: Returns Result
+deactivate on_stop_method
+Runtime_obj --> JoinHandle_obj: Task finishes, JoinHandle resolves with (actor_state, ActorStopReason::Killed)
+deactivate Runtime_obj
+
+@enduml
