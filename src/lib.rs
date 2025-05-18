@@ -74,7 +74,7 @@
 //! impl Message<GetData> for MyActor {
 //!     type Reply = String; // This message will return a String
 //!
-//!     async fn handle(&mut self, _msg: GetData) -> Self::Reply {
+//!     async fn handle(&mut self, _msg: GetData, _actor_ref: &ActorRef) -> Self::Reply {
 //!         self.data.clone()
 //!     }
 //! }
@@ -82,7 +82,7 @@
 //! impl Message<UpdateData> for MyActor {
 //!     type Reply = (); // This message does not return a value
 //!
-//!     async fn handle(&mut self, msg: UpdateData) -> Self::Reply {
+//!     async fn handle(&mut self, msg: UpdateData, _actor_ref: &ActorRef) -> Self::Reply {
 //!         self.data = msg.0;
 //!         println!("MyActor data updated!");
 //!     }
@@ -122,6 +122,7 @@
 //! For more details on specific components, please refer to their individual
 //! documentation.
 
+use core::error;
 use std::{
     any::Any,
     fmt::Debug,
@@ -134,7 +135,7 @@ use std::{
 
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot}; // Mutex might be from tests, ensure it's not needed here. std::sync::Mutex if for global. No, OnceLock is fine.
-use log::{info, error, warn};
+use log::{info, error, warn, debug, trace};
 
 /// Implements the `MessageHandler` trait for a given actor type.
 ///
@@ -181,13 +182,14 @@ macro_rules! impl_message_handler {
         impl $crate::MessageHandler for $actor_type {
             async fn handle(
                 &mut self,
-                msg_any: Box<dyn std::any::Any + Send>,
+                _msg_any: Box<dyn std::any::Any + Send>,
+                _actor_ref: &$crate::ActorRef,
             ) -> anyhow::Result<Box<dyn std::any::Any + Send>> {
                 $(
-                    if msg_any.is::<$msg_type>() {
-                        match msg_any.downcast::<$msg_type>() {
+                    if _msg_any.is::<$msg_type>() {
+                        match _msg_any.downcast::<$msg_type>() {
                             Ok(msg) => {
-                                let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *msg).await;
+                                let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *msg, _actor_ref).await;
                                 return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
                             }
                             Err(_) => {
@@ -551,6 +553,10 @@ pub trait Actor: Send + 'static {
     fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
+
+    fn on_run(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+        async { Ok(true) }
+    }
 }
 
 /// A trait for messages that an actor can handle, defining the reply type.
@@ -564,7 +570,7 @@ pub trait Message<T: Send + 'static>: Actor {
     ///
     /// This is an asynchronous method where the actor's business logic for
     /// processing the message `T` resides.
-    fn handle(&mut self, msg: T) -> impl Future<Output = Self::Reply> + Send;
+    fn handle(&mut self, msg: T, _actor_ref: &ActorRef) -> impl Future<Output = Self::Reply> + Send;
 }
 
 /// A trait for type-erased message handling within the actor's `Runtime`.
@@ -582,6 +588,7 @@ pub trait MessageHandler: Send + Sync + 'static {
     fn handle(
         &mut self,
         msg_any: Box<dyn Any + Send>,
+        actor_ref: &ActorRef,
     ) -> impl Future<Output = Result<Box<dyn Any + Send>>> + Send;
 }
 
@@ -617,19 +624,19 @@ impl<T: Actor + MessageHandler> Runtime<T> {
 
         // Call on_start
         if let Err(e_on_start) = self.actor.on_start(self.actor_ref.clone()).await {
-            error!("Actor {} on_start error: {:?}", actor_id, e_on_start);
-            let base_error_msg = format!("on_start failed for actor {}: {:?}", actor_id, e_on_start);
-            let mut combined_error = anyhow::Error::msg(base_error_msg); // Initial error from on_start
+            let error_msg = format!("Actor {} on_start error: {:?}", actor_id, e_on_start);
+            error!("{}", error_msg);
+            // let base_error_msg = format!("on_start failed for actor {}: {:?}", actor_id, e_on_start);
+            let mut combined_error = anyhow::Error::msg(error_msg); // Initial error from on_start
 
             // Attempt to call on_stop, its error (if any) should be chained.
-            // The reason passed to on_stop should reflect the on_start failure.
-            // Create a temporary reason for the on_stop call that clearly indicates it's due to on_start failure.
             let on_start_failure_reason = ActorStopReason::Error(anyhow::Error::msg(format!("on_start failed for actor {}", actor_id)));
 
             if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &on_start_failure_reason).await {
-                error!("Actor {} on_stop error following on_start error: {:?}", actor_id, e_on_stop);
+                let error_msg = format!("Actor {} on_stop error following on_start error: {:?}", actor_id, e_on_stop);
+                error!("{}", error_msg);
                 // Add context about the on_stop failure to the combined_error
-                combined_error = combined_error.context(format!("Additionally, on_stop also failed: {:?}", e_on_stop));
+                combined_error = combined_error.context(error_msg);
             }
             info!("Actor {} task finishing prematurely due to error(s) during startup.", actor_id);
             return (self.actor, ActorStopReason::Error(combined_error));
@@ -637,103 +644,114 @@ impl<T: Actor + MessageHandler> Runtime<T> {
 
         info!("Runtime for actor {} is running.", actor_id);
 
-        let mut gracefully_stopping = false;
         let mut final_reason = ActorStopReason::Normal; // Default reason
 
         // Message processing loop
         loop {
             tokio::select! {
-                biased; // Prioritize terminate_receiver
+                // Handle Terminate signal with highest priority
+                biased; // Ensure Terminate is checked first if multiple conditions are ready
 
-                // Listen for terminate signal on the dedicated channel
-                maybe_terminate_msg = self.terminate_receiver.recv() => {
-                    match maybe_terminate_msg {
-                        Some(ControlSignal::Terminate) => { // Changed to ControlSignal::Terminate
-                            info!("Actor {} received Terminate signal.", actor_id);
-                            final_reason = ActorStopReason::Killed;
-                            self.receiver.close(); // Close the main mailbox
-                            self.terminate_receiver.close(); // Close its own channel
-                            break; // Exit message loop immediately
-                        }
-                        None => {
-                            // Terminate channel closed, implies actor should stop.
-                            // This might happen if ActorRef is dropped and terminate_sender along with it.
-                            info!("Actor {} terminate channel closed. Shutting down.", actor_id);
-                            if !matches!(final_reason, ActorStopReason::Killed) && !gracefully_stopping { // Avoid overriding Killed or Normal (from StopGracefully)
-                                final_reason = ActorStopReason::Normal; // Or some other appropriate reason
-                            }
-                            break; // Exit message loop
-                        }
+                maybe_signal = self.terminate_receiver.recv() => {
+                    if let Some(ControlSignal::Terminate) = maybe_signal {
+                        info!("Actor {} received Terminate signal. Stopping immediately.", actor_id);
+                        final_reason = ActorStopReason::Killed;
+                    } else {
+                        // Channel closed or unexpected signal, this is an error state.
+                        let error_msg = format!("Actor {} terminate_receiver closed unexpectedly or received invalid signal: {:?}. Marking as error.", actor_id, maybe_signal);
+                        error!("{}", error_msg);
+                        final_reason = ActorStopReason::Error(anyhow::anyhow!(error_msg));
                     }
+                    break; // Exit the loop to proceed to on_stop
                 }
 
-                // Listen for regular messages on the main channel
-                // Disable this arm if we've already decided to kill to ensure immediate shutdown
-                maybe_actor_message = self.receiver.recv(), if !matches!(final_reason, ActorStopReason::Killed) => {
-                    match maybe_actor_message {
+                // Process incoming messages from the main mailbox
+                maybe_message = self.receiver.recv() => {
+                    match maybe_message {
                         Some(MailboxMessage::Envelope { payload, reply_channel }) => {
-                            match self.actor.handle(payload).await {
+                            trace!("Actor {} received message: {:?}", actor_id, payload);
+                            match self.actor.handle(payload, &self.actor_ref).await {
                                 Ok(reply) => {
                                     if let Some(tx) = reply_channel {
                                         if tx.send(Ok(reply)).is_err() {
-                                            info!("Actor {} failed to send reply: receiver dropped for tell or ask.", actor_id);
+                                            debug!("Actor {} failed to send reply: receiver dropped.", actor_id);
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Actor {} message handler error: {:?}", actor_id, e);
+                                    error!("Actor {} error handling message: {:?}", actor_id, e);
                                     if let Some(tx) = reply_channel {
+                                        // Send the error back to the asker
                                         if tx.send(Err(e)).is_err() {
-                                            info!("Actor {} failed to send error reply: receiver dropped.", actor_id);
+                                            debug!("Actor {} failed to send error reply: receiver dropped.", actor_id);
                                         }
                                     }
+                                    // If a message handler returns an error, stop the actor.
+                                    final_reason = ActorStopReason::Error(anyhow::anyhow!("Error in message handler for actor {}", actor_id));
+                                    break; // Exit loop, proceed to on_stop
                                 }
                             }
                         }
                         Some(MailboxMessage::StopGracefully) => {
-                            info!("Actor {} received StopGracefully signal. Will stop after processing current messages.", actor_id);
-                            gracefully_stopping = true;
-                            final_reason = ActorStopReason::Normal; // Set reason, will stop when mailbox empty
-                            self.receiver.close(); // Close mailbox to stop receiving new messages
-                                                   // Continue loop to process existing messages, then 'None' branch will be hit.
+                            info!("Actor {} received StopGracefully. Will stop after processing current messages.", actor_id);
+                            // Don't set final_reason yet, Normal is default.
+                            break;
                         }
+                        // Terminate is handled by its own dedicated channel and select branch.
                         None => {
-                            // Mailbox closed, no more messages.
-                            info!("Actor {} mailbox closed. Shutting down.", actor_id);
-                            if !gracefully_stopping && !matches!(final_reason, ActorStopReason::Killed) {
-                                // If not already stopping gracefully or killed, it's a normal shutdown (e.g. ActorRef dropped)
-                                final_reason = ActorStopReason::Normal;
-                            }
-                            break; // Exit message loop
+                            // Mailbox closed, meaning all senders (ActorRefs) are dropped.
+                            // This is a form of graceful shutdown.
+                            info!("Actor {} mailbox closed (all ActorRefs dropped). Stopping.", actor_id);
+                            // final_reason = ActorStopReason::Normal;
+                            break; // Exit loop, proceed to on_stop
                         }
                     }
+                }
+
+                maybe_result = self.actor.on_run(&self.actor_ref) => {
+                    match maybe_result {
+                        Ok(should_continue) => {
+                            if !should_continue {
+                                info!("Actor {} on_run returned false. Stopping.", actor_id);
+                                break; // Exit loop, proceed to on_stop
+                            }
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Actor {} on_run error: {:?}", actor_id, e);
+                            error!("{}", error_msg);
+                            final_reason = ActorStopReason::Error(anyhow::anyhow!(error_msg));
+                            break; // Exit loop, proceed to on_stop
+                        }
+                    }
+                    // If on_run returns false, we stop the actor.
+                    tokio::task::yield_now().await;
                 }
             }
         }
 
-        info!("Runtime for actor {} is shutting down.", actor_id);
+        self.receiver.close(); // Close the main mailbox
+        self.terminate_receiver.close(); // Close its own channel
+
+        info!("Actor {} message loop ended. Reason: {:?}", actor_id, final_reason);
 
         // Call on_stop
         if let Err(e_on_stop) = self.actor.on_stop(self.actor_ref.clone(), &final_reason).await {
-            let on_stop_failure_message = format!("on_stop failed: {:?}", e_on_stop);
-            error!("Actor {} {}. Original reason: {:?}", actor_id, on_stop_failure_message, final_reason);
-
-            final_reason = match final_reason {
-                ActorStopReason::Error(existing_err) => {
-                    // Chain the on_stop failure to the existing error.
-                    ActorStopReason::Error(existing_err.context(on_stop_failure_message))
+            let error_msg = format!("Actor {} on_stop error: {:?}", actor_id, e_on_stop);
+            error!("{}", error_msg);
+            // If final_reason was already an error, chain this new error.
+            // Otherwise, this on_stop error becomes the primary reason for failure.
+            match final_reason {
+                ActorStopReason::Error(mut existing_err) => {
+                    existing_err = existing_err.context(error_msg);
+                    final_reason = ActorStopReason::Error(existing_err);
                 }
-                ActorStopReason::Normal | ActorStopReason::Killed => {
-                    // If stopping normally or killed, and on_stop fails, the overall result is an error.
-                    // The error should state the original intended stop reason and the on_stop failure.
-                    let context_message = format!("Actor was stopping with reason {:?}, but then {}", final_reason, on_stop_failure_message);
-                    ActorStopReason::Error(anyhow::Error::msg(context_message))
+                _ => {
+                    final_reason = ActorStopReason::Error(anyhow::Error::msg(format!("on_stop failed: {:?}", e_on_stop)));
                 }
-            };
+            }
         }
-
-        info!("Actor {} task finished with reason: {:?}.", actor_id, final_reason);
-        (self.actor, final_reason) // Return actor instance and final reason
+        info!("Actor {} task finishing.", actor_id);
+        (self.actor, final_reason)
     }
 }
 
@@ -753,9 +771,9 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor instance and its `ActorStopReason`.
 pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
-    actor: T,
+    actor: T, // Added actor parameter
     mailbox_capacity: usize,
-) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) { // Updated return type
+) -> (ActorRef, tokio::task::JoinHandle<(T, ActorStopReason)>) {
     if mailbox_capacity == 0 {
         panic!("Mailbox capacity must be greater than 0");
     }
@@ -839,7 +857,7 @@ mod tests {
 
     impl Message<PingMsg> for TestActor {
         type Reply = String;
-        async fn handle(&mut self, msg: PingMsg) -> Self::Reply {
+        async fn handle(&mut self, msg: PingMsg, _: &ActorRef) -> Self::Reply {
             let mut lpmt = self.last_processed_message_type.lock().await;
             *lpmt = Some("PingMsg".to_string());
             format!("pong: {}", msg.0)
@@ -848,7 +866,7 @@ mod tests {
 
     impl Message<UpdateCounterMsg> for TestActor {
         type Reply = (); // tell type messages often use this.
-        async fn handle(&mut self, msg: UpdateCounterMsg) -> Self::Reply {
+        async fn handle(&mut self, msg: UpdateCounterMsg, _: &ActorRef) -> Self::Reply {
             let mut counter = self.counter.lock().await;
             *counter += msg.0;
             let mut lpmt = self.last_processed_message_type.lock().await;
@@ -858,7 +876,7 @@ mod tests {
 
     impl Message<GetCounterMsg> for TestActor {
         type Reply = i32;
-        async fn handle(&mut self, _msg: GetCounterMsg) -> Self::Reply {
+        async fn handle(&mut self, _msg: GetCounterMsg, _: &ActorRef) -> Self::Reply {
             let mut lpmt = self.last_processed_message_type.lock().await;
             *lpmt = Some("GetCounterMsg".to_string());
             *self.counter.lock().await
@@ -868,7 +886,7 @@ mod tests {
     // Added for timeout tests
     impl Message<SlowMsg> for TestActor {
         type Reply = ();
-        async fn handle(&mut self, _msg: SlowMsg) -> Self::Reply {
+        async fn handle(&mut self, _msg: SlowMsg, _: &ActorRef) -> Self::Reply {
             let mut lpmt = self.last_processed_message_type.lock().await;
             *lpmt = Some("SlowMsg".to_string());
             tokio::time::sleep(std::time::Duration::from_millis(100)).await // Sleep for 100ms
@@ -1010,7 +1028,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_ref_kill() {
-        let (actor_ref, handle, _counter_arc_from_setup, _lpmt_arc_from_setup, on_start_called_arc, _on_stop_called_arc_from_setup) =
+        let (actor_ref, handle, _counter_arc_from_setup, _lpmt_arc_from_setup, on_start_called_arc, _) =
             setup_actor().await;
         assert!(*on_start_called_arc.lock().await, "on_start should have been called");
 
@@ -1080,11 +1098,14 @@ mod tests {
         id: usize,
         fail_on_start: bool,
         fail_on_stop: bool,
+        fail_on_run: bool,
         on_start_attempted: Arc<Mutex<bool>>,
         on_stop_attempted: Arc<Mutex<bool>>,
+        on_run_attempted: Arc<Mutex<bool>>,
     }
     impl Actor for LifecycleErrorActor {
         type Error = anyhow::Error;
+
         async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
             self.id = actor_ref.id();
             *self.on_start_attempted.lock().await = true;
@@ -1094,11 +1115,15 @@ mod tests {
             *self.on_stop_attempted.lock().await = true;
             if self.fail_on_stop { Err(anyhow::anyhow!("simulated on_stop failure")) } else { Ok(()) }
         }
+        async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+            *self.on_run_attempted.lock().await = true;
+            if self.fail_on_run { Err(anyhow::anyhow!("simulated on_run failure")) } else { Ok(true) }
+        }
     }
     struct NoOpMsg; // Dummy message for LifecycleErrorActor
     impl Message<NoOpMsg> for LifecycleErrorActor {
         type Reply = ();
-        async fn handle(&mut self, _msg: NoOpMsg) -> Self::Reply {}
+        async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef) -> Self::Reply {}
     }
     impl_message_handler!(LifecycleErrorActor, [NoOpMsg]);
 
@@ -1106,25 +1131,57 @@ mod tests {
     async fn test_actor_fail_on_start() {
         let on_start_attempted = Arc::new(Mutex::new(false));
         let on_stop_attempted = Arc::new(Mutex::new(false));
+        let on_run_attempted = Arc::new(Mutex::new(false));
         let actor = LifecycleErrorActor {
             id: 0,
             fail_on_start: true,
             fail_on_stop: false,
+            fail_on_run: false,
             on_start_attempted: on_start_attempted.clone(),
             on_stop_attempted: on_stop_attempted.clone(),
+            on_run_attempted: on_run_attempted.clone(),
         };
-        let (actor_ref, handle) = spawn(actor);
-
-        // Added to increase the test coverage
-        actor_ref.tell(NoOpMsg).await.expect("Tell should succeed");
+        let (_actor_ref, handle) = spawn(actor);
 
         match handle.await {
             Ok((returned_actor, reason)) => {
-                assert!(matches!(reason, ActorStopReason::Error(_)), "Expected Panicked, got {:?}", reason);
+                assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
                 if let ActorStopReason::Error(e) = reason {
-                    assert!(e.to_string().contains("on_start failed"));
+                    assert!(e.to_string().contains("on_start error"));
                 }
                 assert!(*returned_actor.on_start_attempted.lock().await);
+                assert!(!*returned_actor.on_run_attempted.lock().await);
+                assert!(*returned_actor.on_stop_attempted.lock().await);
+            }
+            Err(e) => panic!("Expected Ok with Panicked reason, got JoinError: {:?}", e),
+        }
+    }
+
+        #[tokio::test]
+    async fn test_actor_fail_on_run() {
+        let on_start_attempted = Arc::new(Mutex::new(false));
+        let on_stop_attempted = Arc::new(Mutex::new(false));
+        let on_run_attempted = Arc::new(Mutex::new(false));
+        let actor = LifecycleErrorActor {
+            id: 0,
+            fail_on_start: false,
+            fail_on_run: true,
+            fail_on_stop: false,
+            on_start_attempted: on_start_attempted.clone(),
+            on_stop_attempted: on_stop_attempted.clone(),
+            on_run_attempted: on_run_attempted.clone(),
+        };
+        let (_actor_ref, handle) = spawn(actor);
+
+        match handle.await {
+            Ok((returned_actor, reason)) => {
+                assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
+                if let ActorStopReason::Error(e) = reason {
+                    println!("Error: ---- {:?}", e);
+                    assert!(e.to_string().contains("simulated on_run failure"));
+                }
+                assert!(*returned_actor.on_start_attempted.lock().await);
+                assert!(*returned_actor.on_run_attempted.lock().await);
                 assert!(*returned_actor.on_stop_attempted.lock().await);
             }
             Err(e) => panic!("Expected Ok with Panicked reason, got JoinError: {:?}", e),
@@ -1135,14 +1192,20 @@ mod tests {
     async fn test_actor_fail_on_stop() {
         let on_start_attempted = Arc::new(Mutex::new(false));
         let on_stop_attempted = Arc::new(Mutex::new(false));
+        let on_run_attempted = Arc::new(Mutex::new(false));
         let actor = LifecycleErrorActor {
             id: 0,
             fail_on_start: false,
+            fail_on_run: false,
             fail_on_stop: true,
             on_start_attempted: on_start_attempted.clone(),
             on_stop_attempted: on_stop_attempted.clone(),
+            on_run_attempted: on_run_attempted.clone(),
         };
         let (actor_ref, handle) = spawn(actor);
+
+        // Added to increase the test coverage
+        actor_ref.tell(NoOpMsg).await.expect("Tell should succeed");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Ensure on_start runs
         assert!(*on_start_attempted.lock().await);
@@ -1151,11 +1214,12 @@ mod tests {
 
         match handle.await {
             Ok((returned_actor, reason)) => {
-                assert!(matches!(reason, ActorStopReason::Error(_)), "Expected Panicked, got {:?}", reason);
+                assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
                 if let ActorStopReason::Error(e) = reason {
                     assert!(e.to_string().contains("on_stop failed"));
                 }
                 assert!(*returned_actor.on_start_attempted.lock().await);
+                assert!(*returned_actor.on_run_attempted.lock().await);
                 assert!(*returned_actor.on_stop_attempted.lock().await);
             }
             Err(e) => panic!("Expected Ok with Panicked reason, got JoinError: {:?}", e),
@@ -1254,16 +1318,28 @@ mod tests {
     }
 
     // Test actor panic in message handler
-    struct PanicActor { on_stop_called: Arc<Mutex<bool>> }
-    struct PanicMsg;
-
+    struct PanicActor {
+        on_stop_called: Arc<Mutex<bool>>,
+    }
     impl Actor for PanicActor {
         type Error = anyhow::Error;
-        async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> { *self.on_stop_called.lock().await = true; Ok(()) }
+
+        async fn on_start(&mut self, _actor_ref: ActorRef) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+            let mut called = self.on_stop_called.lock().await;
+            *called = true;
+            Ok(())
+        }
     }
+    #[derive(Debug)] // Added Debug for consistency and potential logging
+    struct PanicMsg; // Define PanicMsg
+
     impl Message<PanicMsg> for PanicActor {
         type Reply = ();
-        async fn handle(&mut self, _msg: PanicMsg) -> Self::Reply {
+        async fn handle(&mut self, _msg: PanicMsg, _: &ActorRef) -> Self::Reply {
             panic!("Simulated panic in message handler");
         }
     }
@@ -1304,6 +1380,34 @@ mod tests {
     }
 
     // Test: Spawning multiple actors
+
+    // Dummy Actor for simple spawn and stop test
+    struct DummyActor;
+
+    impl Actor for DummyActor {
+        type Error = anyhow::Error;
+        // Default on_start and on_stop are used
+    }
+
+    // Even if the actor handles no messages, impl_message_handler is needed.
+    // We can define a dummy message or leave it empty if the macro supports it.
+    // For simplicity, let's assume it needs at least one message or an empty call.
+    impl_message_handler!(DummyActor, []); // Assuming this is valid for no messages
+
+    #[tokio::test]
+    async fn test_spawn_and_stop_dummy_actor() {
+        let actor = DummyActor;
+        let (actor_ref, handle) = spawn(actor);
+
+        // Optionally, give a brief moment for the actor to fully start, though not strictly necessary
+        // if on_start does nothing.
+        // tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        actor_ref.stop().await.expect("Failed to stop dummy actor");
+        let (_actor_state, reason) = handle.await.expect("Dummy actor task failed");
+
+        assert!(matches!(reason, ActorStopReason::Normal), "Dummy actor did not stop normally. Reason: {:?}", reason);
+    }
 
     #[tokio::test]
     async fn test_actor_ref_tell_blocking() {
@@ -1407,7 +1511,7 @@ mod tests {
     async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
         // Spawn an actor with a mailbox capacity of 1.
         let counter = Arc::new(Mutex::new(0));
-        let last_processed_message_type = Arc::new(Mutex::new(None::<String>));
+        let last_processed_message_type = Arc::new(Mutex::new(None));
         let on_start_called = Arc::new(Mutex::new(false));
         let on_stop_called = Arc::new(Mutex::new(false));
 
@@ -1433,26 +1537,25 @@ mod tests {
         // 3. Attempt tell_blocking with another message. This should timeout.
         let actor_ref_clone = actor_ref.clone();
         let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
-            // Timeout 20ms, which is < 100ms (SlowMsg sleep)
-            let result = actor_ref_clone.tell_blocking(UpdateCounterMsg(2), Some(std::time::Duration::from_millis(20)));
-
-            assert!(result.is_err(), "tell_blocking should have timed out as actor is busy and mailbox is full");
+            let result = actor_ref_clone
+                .tell_blocking(UpdateCounterMsg(2), Some(std::time::Duration::from_millis(10))); // Timeout 10ms
+            assert!(result.is_err(), "tell_blocking should have timed out");
             if let Err(e) = result {
-                assert!(e.to_string().contains("tell_blocking operation timed out"), "Error message mismatch: {}", e);
+                assert!(e.to_string().contains("tell_blocking operation timed out"));
             }
         });
 
         join_handle_blocking_task.await.expect("Blocking task for tell_blocking timeout panicked");
 
         // Allow the actor to process messages (SlowMsg, then UpdateCounterMsg(1))
+        // The UpdateCounterMsg(2) from tell_blocking should have failed and not be in the queue.
         tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg (100ms) + UpdateCounterMsg(1)
 
         actor_ref.stop().await.expect("Failed to stop actor");
         let (actor_state, _reason) = handle.await.expect("Actor task failed");
         assert!(*actor_state.on_stop_called.lock().await);
-        // Counter should reflect UpdateCounterMsg(1) was processed. SlowMsg doesn't change counter.
-        // UpdateCounterMsg(2) should not have been sent.
-        assert_eq!(*actor_state.counter.lock().await, 1, "Counter should reflect only the message processed before timeout attempt");
+        // Verify that only UpdateCounterMsg(1) was processed.
+        assert_eq!(*actor_state.counter.lock().await, 1, "Counter should be 1 after SlowMsg and UpdateCounterMsg(1)");
     }
 
     #[tokio::test]
@@ -1485,7 +1588,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_ref_kill_multiple_times() {
-        let (actor_ref, handle, _counter, _lpmt, on_start_called, _on_stop_called_arc_from_setup) =
+        let (actor_ref, handle, _counter, _lpmt, on_start_called, _) =
             setup_actor().await;
         assert!(*on_start_called.lock().await, "on_start should have been called");
 

@@ -11,7 +11,6 @@
 use rsactor::{Actor, ActorRef, ActorStopReason, Message};
 use anyhow::Result;
 use log::{info, debug};
-use tokio::sync::mpsc;
 use std::time::Duration;
 
 // Define message types for our actor
@@ -28,18 +27,16 @@ struct ProcessedData {
     timestamp: std::time::Instant,
 }
 
-/// Commands that the actor can send to the background task
+/// Commands that the actor can send to update its event processing
 enum TaskCommand {
     /// Change the interval between data generations
     ChangeInterval(Duration),
-    /// Request to stop the task (we'll use this for a clean shutdown)
-    Stop,
 }
 
 /// Message to send a command to the background task
 struct SendTaskCommand(TaskCommand);
 
-/// Define our actor that will spawn a background task
+/// Define our actor that will use await_next_event/on_event pattern
 struct DataProcessorActor {
     /// Current processing factor (multiplier for incoming values)
     factor: f64,
@@ -47,10 +44,10 @@ struct DataProcessorActor {
     latest_value: Option<f64>,
     /// Latest timestamp when data was received
     latest_timestamp: Option<std::time::Instant>,
-    /// Sender to communicate with the background task
-    task_sender: Option<mpsc::Sender<TaskCommand>>,
-    /// Task handle to monitor/join the background task
-    task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Interval for generating data
+    interval: tokio::time::Interval,
+    /// Whether the actor is running
+    running: bool,
 }
 
 impl DataProcessorActor {
@@ -59,8 +56,8 @@ impl DataProcessorActor {
             factor: 1.0,
             latest_value: None,
             latest_timestamp: None,
-            task_sender: None,
-            task_handle: None,
+            interval: tokio::time::interval(Duration::from_millis(500)),
+            running: true,
         }
     }
 }
@@ -71,100 +68,45 @@ impl Actor for DataProcessorActor {
     async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
         info!("DataProcessorActor (id: {}) starting...", actor_ref.id());
 
-        // Create a channel for actor -> task communication
-        let (task_tx, mut task_rx) = mpsc::channel::<TaskCommand>(32);
+        // Reset the interval to ensure it starts ticking from now
+        self.interval = tokio::time::interval(Duration::from_millis(500));
+        self.running = true;
 
-        // Store the sender in our actor state
-        self.task_sender = Some(task_tx);
-
-        // Clone the actor_ref for the task to send messages back
-        let task_actor_ref = actor_ref.clone();
-
-        // Spawn a background task
-        let handle = tokio::spawn(async move {
-            info!("Background task started");
-
-            // Initial data generation interval
-            let mut interval = tokio::time::interval(Duration::from_millis(500));
-
-            // Task loop
-            let mut running = true;
-            while running {
-                tokio::select! {
-                    // Time to generate a new data point
-                    _ = interval.tick() => {
-                        // Generate a random value (simulating sensor data or similar)
-                        let raw_value = rand::random::<f64>() * 100.0;
-
-                        // Send the data to our actor
-                        debug!("Task sending value {:.2} to actor", raw_value);
-                        if let Err(e) = task_actor_ref.tell(ProcessedData {
-                            value: raw_value,
-                            timestamp: std::time::Instant::now(),
-                        }).await {
-                            info!("Failed to send data to actor: {}", e);
-                            running = false;
-                        }
-                    }
-
-                    // Check for commands from the actor
-                    Some(cmd) = task_rx.recv() => {
-                        match cmd {
-                            TaskCommand::ChangeInterval(new_interval) => {
-                                info!("Task changing interval to {:?}", new_interval);
-                                // Recreate the interval with the new duration
-                                interval = tokio::time::interval(new_interval);
-                            }
-                            TaskCommand::Stop => {
-                                info!("Task received stop command");
-                                running = false;
-                            }
-                        }
-                    }
-                }
-            }
-
-            info!("Background task stopping");
-        });
-
-        // Store the task handle
-        self.task_handle = Some(handle);
-
-        info!("DataProcessorActor started and background task spawned");
+        info!("DataProcessorActor started with event-based processing");
         Ok(())
     }
 
     async fn on_stop(&mut self, _actor_ref: ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         info!("DataProcessorActor stopping: {:?}", stop_reason);
 
-        // Signal the background task to stop if we still have a sender
-        if let Some(sender) = self.task_sender.take() {
-            info!("Sending stop command to background task");
-            // Use try_send as we're in shutdown and don't want to await
-            let _ = sender.try_send(TaskCommand::Stop);
-        }
-
-        // Wait for the task to complete if we have a handle
-        // This ensures clean shutdown of the background task
-        if let Some(handle) = self.task_handle.take() {
-            info!("Waiting for background task to complete");
-            // Use a timeout to avoid blocking forever if the task is stuck
-            match tokio::time::timeout(Duration::from_secs(2), handle).await {
-                Ok(result) => {
-                    if let Err(e) = result {
-                        info!("Background task ended with error: {}", e);
-                    } else {
-                        info!("Background task completed successfully");
-                    }
-                }
-                Err(_) => {
-                    info!("Timeout waiting for background task to complete");
-                }
-            }
-        }
+        // Stop generating events
+        self.running = false;
 
         info!("DataProcessorActor stopped with latest value: {:?}", self.latest_value);
         Ok(())
+    }
+
+    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+        loop {
+            self.interval.tick().await;
+
+            // Generate a random value (simulating sensor data or similar)
+            let raw_value = rand::random::<f64>() * 100.0;
+
+            // Process the data directly (no need to send to self via message)
+            let processed_value = raw_value * self.factor;
+
+            // Update our state
+            self.latest_value = Some(processed_value);
+            self.latest_timestamp = Some(std::time::Instant::now());
+
+            debug!(
+                "Generated data: original={:.2}, processed={:.2}",
+                raw_value,
+                processed_value
+            );
+
+        }
     }
 }
 
@@ -173,7 +115,7 @@ impl Actor for DataProcessorActor {
 impl Message<GetState> for DataProcessorActor {
     type Reply = (f64, Option<f64>, Option<std::time::Instant>);
 
-    async fn handle(&mut self, _msg: GetState) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetState, _: &ActorRef) -> Self::Reply {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
 }
@@ -181,7 +123,7 @@ impl Message<GetState> for DataProcessorActor {
 impl Message<SetFactor> for DataProcessorActor {
     type Reply = f64; // Return the new factor
 
-    async fn handle(&mut self, msg: SetFactor) -> Self::Reply {
+    async fn handle(&mut self, msg: SetFactor, _: &ActorRef) -> Self::Reply {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!("Changed factor from {:.2} to {:.2}", old_factor, self.factor);
@@ -192,7 +134,7 @@ impl Message<SetFactor> for DataProcessorActor {
 impl Message<ProcessedData> for DataProcessorActor {
     type Reply = (); // No reply needed for data coming from the task
 
-    async fn handle(&mut self, msg: ProcessedData) -> Self::Reply {
+    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef) -> Self::Reply {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -209,25 +151,17 @@ impl Message<ProcessedData> for DataProcessorActor {
     }
 }
 
-// Handler for sending commands to the background task
+// Handler for sending commands to the actor's event system
 impl Message<SendTaskCommand> for DataProcessorActor {
     type Reply = bool;
 
-    async fn handle(&mut self, msg: SendTaskCommand) -> Self::Reply {
-        if let Some(sender) = &self.task_sender {
-            match sender.send(msg.0).await {
-                Ok(_) => {
-                    info!("Sent command to task");
-                    true
-                }
-                Err(_) => {
-                    info!("Failed to send command to task");
-                    false
-                }
+    async fn handle(&mut self, msg: SendTaskCommand, _actor_ref: &ActorRef) -> Self::Reply {
+        match msg.0 {
+            TaskCommand::ChangeInterval(new_interval) => {
+                self.interval = tokio::time::interval(new_interval);
+                info!("Successfully changed interval");
+                true
             }
-        } else {
-            info!("No task sender available");
-            false
         }
     }
 }
