@@ -216,7 +216,7 @@ macro_rules! impl_message_handler {
                         }
                     }
                 )*
-                Err(anyhow::anyhow!(concat!(stringify!($actor_type), ": ErasedMessageHandler received unknown message type.")))
+                Err(anyhow::anyhow!(concat!(stringify!($actor_type), ": MessageHandler received unknown message type.")))
             }
         }
     };
