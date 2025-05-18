@@ -29,7 +29,7 @@
 
 ```toml
 [dependencies]
-rsactor = "0.3" # Check crates.io for the latest version
+rsactor = "0.4" # Check crates.io for the latest version
 ```
 
 ### 2. Basic Usage Example
