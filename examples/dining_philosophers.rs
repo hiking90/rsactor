@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{Actor, ActorRef, Message, ActorStopReason, spawn, impl_message_handler};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorStopReason, Message};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -57,7 +57,6 @@ struct Philosopher {
     id: usize, // Logical ID (0 to N-1)
     name: String,
     table_ref: ActorRef,
-    self_ref: Option<ActorRef>, // Stores its own ActorRef, set in on_start
     eat_count: u32,
     has_left_fork: bool,
     has_right_fork: bool,
@@ -76,8 +75,7 @@ impl std::fmt::Debug for Philosopher {
 impl Actor for Philosopher {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
-        self.self_ref = Some(actor_ref.clone());
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
         println!("Philosopher {} ({}) is joining the table.", self.id, self.name);
 
         // Register with the table
@@ -96,7 +94,7 @@ impl Actor for Philosopher {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
         println!(
             "Philosopher {} ({}) is leaving. Eaten: {}. Reason: {:?}.",
             self.id, self.name, self.eat_count, reason
@@ -110,7 +108,7 @@ impl Actor for Philosopher {
 impl Message<StartThinking> for Philosopher {
     type Reply = (); // Fire-and-forget
 
-    async fn handle(&mut self, _msg: StartThinking) -> Self::Reply {
+    async fn handle(&mut self, _msg: StartThinking, actor_ref: &ActorRef) -> Self::Reply {
         println!("Philosopher {} ({}) is thinking.", self.id, self.name);
 
         // Simulate thinking for a random duration.
@@ -159,14 +157,12 @@ impl Message<StartThinking> for Philosopher {
                         self.has_right_fork = true;
                         println!("Philosopher {} ({}) acquired both Left and Right forks.", self.id, self.name);
                         // Both forks acquired, tell self to start eating.
-                        if let Some(self_ref) = &self.self_ref {
-                            if let Err(e) = self_ref.tell(StartEating).await {
-                                eprintln!("Philosopher {} ({}): Failed to send StartEating to self: {:?}", self.id, self.name, e);
-                                // If sending StartEating fails, it's crucial to release the forks
-                                // to prevent deadlock and then try thinking again.
-                                self.release_both_forks().await;
-                                self.think_again().await;
-                            }
+                        if let Err(e) = actor_ref.tell(StartEating).await {
+                            eprintln!("Philosopher {} ({}): Failed to send StartEating to self: {:?}", self.id, self.name, e);
+                            // If sending StartEating fails, it's crucial to release the forks
+                            // to prevent deadlock and then try thinking again.
+                            self.release_both_forks().await;
+                            self.think_again(actor_ref).await;
                         }
                     }
                     Ok(false) => { // Failed to acquire the right fork.
@@ -178,7 +174,7 @@ impl Message<StartThinking> for Philosopher {
                         }
                         self.has_left_fork = false;
                         // Go back to thinking.
-                        self.think_again().await;
+                        self.think_again(actor_ref).await;
                     }
                     Err(e) => { // An error occurred while trying to acquire the right fork.
                         eprintln!("Philosopher {} ({}) error getting Right fork: {:?}. Releasing Left fork.", self.id, self.name, e);
@@ -189,19 +185,19 @@ impl Message<StartThinking> for Philosopher {
                         }
                         self.has_left_fork = false;
                         // Go back to thinking.
-                        self.think_again().await;
+                        self.think_again(actor_ref).await;
                     }
                 }
             }
             Ok(false) => { // Failed to acquire the left fork.
                 println!("Philosopher {} ({}) failed to get Left fork. Thinking again.", self.id, self.name);
                 // No forks acquired, so just go back to thinking.
-                self.think_again().await;
+                self.think_again(actor_ref).await;
             }
             Err(e) => { // An error occurred while trying to acquire the left fork.
                 eprintln!("Philosopher {} ({}) error getting Left fork: {:?}. Thinking again.", self.id, self.name, e);
                 // Go back to thinking.
-                self.think_again().await;
+                self.think_again(actor_ref).await;
             }
         }
     }
@@ -225,11 +221,9 @@ impl Philosopher {
         }
     }
 
-    async fn think_again(&self) {
-        if let Some(self_ref) = &self.self_ref {
-            if let Err(e) = self_ref.tell(StartThinking).await {
-                eprintln!("Philosopher {} ({}): Failed to send StartThinking to self: {:?}", self.id, self.name, e);
-            }
+    async fn think_again(&self, actor_ref: &ActorRef) {
+        if let Err(e) = actor_ref.tell(StartThinking).await {
+            eprintln!("Philosopher {} ({}): Failed to send StartThinking to self: {:?}", self.id, self.name, e);
         }
     }
 }
@@ -238,13 +232,13 @@ impl Philosopher {
 impl Message<StartEating> for Philosopher {
     type Reply = (); // Fire-and-forget
 
-    async fn handle(&mut self, _msg: StartEating) -> Self::Reply {
+    async fn handle(&mut self, _msg: StartEating, actor_ref: &ActorRef) -> Self::Reply {
         if !self.has_left_fork || !self.has_right_fork {
             eprintln!("Philosopher {} ({}) tried to eat without both forks! Left: {}, Right: {}. Thinking again.",
                 self.id, self.name, self.has_left_fork, self.has_right_fork);
             // Release any potentially held forks just in case, though this state should not be reached.
             self.release_both_forks().await;
-            self.think_again().await;
+            self.think_again(actor_ref).await;
             return;
         }
 
@@ -260,7 +254,7 @@ impl Message<StartEating> for Philosopher {
         self.release_both_forks().await;
 
         // Go back to thinking
-        self.think_again().await;
+        self.think_again(actor_ref).await;
     }
 }
 
@@ -279,13 +273,13 @@ struct Table {
 impl Actor for Table {
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, _actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
         // self.self_ref = Some(actor_ref);
         println!("Table actor is ready with {} forks.", self.forks.len());
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
         println!("Table actor is shutting down. Reason: {:?}", reason);
         Ok(())
     }
@@ -296,7 +290,7 @@ impl Actor for Table {
 impl Message<RegisterPhilosopher> for Table {
     type Reply = (); // Fire-and-forget
 
-    async fn handle(&mut self, msg: RegisterPhilosopher) -> Self::Reply {
+    async fn handle(&mut self, msg: RegisterPhilosopher, _: &ActorRef) -> Self::Reply {
         println!("Table: Philosopher {} (Actor ID: {}) registered.", msg.logical_id, msg.philosopher_ref.id());
         self.philosophers.insert(msg.logical_id, msg.philosopher_ref);
     }
@@ -305,7 +299,7 @@ impl Message<RegisterPhilosopher> for Table {
 impl Message<RequestFork> for Table {
     type Reply = bool; // true if acquired, false if not.
 
-    async fn handle(&mut self, msg: RequestFork) -> Self::Reply {
+    async fn handle(&mut self, msg: RequestFork, _: &ActorRef) -> Self::Reply {
         let philosopher_id = msg.logical_id;
         let num_forks = self.forks.len();
 
@@ -333,7 +327,7 @@ impl Message<RequestFork> for Table {
 impl Message<ReleaseFork> for Table {
     type Reply = (); // Fire-and-forget
 
-    async fn handle(&mut self, msg: ReleaseFork) -> Self::Reply {
+    async fn handle(&mut self, msg: ReleaseFork, _: &ActorRef) -> Self::Reply {
         let philosopher_id = msg.logical_id;
         let num_forks = self.forks.len();
 
@@ -385,7 +379,6 @@ async fn main() -> Result<()> {
             id: i,
             name: format!("{} #{}", philosopher_name, i),
             table_ref: table_ref.clone(),
-            self_ref: None, // Will be set in on_start
             eat_count: 0,
             has_left_fork: false, // Initialize new fields
             has_right_fork: false, // Initialize new fields

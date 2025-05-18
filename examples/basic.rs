@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{ActorRef, Actor, Message, ActorStopReason}; // MODIFIED: Added System
+use rsactor::{Actor, ActorRef, ActorStopReason, Message}; // MODIFIED: Added System
 use anyhow::Result;
 use log::{info, debug}; // ADDED
 
@@ -19,7 +19,7 @@ impl Actor for MyActor {
     type Error = anyhow::Error; // Define the error type for actor operations
 
     // Called when the actor is started
-    async fn on_start(&mut self, actor_ref: ActorRef) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
         self.count = 0; // Initialize count on start
         info!(
             "MyActor (id: {}) started. Initial count: {}.",
@@ -30,7 +30,7 @@ impl Actor for MyActor {
     }
 
     // Called when the actor is stopped
-    async fn on_stop(&mut self, _actor_ref: ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         info!("MyActor stopping. Final count: {}.", self.count);
         Ok(())
     }
@@ -41,7 +41,7 @@ impl Message<Increment> for MyActor {
     type Reply = u32; // Define the reply type for Increment messages
 
     // Handle the Increment message
-    async fn handle(&mut self, _msg: Increment) -> Self::Reply {
+    async fn handle(&mut self, _msg: Increment, _: &ActorRef) -> Self::Reply {
         self.count += 1;
         debug!("MyActor handled Increment. Count is now {}.", self.count); // Changed to debug!
         self.count // Return the new count
@@ -53,7 +53,7 @@ impl Message<Decrement> for MyActor {
     type Reply = u32; // Define the reply type for Decrement messages
 
     // Handle the Decrement message
-    async fn handle(&mut self, _msg: Decrement) -> Self::Reply {
+    async fn handle(&mut self, _msg: Decrement, _: &ActorRef) -> Self::Reply {
         self.count -= 1;
         debug!("MyActor handled Decrement. Count is now {}.", self.count); // Changed to debug!
         self.count // Return the new count
@@ -65,7 +65,7 @@ struct DummyMessage;
 impl Message<DummyMessage> for MyActor {
     type Reply = u32;
 
-    async fn handle(&mut self, _msg: DummyMessage) -> Self::Reply {
+    async fn handle(&mut self, _msg: DummyMessage, _: &ActorRef) -> Self::Reply {
         debug!("MyActor handled DummyMessage. Count is now {}.", self.count);
         self.count
     }

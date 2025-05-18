@@ -30,7 +30,9 @@ This section describes the sequence of events when a user defines an actor and s
     f.  Returns the `ActorRef` and a `tokio::task::JoinHandle` to the user. The `JoinHandle` can be used to await the actor's termination.
 4.  Inside the spawned Tokio task, `Runtime::run_actor_lifecycle()` begins execution:
     a.  It first calls the actor's `on_start()` lifecycle hook.
-    b.  If `on_start()` is successful, the runtime proceeds to the main message processing loop (described in the next section). If `on_start()` fails, the actor typically stops, and `on_stop()` is called.
+    b.  If `on_start()` is successful, the runtime calls the actor's `run_loop()` lifecycle hook which contains the actor's main execution logic and runs for its lifetime.
+    c.  Concurrently with `run_loop()`, the runtime also processes messages from the mailbox.
+    d.  If `on_start()` fails, or when `run_loop()` completes or fails, the actor stops, and `on_stop()` is called with the appropriate stop reason.
 
 ## 2. Message Passing (tell/ask)
 
