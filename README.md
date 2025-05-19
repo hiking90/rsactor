@@ -11,8 +11,7 @@
     *   `ask`: Send a message and asynchronously await a reply.
     *   `tell`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Actor Lifecycle**: `on_start`, `on_stop`, and `run_loop` hooks. The `run_loop` method is called after `on_start` and contains the main execution logic of the actor, running for its lifetime. All lifecycle hooks are optional and have default implementations.
-*   **Built-in Task Management**: The `run_loop` feature eliminates the need for separate `tokio::spawn` calls for actor tasks, as the framework handles spawning and managing actor tasks internally.
+*   **Actor Lifecycle with Independent Task Execution**: `on_start`, `on_stop`, and `run_loop` hooks form the actor's lifecycle. The distinctive `run_loop` feature (added in v0.4.0) provides a dedicated task execution environment that users can control independently, unlike other actor frameworks. This gives developers complete autonomy over their actor's task logic while the framework manages the underlying execution, eliminating the need for separate `tokio::spawn` calls. All lifecycle hooks are optional and have default implementations.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
@@ -21,7 +20,7 @@
 
 ### Key Changes in v0.4.0 (compared to v0.3.0 and below)
 *   **Optimized `ActorRef` Passing (Reference-Based)**: In v0.4.0, `ActorRef` is passed by reference (`&ActorRef`) to lifecycle methods like `on_start` and `on_stop`. This change focuses on optimization by reducing `ActorRef` cloning in these common method calls, rather than being a substantial performance gain across the board. `ActorRef` remains clonable for explicit duplication if needed.
-*   **`run_loop` Introduction for Optimized Task Management**: v0.4.0 adds the `run_loop` method. This provides a dedicated, framework-managed execution context for an actor's primary logic. This optimizes actor implementation by centralizing its core task management within the framework, removing the need for developers to manually `tokio::spawn` the actor's main processing loop.
+*   **Introduction of the `run_loop` Method**: v0.4.0 introduces the `run_loop` method as described in the Core Features section. This addition provides the independent task execution environment that gives developers both the freedom to define custom task logic and the reliability of framework-managed execution.
 
 ## Getting Started
 

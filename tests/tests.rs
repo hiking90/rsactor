@@ -292,7 +292,7 @@ async fn test_unhandled_message_type() {
     let result = actor_ref.ask::<UnhandledMsg, ()>(UnhandledMsg).await;
     assert!(result.is_err());
     if let Err(e) = result {
-        assert!(e.to_string().contains("MessageHandler received unknown message type"));
+        assert!(e.to_string().contains("received an unhandled message type."));
     }
 
     actor_ref.stop().await.unwrap();

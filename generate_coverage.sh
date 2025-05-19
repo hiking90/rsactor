@@ -80,4 +80,6 @@ unset CARGO_INCREMENTAL
 unset RUSTFLAGS
 unset LLVM_PROFILE_FILE
 
+rm -rf ./target/debug/*
+
 echo "Done."

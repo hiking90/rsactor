@@ -152,7 +152,7 @@ use std::{
 };
 
 use anyhow::Result;
-use tokio::sync::{mpsc, oneshot}; // Mutex might be from tests, ensure it's not needed here. std::sync::Mutex if for global. No, OnceLock is fine.
+use tokio::sync::{mpsc, oneshot};
 use log::{info, error, warn, debug, trace};
 
 /// Implements the `MessageHandler` trait for a given actor type.
@@ -200,28 +200,33 @@ macro_rules! impl_message_handler {
         impl $crate::MessageHandler for $actor_type {
             async fn handle(
                 &mut self,
-                _msg_any: Box<dyn std::any::Any + Send>,
+                _msg_any: Box<dyn std::any::Any + Send>, // This Box is consumed by the first successful downcast
                 _actor_ref: &$crate::ActorRef,
             ) -> anyhow::Result<Box<dyn std::any::Any + Send>> {
+                let mut _msg_any = _msg_any; // Mutable to allow reassignment in the loop
                 $(
-                    if _msg_any.is::<$msg_type>() {
-                        match _msg_any.downcast::<$msg_type>() {
-                            Ok(msg) => {
-                                let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *msg, _actor_ref).await;
-                                return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
-                            }
-                            Err(_) => {
-                                return Err(anyhow::anyhow!(concat!("Internal error: Downcast to ", stringify!($msg_type), " failed after type check.")));
-                            }
+                    match _msg_any.downcast::<$msg_type>() {
+                        Ok(concrete_msg_box) => {
+                            // Successfully downcasted. concrete_msg_box is a Box<$msg_type>.
+                            // The original _msg_any has been consumed by the downcast.
+                            let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, _actor_ref).await;
+                            return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
+                        }
+                        Err(original_box_back) => {
+                            // Downcast failed. original_box_back is the original Box<dyn Any + Send>.
+                            // We reassign it to _msg_any so it can be used in the next iteration of the $(...)* loop.
+                            _msg_any = original_box_back;
                         }
                     }
                 )*
+                // If the message type was not found in the list of handled types:
                 let expected_msg_types_slice: &[&str] = &[$(stringify!($msg_type)),*];
                 let expected_msg_types_str = expected_msg_types_slice.join(", ");
                 let error_message = format!(
-                    "{} MessageHandler received unknown message type. Expected one of: [{}].",
+                    "Actor '{}' received an unhandled message type. Expected one of: [{}]. Actual message type ID: {:?}.",
                     stringify!($actor_type),
-                    expected_msg_types_str
+                    expected_msg_types_str,
+                    _msg_any.type_id() // Add TypeId for debugging
                 );
                 Err(anyhow::anyhow!(error_message))
             }
@@ -232,8 +237,9 @@ macro_rules! impl_message_handler {
 /// Represents messages that can be sent to an actor's mailbox.
 ///
 /// This enum includes both user-defined messages (wrapped in `Envelope`)
-/// and control messages like `Terminate` and `StopGracefully`.
-#[derive(Debug)] // Added Debug derive
+/// and control messages like `StopGracefully`. The `Terminate` control signal
+/// is handled through a separate dedicated channel.
+#[derive(Debug)]
 enum MailboxMessage {
     /// A user-defined message to be processed by the actor.
     Envelope {
@@ -321,7 +327,7 @@ impl ActorRef {
         self.id
     }
 
-    /// Returns the sender channel for the actor's mailbox.
+    /// Checks if the actor is still alive by verifying if its channels are open.
     pub fn is_alive(&self) -> bool {
         // Check if the sender channel is open
         !self.sender.is_closed() && !self.terminate_sender.is_closed()
@@ -398,7 +404,7 @@ impl ActorRef {
     /// The actor will stop processing messages and shut down as soon as possible.
     /// The `on_stop` lifecycle hook will be called with `ActorStopReason::Killed`.
     pub fn kill(&self) -> Result<()> {
-        info!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.id);
+        debug!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.id);
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) { // Changed to ControlSignal::Terminate
             Ok(_) => {
@@ -428,7 +434,7 @@ impl ActorRef {
     /// The `on_stop` lifecycle hook will be called with `ActorStopReason::Normal`
     /// if no errors occur during shutdown.
     pub async fn stop(&self) -> Result<()> {
-        info!("Sending StopGracefully message to actor {}", self.id);
+        debug!("Sending StopGracefully message to actor {}", self.id);
         match self.sender.send(MailboxMessage::StopGracefully).await {
             Ok(_) => Ok(()),
             Err(_) => {
@@ -744,7 +750,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
             return (self.actor, ActorStopReason::Error(anyhow::Error::msg(error_msg)));
         }
 
-        info!("Runtime for actor {} is running.", actor_id);
+        debug!("Runtime for actor {} is running.", actor_id);
 
         let mut final_reason = ActorStopReason::Normal; // Default reason
 
@@ -803,7 +809,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                         None => {
                             // Mailbox closed, meaning all senders (ActorRefs) are dropped.
                             // This is a form of graceful shutdown.
-                            info!("Actor {} mailbox closed (all ActorRefs dropped). Stopping.", actor_id);
+                            debug!("Actor {} mailbox closed (all ActorRefs dropped). Stopping.", actor_id);
                             // final_reason = ActorStopReason::Normal;
                             break; // Exit loop, proceed to on_stop
                         }
@@ -830,7 +836,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         self.receiver.close(); // Close the main mailbox
         self.terminate_receiver.close(); // Close its own channel
 
-        info!("Actor {} message loop ended. Reason: {:?}", actor_id, final_reason);
+        debug!("Actor {} message loop ended. Reason: {:?}", actor_id, final_reason);
 
         // Call on_stop
         if let Err(e_on_stop) = self.actor.on_stop(&self.actor_ref, &final_reason).await {
@@ -848,7 +854,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                 }
             }
         }
-        info!("Actor {} task finishing.", actor_id);
+        debug!("Actor {} task finishing.", actor_id);
         (self.actor, final_reason)
     }
 }
