@@ -9,8 +9,8 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 
 *   **Minimalist Actor System**: Focuses on core actor model primitives.
 *   **Message Passing**:
-    *   `ask`: Send a message and asynchronously await a reply.
-    *   `tell`: Send a message without waiting for a reply.
+    *   `ask`/`ask_with_timeout`: Send a message and asynchronously await a reply.
+    *   `tell`/`tell_with_timeout`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
 *   **Actor Lifecycle with Simple Yet Powerful Task Control**: `on_start`, `on_stop`, and `run_loop` hooks form the actor's lifecycle. The distinctive `run_loop` feature (added in v0.4.0) provides a dedicated task execution environment that users can control with simple yet powerful primitives, unlike other actor frameworks. This gives developers complete control over their actor's task logic while the framework manages the underlying execution, eliminating the need for separate `tokio::spawn` calls. All lifecycle hooks are optional and have default implementations.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
@@ -30,7 +30,7 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 
 ```toml
 [dependencies]
-rsactor = "0.4" # Check crates.io for the latest version
+rsactor = "0.5" # Check crates.io for the latest version
 ```
 
 ### 2. Basic Usage Example

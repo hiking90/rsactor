@@ -14,7 +14,9 @@
 //! - **Asynchronous Actors**: Actors run in their own asynchronous tasks.
 //! - **Message Passing**: Actors communicate by sending and receiving messages.
 //!   - `tell`: Send a message without waiting for a reply (fire-and-forget).
+//!   - `tell_with_timeout`: Send a message without waiting for a reply, with a specified timeout.
 //!   - `ask`: Send a message and await a reply.
+//!   - `ask_with_timeout`: Send a message and await a reply, with a specified timeout.
 //!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
 //!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
 //! - **Actor Lifecycle with Simple Yet Powerful Task Control**: Actors have `on_start`, `on_stop`, and `run_loop` lifecycle hooks.
@@ -296,7 +298,9 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<(), String> {
 ///
 /// - **Asynchronous Methods**:
 ///   - [`ask`](ActorRef::ask): Send a message and await a reply.
+///   - [`ask_with_timeout`](ActorRef::ask_with_timeout): Send a message and await a reply with a timeout.
 ///   - [`tell`](ActorRef::tell): Send a message without waiting for a reply.
+///   - [`tell_with_timeout`](ActorRef::tell_with_timeout): Send a message without waiting for a reply with a timeout.
 ///
 /// - **Blocking Methods for Tokio Blocking Contexts**:
 ///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a reply is received.
@@ -362,6 +366,21 @@ impl ActorRef {
         }
     }
 
+    /// Sends a message to the actor without awaiting a reply (fire-and-forget) with a timeout.
+    ///
+    /// Similar to `tell`, but allows specifying a timeout for the send operation.
+    /// The message is sent to the actor's mailbox, and this method will return once
+    /// the message is sent or timeout if the send operation doesn't complete
+    /// within the specified duration.
+    pub async fn tell_with_timeout<M>(&self, msg: M, timeout: std::time::Duration) -> Result<()>
+    where
+        M: Send + 'static,
+    {
+        tokio::time::timeout(timeout, self.tell(msg))
+            .await
+            .map_err(|_| anyhow::anyhow!("Send operation to actor {} timed out after {:?}", self.id, timeout))?
+    }
+
     /// Sends a message to the actor and awaits a reply.
     ///
     /// The message is sent to the actor\\'s mailbox, and this method will wait for
@@ -400,6 +419,22 @@ impl ActorRef {
                 self.id
             )),
         }
+    }
+
+    /// Sends a message to the actor and awaits a reply with a timeout.
+    ///
+    /// Similar to `ask`, but allows specifying a timeout for the operation.
+    /// The message is sent to the actor's mailbox, and this method will wait for
+    /// the actor to process the message and send a reply, or timeout if the reply
+    /// doesn't arrive within the specified duration.
+    pub async fn ask_with_timeout<M, R>(&self, msg: M, timeout: std::time::Duration) -> Result<R>
+    where
+        M: Send + 'static,
+        R: Send + 'static,
+    {
+        tokio::time::timeout(timeout, self.ask(msg))
+            .await
+            .map_err(|_| anyhow::anyhow!("Request to actor {} timed out after {:?}", self.id, timeout))?
     }
 
     /// Sends an immediate termination signal to the actor.

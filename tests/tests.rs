@@ -844,3 +844,66 @@ async fn test_actor_ref_is_alive() {
 
     assert!(!actor_ref_kill_test.is_alive(), "Actor should not be alive after kill (kill test)");
 }
+
+#[tokio::test]
+async fn test_ask_with_timeout() {
+    let (actor_ref, handle, _counter, _lpmt, _on_start, on_stop_called) =
+        setup_actor().await;
+
+    // Test a successful case (timeout is long enough)
+    let reply: String = actor_ref
+        .ask_with_timeout(PingMsg("hello_timeout".to_string()), std::time::Duration::from_millis(500))
+        .await
+        .expect("ask_with_timeout failed with sufficient timeout");
+    assert_eq!(reply, "pong: hello_timeout");
+
+    // Test timeout case - SlowMsg handler sleeps for 100ms, but we set a 10ms timeout
+    let result: Result<(), _> = actor_ref
+        .ask_with_timeout(SlowMsg, std::time::Duration::from_millis(10))
+        .await;
+    assert!(result.is_err(), "ask_with_timeout should have timed out");
+    if let Err(e) = result {
+        assert!(e.to_string().contains("timed out"), "Error message should mention timeout: {}", e);
+    }
+
+    // Verify regular operation works after timeout
+    let count: i32 = actor_ref
+        .ask_with_timeout(GetCounterMsg, std::time::Duration::from_millis(500))
+        .await
+        .expect("ask_with_timeout for GetCounterMsg should succeed");
+    assert_eq!(count, 0);
+
+    actor_ref.stop().await.expect("Failed to stop actor");
+    handle.await.expect("Actor task failed");
+    assert!(*on_stop_called.lock().await);
+}
+
+#[tokio::test]
+async fn test_tell_with_timeout() {
+    let (actor_ref, handle, counter, last_processed, _on_start, on_stop_called) =
+        setup_actor().await;
+
+    // Test a successful case (timeout is sufficient)
+    let result = actor_ref
+        .tell_with_timeout(UpdateCounterMsg(5), std::time::Duration::from_millis(500))
+        .await;
+    assert!(result.is_ok(), "tell_with_timeout with sufficient timeout should succeed");
+
+    // Allow time for processing
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Verify the message was processed
+    assert_eq!(*counter.lock().await, 5);
+    assert_eq!(
+        *last_processed.lock().await,
+        Some("UpdateCounterMsg".to_string())
+    );
+
+    // Since the mailbox channel immediately accepts messages in most test scenarios,
+    // it's hard to create a realistic timeout situation for tell_with_timeout
+    // Without introducing artificial delays or mocks
+
+    actor_ref.stop().await.expect("Failed to stop actor");
+    handle.await.expect("Actor task failed");
+    assert!(*on_stop_called.lock().await);
+}
