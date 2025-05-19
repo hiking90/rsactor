@@ -216,7 +216,14 @@ macro_rules! impl_message_handler {
                         }
                     }
                 )*
-                Err(anyhow::anyhow!(concat!(stringify!($actor_type), ": MessageHandler received unknown message type.")))
+                let expected_msg_types_slice: &[&str] = &[$(stringify!($msg_type)),*];
+                let expected_msg_types_str = expected_msg_types_slice.join(", ");
+                let error_message = format!(
+                    "{} MessageHandler received unknown message type. Expected one of: [{}].",
+                    stringify!($actor_type),
+                    expected_msg_types_str
+                );
+                Err(anyhow::anyhow!(error_message))
             }
         }
     };
