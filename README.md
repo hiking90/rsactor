@@ -1,4 +1,4 @@
-# rsActor: A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
+# A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
 
 `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing simple yet powerful task control. It prioritizes simplicity and efficiency for local, in-process actor systems while giving developers complete control over their actors' execution lifecycle — define your own `run_loop`, control execution, control the lifecycle.
 
