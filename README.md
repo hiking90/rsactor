@@ -1,8 +1,8 @@
-# rsActor: A Simplified Actor Framework for Rust
+# rsActor: A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
 
-`rsActor` is a lightweight, Tokio-based actor framework in Rust. It prioritizes simplicity for local, in-process actor systems.
+`rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing simple yet powerful task control. It prioritizes simplicity and efficiency for local, in-process actor systems while giving developers complete control over their actors' execution lifecycle — define your own `run_loop`, control execution, control the lifecycle.
 
-**Note:** This project is in early development. APIs may change.
+**Note:** This project is actively evolving. While core APIs are stable, some features may be refined in future releases.
 
 ## Core Features
 
@@ -11,7 +11,7 @@
     *   `ask`: Send a message and asynchronously await a reply.
     *   `tell`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Actor Lifecycle with Independent Task Execution**: `on_start`, `on_stop`, and `run_loop` hooks form the actor's lifecycle. The distinctive `run_loop` feature (added in v0.4.0) provides a dedicated task execution environment that users can control independently, unlike other actor frameworks. This gives developers complete autonomy over their actor's task logic while the framework manages the underlying execution, eliminating the need for separate `tokio::spawn` calls. All lifecycle hooks are optional and have default implementations.
+*   **Actor Lifecycle with Simple Yet Powerful Task Control**: `on_start`, `on_stop`, and `run_loop` hooks form the actor's lifecycle. The distinctive `run_loop` feature (added in v0.4.0) provides a dedicated task execution environment that users can control with simple yet powerful primitives, unlike other actor frameworks. This gives developers complete control over their actor's task logic while the framework manages the underlying execution, eliminating the need for separate `tokio::spawn` calls. All lifecycle hooks are optional and have default implementations.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
@@ -20,7 +20,7 @@
 
 ### Key Changes in v0.4.0 (compared to v0.3.0 and below)
 *   **Optimized `ActorRef` Passing (Reference-Based)**: In v0.4.0, `ActorRef` is passed by reference (`&ActorRef`) to lifecycle methods like `on_start` and `on_stop`. This change focuses on optimization by reducing `ActorRef` cloning in these common method calls, rather than being a substantial performance gain across the board. `ActorRef` remains clonable for explicit duplication if needed.
-*   **Introduction of the `run_loop` Method**: v0.4.0 introduces the `run_loop` method as described in the Core Features section. This addition provides the independent task execution environment that gives developers both the freedom to define custom task logic and the reliability of framework-managed execution.
+*   **Introduction of the `run_loop` Method**: v0.4.0 introduces the `run_loop` method as described in the Core Features section. This distinctive feature gives developers freedom to define custom task logic while maintaining reliable framework-managed execution.
 
 ## Getting Started
 
@@ -67,7 +67,11 @@ impl Actor for CounterActor {
     //     // info!("CounterActor (id: {}) run_loop called.", actor_ref.id());
     //     // The actor will stop when this method returns Ok(()) or Err(_).
     //     loop {
+    //         // IMPORTANT: Every loop in run_loop MUST have at least one .await point
+    //         // to enable task switching so messages can be processed
     //         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    //
+    //         // Perform your periodic task here
     //         // if some_condition { break; } // Or return Ok(()) to stop.
     //     }
     //     Ok(()) // Actor stops when run_loop completes.

@@ -1,11 +1,12 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! # rsactor: A Rust Actor Framework
+//! # rsActor: A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
 //!
-//! `rsactor` provides a simple and lightweight actor framework for building concurrent
-//! applications in Rust. It is built on top of `tokio` for asynchronous message
-//! passing and task management.
+//! `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing simple
+//! yet powerful task control. It prioritizes simplicity and efficiency for local, in-process
+//! actor systems while giving developers complete control over their actors' execution lifecycle —
+//! define your own `run_loop`, control execution, control the lifecycle.
 //!
 //! ## Features
 //!
@@ -15,9 +16,10 @@
 //!   - `ask`: Send a message and await a reply.
 //!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
 //!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
-//! - **Actor Lifecycle**: Actors have `on_start`, `on_stop`, and `run_loop` lifecycle hooks.
-//!   The `run_loop` method is called after `on_start` and contains the main execution
-//!   logic of the actor, running for its lifetime.
+//! - **Actor Lifecycle with Simple Yet Powerful Task Control**: Actors have `on_start`, `on_stop`, and `run_loop` lifecycle hooks.
+//!   The distinctive `run_loop` feature provides a dedicated task execution environment that users can control
+//!   with simple yet powerful primitives, unlike other actor frameworks. This gives developers complete control over
+//!   their actor's task logic while the framework manages the underlying execution.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
 //! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
@@ -592,8 +594,9 @@ pub trait Actor: Send + 'static {
     ///
     /// This method is called after `on_start` and is expected to contain the primary logic
     /// of the actor. It typically runs for the entire lifetime of the actor. The `run_loop`
-    /// method executes concurrently with message handling, allowing actors to perform background
-    /// work while remaining responsive to incoming messages.
+    /// method provides a dedicated task execution environment for executing custom logic,
+    /// while the framework manages the underlying execution details. It executes concurrently with message
+    /// handling, allowing actors to perform background work while remaining responsive to incoming messages.
     ///
     /// # Key characteristics:
     ///
@@ -606,8 +609,10 @@ pub trait Actor: Send + 'static {
     /// - **State Access**: Has full access to the actor's state (`self`) and can modify it,
     ///   with changes visible to message handlers and vice versa.
     ///
-    /// - **Asynchronous Operations**: Should use `.await` points regularly to cooperatively
-    ///   yield control to the Tokio runtime, ensuring message handling remains responsive.
+    /// - **Required Await Points**: Must include at least one `.await` point inside any loop structure
+    ///   to yield control to the Tokio runtime. Without these await points, the actor will be unable
+    ///   to process incoming messages as task switching won't occur. This is critical for the
+    ///   cooperative multitasking model that enables concurrent message processing.
     ///
     /// # Common patterns:
     ///
@@ -622,10 +627,16 @@ pub trait Actor: Send + 'static {
     ///    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
     ///        let mut interval = tokio::time::interval(Duration::from_secs(5));
     ///        loop {
-    ///            interval.tick().await;
+    ///            interval.tick().await; // Critical await point enables message processing
     ///            // Perform periodic task here
+    ///
+    ///            // If your task is computationally intensive, ensure you still have an await:
+    ///            if heavy_computation_needed() {
+    ///                tokio::task::yield_now().await; // Explicitly yield to allow message processing
+    ///            }
     ///        }
     ///    }
+    ///    # fn heavy_computation_needed() -> bool { false }
     ///    # }
     ///    ```
     ///
@@ -638,15 +649,18 @@ pub trait Actor: Send + 'static {
     ///    # type Error = anyhow::Error;
     ///    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
     ///        loop {
+    ///            // IMPORTANT: Every loop iteration must have at least one await point
+    ///            // to ensure the actor can process incoming messages
+    ///
     ///            // Offload blocking operations to Tokio's blocking threadpool
     ///            let result = tokio::task::spawn_blocking(|| {
     ///                // CPU-bound or blocking I/O work here
     ///                "computation result"
-    ///            }).await?;
+    ///            }).await?; // This await allows message processing while computation runs
     ///
     ///            // Process the result
     ///            println!("Got result: {}", result);
-    ///            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    ///            tokio::time::sleep(std::time::Duration::from_secs(1)).await; // Another await point
     ///        }
     ///    }
     ///    # }
@@ -668,9 +682,13 @@ pub trait Actor: Send + 'static {
     /// If it returns `Err(_)`, `on_stop` will be called with `ActorStopReason::Error`.
     fn run_loop(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = Result<(), Self::Error>> + Send {
         async {
+            // Default implementation that does nothing but yield control regularly
+            // to allow message processing. Without this await point, the message
+            // processing would be blocked completely.
             loop {
-                // Placeholder for the actor's main loop logic.
-                // This could be a long-running task or periodic work.
+                // This sleep is critical - it creates an await point that allows
+                // the Tokio runtime to switch tasks and process incoming messages.
+                // Without at least one await point in a loop, message processing would starve.
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
