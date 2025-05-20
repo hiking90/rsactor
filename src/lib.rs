@@ -623,6 +623,9 @@ pub trait Actor: Send + 'static {
     ///    # use anyhow::Result;
     ///    # use std::time::Duration;
     ///    # struct MyActor {}
+    ///    # impl MyActor {
+    ///    # fn heavy_computation_needed(&self) -> bool { true }
+    ///    # }
     ///    # impl Actor for MyActor {
     ///    # type Error = anyhow::Error;
     ///    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
@@ -632,12 +635,11 @@ pub trait Actor: Send + 'static {
     ///            // Perform periodic task here
     ///
     ///            // If your task is computationally intensive, ensure you still have an await:
-    ///            if heavy_computation_needed() {
+    ///            if self.heavy_computation_needed() {
     ///                tokio::task::yield_now().await; // Explicitly yield to allow message processing
     ///            }
     ///        }
     ///    }
-    ///    # fn heavy_computation_needed() -> bool { false }
     ///    # }
     ///    ```
     ///
