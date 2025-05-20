@@ -18,6 +18,8 @@ struct TestActor {
     last_processed_message_type: Arc<Mutex<Option<String>>>,
     on_start_called: Arc<Mutex<bool>>,
     on_stop_called: Arc<Mutex<bool>>,
+    // Declaration to check if the Send trait is sufficient
+    marker: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 
 impl TestActor {
@@ -33,6 +35,7 @@ impl TestActor {
             last_processed_message_type,
             on_start_called,
             on_stop_called,
+            marker: std::marker::PhantomData,
         }
     }
 }

@@ -1,4 +1,5 @@
-# A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
+# rsActor
+A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 
 `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing simple yet powerful task control. It prioritizes simplicity and efficiency for local, in-process actor systems while giving developers complete control over their actors' execution lifecycle — define your own `run_loop`, control execution, control the lifecycle.
 
@@ -15,6 +16,7 @@
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
+*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead.
 
 ## Version Differences
 

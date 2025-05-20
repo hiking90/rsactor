@@ -1,7 +1,8 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! # A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
+//! # rsActor
+//! A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
 //!
 //! `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing simple
 //! yet powerful task control. It prioritizes simplicity and efficiency for local, in-process
@@ -716,7 +717,7 @@ pub trait Message<T: Send + 'static>: Actor {
 /// It allows the `Runtime` to handle messages of different types by downcasting
 /// them to their concrete types before passing them to the actor's specific `Message::handle`
 /// implementation.
-pub trait MessageHandler: Send + Sync + 'static {
+pub trait MessageHandler: Send + 'static {
     /// Handles a type-erased message.
     ///
     /// The implementation should attempt to downcast `msg_any` to one of the
