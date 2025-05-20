@@ -30,7 +30,7 @@ impl Actor for MyActor {
     }
 
     // Called when the actor is stopped
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> Result<(), Self::Error> {
         info!("MyActor stopping. Final count: {}.", self.count);
         Ok(())
     }

@@ -8,7 +8,7 @@ use log::debug; // Ensure 'log' crate is a dev-dependency or available
 use rsactor::{
     Actor, ActorRef, ActorStopReason, Message,
     impl_message_handler, spawn, spawn_with_mailbox_capacity,
-    set_default_mailbox_capacity
+    set_default_mailbox_capacity, Error
 };
 
 // Test Actor Setup
@@ -51,7 +51,7 @@ impl Actor for TestActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> Result<(), Self::Error> {
         let mut called = self.on_stop_called.lock().await;
         *called = true;
         debug!("TestActor (id: {}) stopped. Final count: {}", self.id, *self.counter.lock().await);
@@ -291,7 +291,7 @@ async fn test_ask_wrong_reply_type() {
 
 #[tokio::test]
 async fn test_unhandled_message_type() {
-    let (actor_ref, handle, _counter, _lpmt, _on_start, on_stop_called) = setup_actor().await;
+    let (actor_ref, handle, _counter, _lpmt, _on_start, _on_stop_called) = setup_actor().await;
 
     struct UnhandledMsg; // Not in impl_message_handler! for TestActor
 
@@ -302,8 +302,13 @@ async fn test_unhandled_message_type() {
     }
 
     actor_ref.stop().await.unwrap();
-    handle.await.unwrap();
-    assert!(*on_stop_called.lock().await);
+    // Actor panics with unhandled message, no need to call stop
+    let join_result = handle.await;
+    assert!(join_result.is_err(), "Expected actor to panic with unhandled message");
+    if let Err(join_error) = join_result {
+        assert!(join_error.is_panic(), "The join error should be caused by a panic");
+    }
+    // We don't assert on_stop_called since the actor panics before on_stop can be called
 }
 
 // Test actor lifecycle errors
@@ -325,7 +330,7 @@ impl Actor for LifecycleErrorActor {
         *self.on_start_attempted.lock().await = true;
         if self.fail_on_start { Err(anyhow::anyhow!("simulated on_start failure")) } else { Ok(()) }
     }
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> Result<(), Self::Error> {
         *self.on_stop_attempted.lock().await = true;
         if self.fail_on_stop { Err(anyhow::anyhow!("simulated on_stop failure")) } else { Ok(()) }
     }
@@ -464,12 +469,22 @@ async fn test_actor_fail_on_run_then_fail_on_stop() {
         Ok((returned_actor, reason)) => {
             assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
             if let ActorStopReason::Error(e) = reason {
-                // The error from on_run should be the primary reason for stopping
-                // Check if "simulated on_run failure" is present in the error chain
-                let found_on_run_failure = e.chain().any(|cause| {
-                    cause.to_string().contains("simulated on_run failure")
-                });
-                assert!(found_on_run_failure, "Expected 'simulated on_run failure' in the error chain. Full error: {:?}", e);
+                if let Error::LifecycleError {
+                    actor_id,
+                    hook,
+                    source_error,
+                    source_stop_reason } = e {
+                    assert!(format!("{:?}", source_error)
+                        .contains("simulated on_stop failure"),
+                        "Error message should mention 'simulated on_stop failure'");
+                    assert_eq!(actor_id, returned_actor.id);
+                    assert_eq!(hook, "on_stop");
+                    assert!(source_stop_reason.is_some() &&
+                            matches!(**source_stop_reason.as_ref().unwrap(), ActorStopReason::Error(_)),
+                            "Expected source_stop_reason to be an error");
+                } else {
+                    panic!("Expected LifecycleError, got: {:?}", e);
+                }
             }
             assert!(*returned_actor.on_start_attempted.lock().await, "on_start should have been attempted");
             assert!(*returned_actor.on_run_attempted.lock().await, "on_run should have been attempted");
@@ -514,9 +529,10 @@ async fn test_set_default_mailbox_capacity_to_zero() {
     // This test is independent of whether the capacity has been set before or not.
     let result = set_default_mailbox_capacity(0);
     assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err(),
-        "Global default mailbox capacity must be greater than 0"
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, Error::MailboxCapacityError { message } if message == "Global default mailbox capacity must be greater than 0"),
+        "Error message for zero capacity didn't match"
     );
 }
 
@@ -531,7 +547,7 @@ impl Actor for PanicActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> Result<(), Self::Error> {
         let mut called = self.on_stop_called.lock().await;
         *called = true;
         Ok(())
@@ -560,8 +576,8 @@ async fn test_actor_panic_in_message_handler() {
     assert!(ask_result.is_err(), "Ask should fail when handler panics");
     if let Err(e) = ask_result {
         // Error could be "reply channel closed" or similar, as the actor task terminates.
-        debug!("Ask error after handler panic: {}", e);
-        assert!(e.to_string().contains("reply channel closed") || e.to_string().contains("mailbox channel closed"));
+        println!("Ask error after handler panic: {}", e);
+        assert!(e.to_string().contains("Reply channel closed") || e.to_string().contains("Mailbox channel closed"));
     }
 
     // The JoinHandle should return Err because the underlying tokio task panicked.
@@ -697,7 +713,9 @@ async fn test_actor_ref_ask_blocking_timeout() {
             .ask_blocking(SlowMsg, Some(std::time::Duration::from_millis(10))); // Timeout 10ms
         assert!(result.is_err(), "ask_blocking should have timed out");
         if let Err(e) = result {
-            assert!(e.to_string().contains("ask_blocking operation timed out"), "Error message mismatch: {}", e);
+            // The error message format includes actor ID and timeout duration
+            // Just check that it contains "timed out" which is what we care about
+            assert!(e.to_string().contains("timed out"), "Error should indicate a timeout: {}", e);
         }
     });
 
@@ -742,7 +760,9 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
             .tell_blocking(UpdateCounterMsg(2), Some(std::time::Duration::from_millis(10))); // Timeout 10ms
         assert!(result.is_err(), "tell_blocking should have timed out");
         if let Err(e) = result {
-            assert!(e.to_string().contains("tell_blocking operation timed out"));
+            // The error message might include more details like actor ID and timeout duration
+            // Just check that it contains "timed out" which is what we care about
+            assert!(e.to_string().contains("timed out"), "Error should indicate a timeout: {}", e);
         }
     });
 

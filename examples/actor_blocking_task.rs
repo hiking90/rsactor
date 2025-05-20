@@ -158,7 +158,7 @@ impl Actor for SyncDataProcessorActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, stop_reason: ActorStopReason) -> Result<(), Self::Error> {
         info!("SyncDataProcessorActor stopping: {:?}", stop_reason);
 
         // Signal the background task to stop if we still have a sender

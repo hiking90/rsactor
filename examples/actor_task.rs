@@ -76,7 +76,7 @@ impl Actor for DataProcessorActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, stop_reason: ActorStopReason) -> Result<(), Self::Error> {
         info!("DataProcessorActor stopping: {:?}", stop_reason);
 
         // Stop generating events
