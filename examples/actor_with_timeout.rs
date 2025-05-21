@@ -31,7 +31,7 @@ impl Actor for TimeoutDemoActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, actor_ref: &ActorRef, reason: rsactor::ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, actor_ref: &ActorRef, reason: &rsactor::ActorStopReason) -> Result<(), Self::Error> {
         info!("{} actor (id: {}) stopped. Reason: {:?}", self.name, actor_ref.id(), reason);
         Ok(())
     }

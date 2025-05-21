@@ -51,7 +51,7 @@ impl Actor for TestActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         let mut called = self.on_stop_called.lock().await;
         *called = true;
         debug!("TestActor (id: {}) stopped. Final count: {}", self.id, *self.counter.lock().await);
@@ -330,7 +330,7 @@ impl Actor for LifecycleErrorActor {
         *self.on_start_attempted.lock().await = true;
         if self.fail_on_start { Err(anyhow::anyhow!("simulated on_start failure")) } else { Ok(()) }
     }
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         *self.on_stop_attempted.lock().await = true;
         if self.fail_on_stop { Err(anyhow::anyhow!("simulated on_stop failure")) } else { Ok(()) }
     }
@@ -469,7 +469,7 @@ async fn test_actor_fail_on_run_then_fail_on_stop() {
         Ok((returned_actor, reason)) => {
             assert!(matches!(reason, ActorStopReason::Error(_)), "Expected ActorStopReason::Error, got {:?}", reason);
             if let ActorStopReason::Error(e) = reason {
-                if let Error::LifecycleError {
+                if let Error::Lifecycle {
                     actor_id,
                     hook,
                     source_error,
@@ -530,9 +530,41 @@ async fn test_set_default_mailbox_capacity_to_zero() {
     let result = set_default_mailbox_capacity(0);
     assert!(result.is_err());
     let err = result.unwrap_err();
+    assert!(format!("{}", err).contains("Mailbox capacity error:"));
     assert!(
-        matches!(err, Error::MailboxCapacityError { message } if message == "Global default mailbox capacity must be greater than 0"),
+        matches!(err, Error::MailboxCapacity { message } if message == "Global default mailbox capacity must be greater than 0"),
         "Error message for zero capacity didn't match"
+    );
+}
+
+#[tokio::test]
+async fn test_set_default_mailbox_capacity_already_set() {
+    // Use a higher value (e.g., 1000) to avoid conflicts with other tests
+    // that might have set a smaller value
+    let capacity = 1000;
+
+    // First attempt should succeed
+    let first_result = set_default_mailbox_capacity(capacity);
+
+    // If this is the first test to run that sets default capacity, it should succeed
+    // If another test has already set it, this will fail with "already been set" error
+    if first_result.is_err() {
+        assert!(
+            matches!(first_result, Err(Error::MailboxCapacity { message }) if message == "Global default mailbox capacity has already been set"),
+            "Error message didn't match"
+        );
+
+        // In this case, we've already verified the error works as expected
+        return;
+    }
+
+    // If the first call succeeded, then the second call should definitely fail
+    let second_result = set_default_mailbox_capacity(capacity + 1);
+    assert!(second_result.is_err(), "Expected second call to fail");
+
+    assert!(
+        matches!(second_result, Err(Error::MailboxCapacity { message }) if message == "Global default mailbox capacity has already been set"),
+        "Error message for second attempt didn't match"
     );
 }
 
@@ -547,7 +579,7 @@ impl Actor for PanicActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
         let mut called = self.on_stop_called.lock().await;
         *called = true;
         Ok(())
@@ -563,6 +595,50 @@ impl Message<PanicMsg> for PanicActor {
     }
 }
 impl_message_handler!(PanicActor, [PanicMsg]);
+
+// Actor with String as Error type
+struct StringErrorActor {
+    id: usize,
+    on_start_called: Arc<Mutex<bool>>,
+    on_stop_called: Arc<Mutex<bool>>,
+}
+
+impl StringErrorActor {
+    fn new(on_start_called: Arc<Mutex<bool>>, on_stop_called: Arc<Mutex<bool>>) -> Self {
+        Self { id: 0, on_start_called, on_stop_called }
+    }
+}
+
+impl Actor for StringErrorActor {
+    type Error = String; // Using String as the error type
+
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
+        self.id = actor_ref.id();
+        *self.on_start_called.lock().await = true;
+        debug!("StringErrorActor (id: {}) started.", self.id);
+        Ok(())
+    }
+
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
+        *self.on_stop_called.lock().await = true;
+        debug!("StringErrorActor (id: {}) stopped.", self.id);
+        Ok(())
+    }
+    // run_loop will use the default implementation which returns Ok(())
+}
+
+// Message for StringErrorActor
+#[derive(Debug)]
+struct SimpleMsg;
+
+impl Message<SimpleMsg> for StringErrorActor {
+    type Reply = String;
+    async fn handle(&mut self, _msg: SimpleMsg, _actor_ref: &ActorRef) -> Self::Reply {
+        "SimpleMsg processed".to_string()
+    }
+}
+
+impl_message_handler!(StringErrorActor, [SimpleMsg]);
 
 #[tokio::test]
 async fn test_actor_panic_in_message_handler() {
@@ -596,6 +672,30 @@ async fn test_actor_panic_in_message_handler() {
     // The current run_actor_lifecycle does not have a catch_unwind around the message handling loop.
     // So, a panic in `self.actor.handle()` will propagate and terminate the task before `on_stop` is called by the loop.
     assert!(!*on_stop_called_arc.lock().await, "on_stop should not be called if handler panics and task terminates abruptly");
+}
+
+#[tokio::test]
+async fn test_actor_with_string_error_type() {
+    let on_start_called = Arc::new(Mutex::new(false));
+    let on_stop_called = Arc::new(Mutex::new(false));
+
+    let actor = StringErrorActor::new(on_start_called.clone(), on_stop_called.clone());
+    let (actor_ref, handle) = spawn(actor);
+
+    // Give a moment for on_start to potentially run
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(*on_start_called.lock().await, "on_start should be called for StringErrorActor");
+
+    // Send a message and check reply
+    let reply: String = actor_ref.ask(SimpleMsg).await.expect("ask failed for SimpleMsg");
+    assert_eq!(reply, "SimpleMsg processed");
+
+    // Stop the actor
+    actor_ref.stop().await.expect("Failed to stop StringErrorActor");
+    let (_actor_state, reason) = handle.await.expect("StringErrorActor task failed");
+
+    assert!(matches!(reason, ActorStopReason::Normal), "StringErrorActor did not stop normally. Reason: {:?}", reason);
+    assert!(*on_stop_called.lock().await, "on_stop should be called for StringErrorActor");
 }
 
 // Test: Spawning multiple actors
@@ -923,6 +1023,123 @@ async fn test_tell_with_timeout() {
     // it's hard to create a realistic timeout situation for tell_with_timeout
     // Without introducing artificial delays or mocks
 
+    actor_ref.stop().await.expect("Failed to stop actor");
+    handle.await.expect("Actor task failed");
+    assert!(*on_stop_called.lock().await);
+}
+
+#[test]
+fn test_runtime_error_outside_tokio() {
+    // Setup an actor in tokio runtime
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let actor_ref = runtime.block_on(async {
+        let (actor_ref, _handle, _, _, _, _) = setup_actor().await;
+        actor_ref
+    });
+
+    // Now drop the runtime to ensure we're outside a tokio context
+    drop(runtime);
+
+    // Attempt to use ask_blocking outside tokio runtime context
+    let result = actor_ref.ask_blocking::<PingMsg, String>(
+        PingMsg("hello".to_string()),
+        Some(std::time::Duration::from_millis(100))
+    );
+
+    // This should result in Error::Runtime
+    assert!(result.is_err());
+    if let Err(e) = result {
+        assert!(matches!(e, Error::Runtime { .. }), "Expected Error::Runtime, got: {:?}", e);
+        assert!(format!("{}", e).contains("Runtime error in"));
+
+        // Extract and validate error details
+        if let Error::Runtime { actor_id, details } = e {
+            assert_ne!(actor_id, 0, "Actor ID should be non-zero");
+            assert!(details.contains("No tokio runtime available"),
+                "Error details should mention tokio runtime unavailability: {}", details);
+        }
+    }
+
+    // Similarly test tell_blocking
+    let tell_result = actor_ref.tell_blocking(
+        UpdateCounterMsg(5),
+        Some(std::time::Duration::from_millis(100))
+    );
+
+    assert!(tell_result.is_err());
+    if let Err(e) = tell_result {
+        assert!(matches!(e, Error::Runtime { .. }), "Expected Error::Runtime, got: {:?}", e);
+
+        if let Error::Runtime { actor_id, details } = e {
+            assert_ne!(actor_id, 0, "Actor ID should be non-zero");
+            assert!(details.contains("No tokio runtime available"),
+                "Error details should mention tokio runtime unavailability: {}", details);
+        }
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "Mailbox capacity must be greater than 0")]
+async fn test_spawn_with_zero_mailbox_capacity() {
+    // Prepare an actor instance
+    let counter = Arc::new(Mutex::new(0));
+    let last_processed_message_type = Arc::new(Mutex::new(None::<String>));
+    let on_start_called = Arc::new(Mutex::new(false));
+    let on_stop_called = Arc::new(Mutex::new(false));
+
+    let actor_instance = TestActor::new(
+        counter,
+        last_processed_message_type,
+        on_start_called,
+        on_stop_called,
+    );
+
+    // This should panic with message "Mailbox capacity must be greater than 0"
+    let (_actor_ref, _handle) = spawn_with_mailbox_capacity(actor_instance, 0);
+}
+
+#[tokio::test]
+async fn test_mailbox_capacity_error_when_full() {
+    // Create an actor with a very small mailbox capacity (1)
+    let counter = Arc::new(Mutex::new(0));
+    let last_processed_message_type = Arc::new(Mutex::new(None::<String>));
+    let on_start_called = Arc::new(Mutex::new(false));
+    let on_stop_called = Arc::new(Mutex::new(false));
+
+    let actor_instance = TestActor::new(
+        counter.clone(),
+        last_processed_message_type.clone(),
+        on_start_called.clone(),
+        on_stop_called.clone(),
+    );
+
+    // Spawn with capacity 1 to make it easy to fill the mailbox
+    let (actor_ref, handle) = spawn_with_mailbox_capacity(actor_instance, 1);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Give time for on_start
+
+    // Send a SlowMsg that will make the actor busy for 100ms
+    actor_ref.tell(SlowMsg).await.expect("Tell SlowMsg failed");
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await; // Ensure message is being processed
+
+    // Fill the mailbox with one message (capacity is 1)
+    actor_ref.tell(UpdateCounterMsg(1)).await.expect("Tell UpdateCounterMsg(1) to fill mailbox failed");
+
+    // Now try to send another message with a timeout - this should fail with MailboxCapacity error
+    let result = actor_ref
+        .tell_with_timeout(UpdateCounterMsg(2), std::time::Duration::from_millis(50))
+        .await;
+
+    assert!(result.is_err(), "Expected tell_with_timeout to fail with mailbox full");
+    assert!(matches!(result, Err(Error::Timeout { .. })),
+        "Expected timeout error when mailbox is full, got: {:?}", result);
+
+    // Allow the actor to process the queued messages
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg + UpdateCounterMsg
+
+    // Ensure only the first UpdateCounterMsg was processed
+    assert_eq!(*counter.lock().await, 1, "Counter should be 1, indicating only UpdateCounterMsg(1) was processed");
+
+    // Clean up the actor
     actor_ref.stop().await.expect("Failed to stop actor");
     handle.await.expect("Actor task failed");
     assert!(*on_stop_called.lock().await);

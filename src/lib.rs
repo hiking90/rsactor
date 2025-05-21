@@ -60,7 +60,7 @@
 //!     }
 //! }
 //!
-//! // 2. Implement the Actor trait (on_start, on_stop, on_run are optional)
+//! // 2. Implement the Actor trait (on_start, on_stop, run_loop are optional)
 //! impl Actor for MyActor {
 //!     type Error = anyhow::Error; // Define an error type
 //!
@@ -146,39 +146,34 @@
 //! documentation.
 
 use std::{
-    any::Any,
-    fmt::Debug,
-    future::Future,
+    any::Any, fmt::Debug, future::Future,
     sync::{
-        atomic::{AtomicUsize, Ordering},
-        OnceLock,
-        Arc,
-        Mutex,
+        atomic::{AtomicUsize, Ordering}, Mutex, OnceLock
     },
-    time::Duration,
+    time::Duration
 };
 
 use tokio::sync::{mpsc, oneshot};
 use log::{info, error, warn, debug, trace};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Error {
     /// Error when sending a message to an actor
-    SendError {
+    Send {
         /// ID of the actor that failed to receive the message
         actor_id: usize,
         /// Additional context about the error
         details: String,
     },
     /// Error when receiving a response from an actor
-    ReceiveError {
+    Receive {
         /// ID of the actor that failed to send a response
         actor_id: usize,
         /// Additional context about the error
         details: String,
     },
     /// Error when a request times out
-    TimeoutError {
+    Timeout {
         /// ID of the actor that timed out
         actor_id: usize,
         /// The duration after which the request timed out
@@ -196,49 +191,35 @@ pub enum Error {
         actual_type_id: std::any::TypeId,
     },
     /// Error when downcasting a reply to the expected type
-    DowncastError {
+    Downcast {
         /// ID of the actor that sent the incompatible reply
         actor_id: usize,
     },
     /// Error when a runtime operation fails
-    RuntimeError {
+    Runtime {
         /// ID of the actor where the runtime error occurred
         actor_id: usize,
         /// Additional context about the error
         details: String,
     },
     /// Error in an actor lifecycle hook
-    LifecycleError {
+    Lifecycle {
         /// ID of the actor where the lifecycle error occurred
         actor_id: usize,
         /// Which lifecycle hook failed
         hook: &'static str,
         /// Custom error from the actor's implementation
-        source_error: Arc<Mutex<dyn Send + Debug>>,
+        source_error: Mutex<Box<dyn Send + Debug>>,
         /// Save the ActorStopReason if it exists before an error occurs
         source_stop_reason: Option<Box<ActorStopReason>>,
-    },
-    /// Error when handling a message
-    MessageHandlerError {
-        /// ID of the actor where the message handling error occurred
-        actor_id: usize,
-        /// Additional context about the error
-        details: String,
     },
     UnexpectedSignal {
         /// ID of the actor that received the unexpected signal
         actor_id: usize,
     },
     /// Error related to mailbox capacity configuration
-    MailboxCapacityError {
+    MailboxCapacity {
         /// The error message
-        message: String,
-    },
-    /// General error with custom message
-    Other {
-        /// ID of the actor related to this error, or 0 if not related to a specific actor
-        actor_id: usize,
-        /// Error message
         message: String,
     },
 }
@@ -246,13 +227,13 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::SendError { actor_id, details } => {
+            Error::Send { actor_id, details } => {
                 write!(f, "Failed to send message to actor {}: {}", actor_id, details)
             }
-            Error::ReceiveError { actor_id, details } => {
+            Error::Receive { actor_id, details } => {
                 write!(f, "Failed to receive reply from actor {}: {}", actor_id, details)
             }
-            Error::TimeoutError { actor_id, timeout, operation } => {
+            Error::Timeout { actor_id, timeout, operation } => {
                 write!(f, "{} operation to actor {} timed out after {:?}",
                        operation, actor_id, timeout)
             }
@@ -265,30 +246,20 @@ impl std::fmt::Display for Error {
                     actual_type_id
                 )
             }
-            Error::DowncastError { actor_id } => {
+            Error::Downcast { actor_id } => {
                 write!(f, "Failed to downcast reply from actor {} to expected type", actor_id)
             }
-            Error::RuntimeError { actor_id, details } => {
+            Error::Runtime { actor_id, details } => {
                 write!(f, "Runtime error in actor {}: {}", actor_id, details)
             }
-            Error::LifecycleError { actor_id, hook, source_error, source_stop_reason } => {
+            Error::Lifecycle { actor_id, hook, source_error, source_stop_reason } => {
                 write!(f, "Actor {} {} error: {:?}, source_stop_reason: {:?} ", actor_id, hook, source_error, source_stop_reason)
             }
-            Error::MessageHandlerError { actor_id, details } => {
-                write!(f, "Error in message handler for actor {}: {}", actor_id, details)
-            }
-            Error::MailboxCapacityError { message } => {
+            Error::MailboxCapacity { message } => {
                 write!(f, "Mailbox capacity error: {}", message)
             }
             Error::UnexpectedSignal { actor_id } => {
                 write!(f, "Actor {} received an unexpected signal", actor_id)
-            }
-            Error::Other { actor_id, message } => {
-                if *actor_id > 0 {
-                    write!(f, "Actor {} error: {}", actor_id, message)
-                } else {
-                    write!(f, "{}", message)
-                }
             }
         }
     }
@@ -420,14 +391,14 @@ pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 /// if no specific capacity is provided to `spawn_with_mailbox_capacity`.
 pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
     if size == 0 {
-        return Err(Error::MailboxCapacityError {
+        return Err(Error::MailboxCapacity {
             message: "Global default mailbox capacity must be greater than 0".to_string(),
         });
     }
 
     CONFIGURED_DEFAULT_MAILBOX_CAPACITY
         .set(size)
-        .map_err(|_| Error::MailboxCapacityError {
+        .map_err(|_| Error::MailboxCapacity {
             message: "Global default mailbox capacity has already been set".to_string(),
         })
 }
@@ -500,7 +471,7 @@ impl ActorRef {
         };
 
         if self.sender.send(envelope).await.is_err() {
-            Err(Error::SendError {
+            Err(Error::Send {
                 actor_id: self.id,
                 details: "Mailbox channel closed".to_string(),
             })
@@ -521,7 +492,7 @@ impl ActorRef {
     {
         tokio::time::timeout(timeout, self.tell(msg))
             .await
-            .map_err(|_| Error::TimeoutError {
+            .map_err(|_| Error::Timeout {
                 actor_id: self.id,
                 timeout,
                 operation: "tell".to_string(),
@@ -544,7 +515,7 @@ impl ActorRef {
         };
 
         if self.sender.send(envelope).await.is_err() {
-            return Err(Error::SendError {
+            return Err(Error::Send {
                 actor_id: self.id,
                 details: "Mailbox channel closed".to_string(),
             });
@@ -554,11 +525,11 @@ impl ActorRef {
             Ok(Ok(reply_any)) => { // recv was Ok, actor reply was Ok
                 match reply_any.downcast::<R>() {
                     Ok(reply) => Ok(*reply),
-                    Err(_) => Err(Error::DowncastError { actor_id: self.id }),
+                    Err(_) => Err(Error::Downcast { actor_id: self.id }),
                 }
             }
             Ok(Err(e)) => Err(e), // recv was Ok, actor reply was Err
-            Err(_recv_err) => Err(Error::ReceiveError { // recv itself failed
+            Err(_recv_err) => Err(Error::Receive { // recv itself failed
                 actor_id: self.id,
                 details: "Reply channel closed unexpectedly".to_string(),
             }),
@@ -578,7 +549,7 @@ impl ActorRef {
     {
         tokio::time::timeout(timeout, self.ask(msg))
             .await
-            .map_err(|_| Error::TimeoutError {
+            .map_err(|_| Error::Timeout {
                 actor_id: self.id,
                 timeout,
                 operation: "ask".to_string(),
@@ -592,7 +563,7 @@ impl ActorRef {
     pub fn kill(&self) -> Result<()> {
         debug!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.id);
         // Use the dedicated terminate_sender with try_send
-        match self.terminate_sender.try_send(ControlSignal::Terminate) { // Changed to ControlSignal::Terminate
+        match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
                 // Successfully sent the terminate message.
                 Ok(())
@@ -670,7 +641,7 @@ impl ActorRef {
         M: Send + 'static,
     {
         let rt = tokio::runtime::Handle::try_current().map_err(|e| {
-            Error::RuntimeError {
+            Error::Runtime {
                 actor_id: self.id, // Assuming self.id is accessible here. If not, need to adjust.
                 details: format!("No tokio runtime available for tell_blocking: {}", e),
             }
@@ -681,7 +652,7 @@ impl ActorRef {
                 rt.block_on(async {
                     tokio::time::timeout(duration, self.tell(msg))
                         .await
-                        .map_err(|_| Error::TimeoutError {
+                        .map_err(|_| Error::Timeout {
                             actor_id: self.id,
                             timeout: duration,
                             operation: "tell_blocking".to_string(),
@@ -723,7 +694,7 @@ impl ActorRef {
         R: Send + 'static,
     {
         let rt = tokio::runtime::Handle::try_current().map_err(|e| {
-            Error::RuntimeError {
+            Error::Runtime {
                 actor_id: self.id, // Assuming self.id is accessible here.
                 details: format!("No tokio runtime available for ask_blocking: {}", e),
             }
@@ -734,7 +705,7 @@ impl ActorRef {
                 rt.block_on(async {
                     tokio::time::timeout(duration, self.ask(msg))
                         .await
-                        .map_err(|_| Error::TimeoutError {
+                        .map_err(|_| Error::Timeout {
                             actor_id: self.id,
                             timeout: duration,
                             operation: "ask_blocking".to_string(),
@@ -747,7 +718,7 @@ impl ActorRef {
 }
 
 /// Represents the reason an actor stopped.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ActorStopReason {
     /// Actor stopped normally after processing a `StopGracefully` signal or
     /// when its `Runtime` finished processing messages.
@@ -756,6 +727,16 @@ pub enum ActorStopReason {
     Killed,
     /// Actor stopped due to a failure in one of its lifecycle hooks (`on_start`, `on_stop`).
     Error(Error),
+}
+
+impl std::fmt::Display for ActorStopReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActorStopReason::Normal => write!(f, "Normal"),
+            ActorStopReason::Killed => write!(f, "Killed"),
+            ActorStopReason::Error(e) => write!(f, "Error: {}", e),
+        }
+    }
 }
 
 // pub trait ReplyError: Any + Send + Debug + 'static {}
@@ -783,7 +764,7 @@ pub trait Actor: Send + 'static {
     /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
     /// The `stop_reason` parameter indicates why the actor is stopping.
     /// This method can be used for cleanup tasks.
-    fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: ActorStopReason) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+    fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         async { Ok(()) }
     }
 
@@ -961,10 +942,10 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         // Call on_start
         if let Err(e_on_start) = self.actor.on_start(&self.actor_ref).await {
             error!("Actor {} on_start error: {:?}", actor_id, e_on_start);
-            let lifecycle_error = crate::Error::LifecycleError {
+            let lifecycle_error = crate::Error::Lifecycle {
                 actor_id,
                 hook: "on_start",
-                source_error: Arc::new(Mutex::new(e_on_start)),
+                source_error: Mutex::new(Box::new(e_on_start)),
                 source_stop_reason: None,
             };
             return (self.actor, ActorStopReason::Error(lifecycle_error))
@@ -987,16 +968,7 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                     } else {
                         // Channel closed or unexpected signal, this is an error state.
                         error!("Actor {} terminate_receiver closed unexpectedly or received invalid signal: {:?}", actor_id, maybe_signal);
-                        #[cfg(not(debug_assertions))]
-                        {
-                            // In release mode, we log the error and set a killed reason.
-                            final_reason = ActorStopReason::Error(Error::UnexpectedSignal { actor_id });
-                        }
-                        // In debug mode, we can panic to help the developer.
-                        #[cfg(debug_assertions)]
-                        {
-                            panic!("Actor {} terminate_receiver closed unexpectedly or received invalid signal: {:?}", actor_id, maybe_signal);
-                        }
+                        final_reason = ActorStopReason::Error(Error::UnexpectedSignal { actor_id });
                     }
                     break; // Exit the loop to proceed to on_stop
                 }
@@ -1057,10 +1029,10 @@ impl<T: Actor + MessageHandler> Runtime<T> {
                         Err(e) => { // e is A::Error
                             let error_msg = format!("Actor {} run_loop error: {:?}", actor_id, e);
                             error!("{}", error_msg);
-                            let lifecycle_error = crate::Error::LifecycleError {
+                            let lifecycle_error = crate::Error::Lifecycle {
                                 actor_id,
                                 hook: "run_loop",
-                                source_error: Arc::new(Mutex::new(e)),
+                                source_error: Mutex::new(Box::new(e)),
                                 source_stop_reason: None,
                             };
                             final_reason = ActorStopReason::Error(lifecycle_error);
@@ -1077,14 +1049,14 @@ impl<T: Actor + MessageHandler> Runtime<T> {
         debug!("Actor {} message loop ended. Reason: {:?}", actor_id, final_reason);
 
         // Call on_stop
-        if let Err(e_on_stop) = self.actor.on_stop(&self.actor_ref, final_reason.clone()).await {
+        if let Err(e_on_stop) = self.actor.on_stop(&self.actor_ref, &final_reason).await {
             let error_msg = format!("Actor {} on_stop error: {:?}", actor_id, e_on_stop);
             error!("{}", error_msg);
 
-            let lifecycle_error = crate::Error::LifecycleError {
+            let lifecycle_error = crate::Error::Lifecycle {
                 actor_id,
                 hook: "on_stop",
-                source_error: Arc::new(Mutex::new(e_on_stop)),
+                source_error: Mutex::new(Box::new(e_on_stop)),
                 source_stop_reason: Some(Box::new(final_reason)),
             };
 
@@ -1139,82 +1111,65 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_set_default_mailbox_capacity_ok_then_error_on_already_set() {
-        // This test handles the OnceLock nature: it tries to set a value.
-        // If successful, it verifies that subsequent sets fail.
-        // If the first attempt to set fails (because it's already set),
-        // it still verifies that another attempt to set also fails.
+    async fn test_unexpected_signal_error() {
+        // Define a simple test actor
+        struct TestActor;
 
-        // Use a unique capacity for this test if possible, to minimize interference
-        // if this test doesn't run first.
-        let test_capacity_value = 123;
-        let initial_set_result = set_default_mailbox_capacity(test_capacity_value);
+        impl Actor for TestActor {
+            type Error = anyhow::Error;
+        }
 
-        if initial_set_result.is_ok() {
-            // Successfully set it for the first time (globally for this test run, or specifically by this test)
-            assert_eq!(
-                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
-                test_capacity_value,
-                "Capacity should be the value we just set."
-            );
+        // Implement minimal MessageHandler to make the actor work
+        impl MessageHandler for TestActor {
+            async fn handle(
+                &mut self,
+                _msg_any: Box<dyn Any + Send>,
+                _actor_ref: &ActorRef,
+            ) -> Result<Box<dyn Any + Send>> {
+                Ok(Box::new(()) as Box<dyn Any + Send>)
+            }
+        }
 
-            // Try to set it again with a different value
-            let second_set_result = set_default_mailbox_capacity(456);
-            assert!(second_set_result.is_err(), "Second set attempt should fail.");
-            let err = second_set_result.unwrap_err();
-            assert!(
-                matches!(err, Error::MailboxCapacityError { message } if message == "Global default mailbox capacity has already been set"),
-                "Error message for already set should match."
-            );
-            // Verify the original value is still there
-            assert_eq!(
-                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
-                test_capacity_value,
-                "Capacity should remain the initially set value."
-            );
+        // Create actor channels manually to trigger the unexpected signal
+        let id = ACTOR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let (mailbox_tx, mailbox_rx) = mpsc::channel::<MailboxMessage>(10);
 
-            // Try to set it again with the same value
-            let third_set_result = set_default_mailbox_capacity(test_capacity_value);
-            assert!(third_set_result.is_err(), "Third set attempt (same value) should fail.");
-            let err = third_set_result.unwrap_err();
-            assert!(
-                matches!(err, Error::MailboxCapacityError { message } if message == "Global default mailbox capacity has already been set"),
-                "Error message for already set (same value) should match."
-            );
-            assert_eq!(
-                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
-                test_capacity_value,
-                "Capacity should still be the initially set value."
-            );
-        } else {
-            // The default capacity was already set before this test (or this part of the test) ran.
-            // This is expected if another test that calls set_default_mailbox_capacity ran first.
-            let current_set_value = CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().expect("OnceLock should be set if initial_set_result failed because it was already set.");
-            println!(
-                "Note: Default mailbox capacity was already set to {:?} before this test scenario.",
-                current_set_value
-            );
-            let err = initial_set_result.unwrap_err();
-            assert!(
-                matches!(err, Error::MailboxCapacityError { message } if message == "Global default mailbox capacity has already been set"),
-                "Error message for initial set attempt (when already set) should match."
-            );
+        // Create the terminate channel manually
+        let (terminate_tx, mut terminate_rx) = mpsc::channel::<ControlSignal>(1);
 
+        // Create an actor_ref with the channels
+        let actor_ref = ActorRef::new_internal(id, mailbox_tx, terminate_tx);
 
-            // Even if already set, trying to set it again (e.g. to a different value) must still fail.
-            let subsequent_set_result = set_default_mailbox_capacity(789);
-            assert!(subsequent_set_result.is_err(), "Subsequent set attempt (when already set by other test) should fail.");
-            let err = subsequent_set_result.unwrap_err();
-            assert!(
-                matches!(err, Error::MailboxCapacityError { message } if message == "Global default mailbox capacity has already been set"),
-                "Error message for subsequent set (when already set by other test) should match."
-            );
-            // And the value should remain what it was.
-                assert_eq!(
-                *CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().unwrap(),
-                *current_set_value,
-                "Capacity should remain the value set by a previous test/operation."
-            );
+        // But create a separate terminate_rx that is modified to simulate an error
+        // We'll drop the original receiver and replace it with our test one
+        drop(terminate_rx);
+        let (test_tx, test_rx) = mpsc::channel::<ControlSignal>(1);
+
+        // Close the test_tx immediately to ensure the channel is closed
+        drop(test_tx);
+
+        // Now test_rx represents a closed channel, which will return None on recv()
+        terminate_rx = test_rx;
+
+        // Create a runtime with our test actor
+        let runtime = Runtime::new(TestActor, actor_ref.clone(), mailbox_rx, terminate_rx);
+
+        // Spawn the runtime on a separate task
+        let join_handle = tokio::spawn(runtime.run_actor_lifecycle());
+
+        // Wait for the actor to stop
+        let (_, stop_reason) = join_handle.await.unwrap();
+
+        assert!(format!("{}", stop_reason).contains("received an unexpected signal"));
+
+        // Check if we got the expected error
+        match stop_reason {
+            ActorStopReason::Error(Error::UnexpectedSignal { actor_id }) => {
+                assert_eq!(actor_id, id, "Actor ID should match");
+            },
+            other => {
+                panic!("Expected UnexpectedSignal error, got: {:?}", other);
+            }
         }
     }
 }

@@ -94,7 +94,7 @@ impl Actor for Philosopher {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
         println!(
             "Philosopher {} ({}) is leaving. Eaten: {}. Reason: {:?}.",
             self.id, self.name, self.eat_count, reason
@@ -279,7 +279,7 @@ impl Actor for Table {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: ActorStopReason) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
         println!("Table actor is shutting down. Reason: {:?}", reason);
         Ok(())
     }
