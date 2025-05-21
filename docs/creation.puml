@@ -1,4 +1,4 @@
-@startuml Actor Cration and Spawning
+@startuml Actor Creation and Spawning
 title Actor Creation and Spawning
 
 actor User
@@ -37,6 +37,11 @@ activate run_loop_method
 run_loop_method --> run_lifecycle: Eventually returns Result
 deactivate run_loop_method
 note right of run_lifecycle: Processes messages concurrently with run_loop
+
+run_lifecycle -> on_stop_method: Calls actor.on_stop(actor_ref, &ActorStopReason) when run_loop completes
+activate on_stop_method
+on_stop_method --> run_lifecycle: Returns Result
+deactivate on_stop_method
 
 run_lifecycle --> tokio_spawn: (Eventually completes)
 deactivate run_lifecycle

@@ -31,7 +31,7 @@ DynMsgHandler -> UserHandler: Calls specific actor.handle(MyMessage)
 activate UserHandler
 UserHandler --> DynMsgHandler: Returns Reply (e.g., ())
 deactivate UserHandler
-DynMsgHandler --> Runtime_obj: Returns Boxed Reply
+DynMsgHandler --> Runtime_obj: Returns Ok(Boxed Reply) or Err if message handling fails
 deactivate DynMsgHandler
 note right of Runtime_obj: For tell, reply is not sent back to client
 deactivate Runtime_obj
@@ -53,10 +53,14 @@ DynMsgHandler -> UserHandler: Calls specific actor.handle(MyQuery)
 activate UserHandler
 UserHandler --> DynMsgHandler: Returns QueryReply
 deactivate UserHandler
-DynMsgHandler --> Runtime_obj: Returns Boxed QueryReply
+DynMsgHandler --> Runtime_obj: Returns Ok(Boxed QueryReply) or Err
 deactivate DynMsgHandler
 
-Runtime_obj -> OneshotChannel: reply_tx.send(Ok(Boxed QueryReply))
+alt Success
+  Runtime_obj -> OneshotChannel: reply_tx.send(Ok(Boxed QueryReply))
+else Error
+  Runtime_obj -> OneshotChannel: reply_tx.send(Err(error))
+end
 deactivate Runtime_obj
 OneshotChannel --> ActorRef_obj: Receives reply
 deactivate OneshotChannel

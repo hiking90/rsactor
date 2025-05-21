@@ -18,12 +18,6 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead.
 
-## Version Differences
-
-### Key Changes in v0.4.0 (compared to v0.3.0 and below)
-*   **Optimized `ActorRef` Passing (Reference-Based)**: In v0.4.0, `ActorRef` is passed by reference (`&ActorRef`) to lifecycle methods like `on_start` and `on_stop`. This change focuses on optimization by reducing `ActorRef` cloning in these common method calls, rather than being a substantial performance gain across the board. `ActorRef` remains clonable for explicit duplication if needed.
-*   **Introduction of the `run_loop` Method**: v0.4.0 introduces the `run_loop` method as described in the Core Features section. This distinctive feature gives developers freedom to define custom task logic while maintaining reliable framework-managed execution.
-
 ## Getting Started
 
 ### 1. Add Dependency
