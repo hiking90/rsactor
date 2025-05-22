@@ -79,14 +79,22 @@
 //!     // Optional: Implement run_loop for the actor's main execution logic.
 //!     // This method is called after on_start. If it returns Ok(()), the actor stops normally.
 //!     // If it returns Err(_), the actor stops due to an error.
-//!     // async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
-//!     //     // Example: Perform some work in a loop or a long-running task.
-//!     //     // loop {
-//!     //     //     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-//!     //     //     // if some_condition { break; } // Or return Ok(()) to stop.
-//!     //     // }
-//!     //     Ok(()) // Actor stops when run_loop completes.
-//!     // }
+//!     async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+//!         let mut tick_300ms = tokio::time::interval(std::time::Duration::from_millis(300));
+//!         let mut tick_1s = tokio::time::interval(std::time::Duration::from_secs(1));
+//!         loop {
+//!             tokio::select! {
+//!                 _ = tick_300ms.tick() => {
+//!                     println!("Tick: 300ms");
+//!                 }
+//!                 _ = tick_1s.tick() => {
+//!                     println!("Tick: 1s");
+//!                 }
+//!             }
+//!         }
+//!         // If you add a break to exit the loop, return Ok(()) here to satisfy the function signature.
+//!         // Ok(())
+//!     }
 //! }
 //!
 //! // 3. Define your message types
