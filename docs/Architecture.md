@@ -16,7 +16,7 @@ This section describes the sequence of events when a user defines an actor and s
 
 **Diagram:**
 
-![Actor Creation and Spawning](./Actor%20Cration%20and%20Spawning.png)
+![Actor Creation and Spawning](./Actor%20Creation%20and%20Spawning.png)
 
 **Description:**
 1.  The user defines their actor structure and implements the necessary `Actor` and `Message<M>` traits.
@@ -31,7 +31,7 @@ This section describes the sequence of events when a user defines an actor and s
 4.  Inside the spawned Tokio task, `Runtime::run_actor_lifecycle()` begins execution:
     a.  It first calls the actor's `on_start()` lifecycle hook.
     b.  If `on_start()` is successful, the runtime calls the actor's `run_loop()` lifecycle hook which contains the actor's main execution logic and runs for its lifetime.
-    c.  Concurrently with `run_loop()`, the runtime also processes messages from the mailbox.
+    c.  Concurrently with `run_loop()`, the runtime also processes messages from the mailbox using `tokio::select!`. This enables the actor to handle incoming messages while executing its `run_loop()` logic, providing true concurrent operation within the actor's task.
     d.  If `on_start()` fails, or when `run_loop()` completes or fails, the actor stops, and `on_stop()` is called with the appropriate stop reason.
 
 ## 2. Message Passing (tell/ask)
@@ -94,8 +94,8 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
     a.  The client calls `actor_ref.stop().await`.
     b.  `ActorRef::stop` sends a `MailboxMessage::StopGracefully` message to the actor via its main mailbox channel.
     c.  The `Runtime`, in its message loop, receives `StopGracefully`.
-    d.  It sets a flag indicating graceful shutdown (`gracefully_stopping = true`) and sets the `final_reason` to `ActorStopReason::Normal`.
-    e.  Crucially, it closes its main mailbox receiver (`self.receiver.close()`). This prevents new messages from being accepted, but the loop continues to process any messages already queued in the mailbox.
+    d.  It sets the `final_reason` to `ActorStopReason::Normal` (which is already the default).
+    e.  The message loop is broken, and after the loop, both the main mailbox receiver and terminate receiver are closed. This prevents new messages from being processed.
     f.  Once all existing messages are processed, `self.receiver.recv()` will return `None`, causing the message loop to break.
     g.  After the loop, `Runtime` calls the actor's `on_stop()` lifecycle hook with `ActorStopReason::Normal`.
     h.  The actor's task then finishes, and the `JoinHandle` resolves.

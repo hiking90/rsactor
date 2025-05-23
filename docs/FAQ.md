@@ -18,7 +18,7 @@ A3:
 *   **Scope:** `rsActor` is designed for local, in-process actors only and does not support remote actors or clustering, unlike some more comprehensive frameworks.
 *   **Simplicity:** It aims for a smaller API surface and less complexity compared to frameworks like Actix.
 *   **Features:** As mentioned in the `README.md`, compared to Kameo, `rsActor` uses a concrete `ActorRef` with runtime type checking for replies, does not include built-in actor linking or supervision, is tightly coupled with Tokio, and uses the `impl_message_handler!` macro to simplify message handler boilerplate.
-*   **Error Handling:** Error handling is primarily through `anyhow::Result` and the `ActorStopReason::Error` variant.
+*   **Error Handling:** Error handling is primarily through the framework's own `Result<T>` type (which uses `rsactor::Error`) and the `ActorStopReason::Error` variant containing a `rsactor::Error`.
 
 ## Actor Definition and Usage
 
@@ -70,49 +70,6 @@ A11: Yes, for a given actor instance, messages sent to its mailbox are processed
 
 A12: Sending a message to an actor whose mailbox channel is closed (which happens when it's stopped or killed) will result in an error. For example, `tell` would return `Err(...)` and `ask` would also return `Err(...)` indicating the failure to send or receive a reply.
 
-**Q: Do the `tell()` or `ask()` methods in `ActorRef` not have a timeout feature? If needed, how can it be implemented?**
-
-A: Yes, the standard `tell()` and `ask()` methods in `rsActor`'s `ActorRef` do not have direct timeout parameters.
-
-If you need to apply a timeout to an `ask()` call, you can use the `tokio::time::timeout` function to wrap the `ask()` call.
-
-Here is a simple example of applying a timeout to `ask()`:
-
-```rust
-use rsactor::{ActorRef, Message}; // ... (other necessary imports)
-use std::time::Duration;
-use anyhow::Result;
-
-// ... (actor and message definitions)
-
-async fn ask_with_timeout<M, R>(
-    actor_ref: &ActorRef,
-    message: M,
-    timeout_duration: Duration,
-) -> Result<R, anyhow::Error>
-where
-    M: Send + 'static,
-    R: Send + 'static,
-{
-    match tokio::time::timeout(timeout_duration, actor_ref.ask(message)).await {
-        Ok(Ok(reply)) => Ok(reply), // Successfully received response within timeout
-        Ok(Err(e)) => Err(e), // Error occurred in ask itself (actor sent an error in response, or communication failed)
-        Err(_) => Err(anyhow::anyhow!("Request timed out after {:?}", timeout_duration)), // Timeout occurred
-    }
-}
-
-// Usage example:
-// let reply: Result<MyReplyType, _> = ask_with_timeout(
-//     &my_actor_ref,
-//     MyMessage,
-//     Duration::from_secs(5)
-// ).await;
-```
-
-In the case of `tell()`, it's a "fire-and-forget" method, so a timeout is generally not necessary. The `tell()` call itself is an operation to send a message to the actor's mailbox, and it's rare for this operation to take a very long time. If you want to control the possibility of a `tell()` call blocking (e.g., if the mailbox is full), you might need to directly use `ActorRef`'s `sender.send_timeout()` (if `mpsc::Sender` provides that functionality) or similar Tokio features, but this is not exposed in `rsActor`'s standard `tell()` interface.
-
-If you need to communicate with an actor within `tokio::task::spawn_blocking` and require a timeout, you can use `ActorRef`'s `ask_blocking(message, timeout)` and `tell_blocking(message, timeout)` methods. These methods directly support a timeout parameter.
-
 ## Actor Lifecycle and Termination
 
 **Q13: How do I manage an actor's lifecycle?**
@@ -135,7 +92,7 @@ The `kill` signal is sent over a dedicated, prioritized channel to ensure it can
 A15: `ActorStopReason` is an enum that indicates why an actor stopped. Its variants are:
 *   `Normal`: The actor stopped gracefully (e.g., via `stop()` or if its `ActorRef` was dropped and no more messages could arrive).
 *   `Killed`: The actor was terminated by a `kill()` signal.
-*   `Error(anyhow::Error)`: The actor stopped due to an error (e.g., a panic in a message handler, or an error returned from `on_start` or `on_stop`).
+*   `Error(rsactor::Error)`: The actor stopped due to an error (e.g., an error returned from `on_start`, `on_stop`, or `run_loop`).
 
 **Q16: What is the purpose of the `JoinHandle<(T, ActorStopReason)>` returned by `spawn`?**
 
@@ -146,9 +103,9 @@ A16: The `JoinHandle` allows you to await the termination of the actor's task. W
 **Q17: How are errors handled in actors?**
 
 A17:
-*   **Message Handling:** If the `handle` method of your `Message<M>` trait implementation returns an `Err` (assuming its `Reply` type is a `Result`), this error will be propagated back to the caller of `ask`. For `tell`, the error is effectively ignored by the sender but will be logged by the actor runtime if it's an `anyhow::Error` from the `MessageHandler` trait itself.
-*   **Lifecycle Hooks:** If `on_start` returns an error, the actor will fail to start, and `on_stop` will be called with `ActorStopReason::Error`. If `on_stop` itself returns an error, this will also be reflected in the final `ActorStopReason` (potentially wrapping the original reason).
-*   **Panics:** If a message handler panics, the `rsActor` runtime does not currently have explicit panic handling that converts panics into `ActorStopReason::Error`. A panic in an actor task will typically cause that task to terminate, and the `JoinHandle` would yield an error when awaited. It's generally recommended to handle errors gracefully within your actor logic and return `Result` types.
+*   **Message Handling:** The `Message<M>::handle` method returns a value of type `Self::Reply` which is not necessarily a `Result`. If the `MessageHandler::handle` implementation (generated by the `impl_message_handler!` macro) encounters an error, such as when trying to handle an unhandled message type, this error will be propagated back to the caller of `ask`. For `tell`, errors from message handling are logged but not returned to the sender since `tell` doesn't wait for a reply.
+*   **Lifecycle Hooks:** If `on_start` returns an error, the actor will fail to start, and the actor will immediately stop with `ActorStopReason::Error` containing a `Lifecycle` error that wraps the original error (note that `on_stop` isn't called in this case). If `run_loop` returns an error, the actor will stop with `ActorStopReason::Error` and `on_stop` will be called. If `on_stop` itself returns an error, this will be reflected in the final `ActorStopReason::Error` (wrapping the original reason, if there was one).
+*   **Panics:** If a message handler panics, the `rsActor` runtime does not currently have explicit panic handling that converts panics into `ActorStopReason::Error`. A panic in an actor task will typically cause that task to terminate, and the `JoinHandle` would yield an `Err` with a panic error when awaited. In debug builds, the framework will deliberately panic when encountering unhandled message types to help developers identify errors. It's generally recommended to handle errors gracefully within your actor logic and return `Result` types.
 
 ## Configuration and Advanced Topics
 
@@ -171,20 +128,79 @@ A20: Yes. Actors can hold `ActorRef`s to other actors and send messages to them 
 
 A21: No, `rsActor` is designed for local, in-process actor systems only. It does not provide features for network transparency or communication between actors in different processes or on different machines.
 
-**Q22: How can I effectively use the `run_loop` method in my actors?**
+**Q22: Can I use generic types with actors?**
 
-A22: The `run_loop` method is a powerful feature of the `rsActor` framework that provides a clean way to implement continuous or periodic tasks within an actor. It is called after `on_start` and runs for the entire lifetime of the actor. Here's how to use it effectively:
+A22: Yes, `rsActor` supports generic actors. You can define an actor with generic type parameters:
+
+```rust
+struct GenericActor<T: Send + 'static> {
+    value: T,
+}
+
+impl<T: Send + 'static> Actor for GenericActor<T> {
+    type Error = anyhow::Error;
+}
+
+impl<T: Send + Clone + 'static> Message<GetValueMsg> for GenericActor<T> {
+    type Reply = T;
+    async fn handle(&mut self, _msg: GetValueMsg, _: &ActorRef) -> Self::Reply {
+        self.value.clone()
+    }
+}
+```
+
+However, due to the nature of Rust's macro system, the `impl_message_handler!` macro must be called with concrete type instances rather than with type parameters:
+
+```rust
+// This won't work:
+// impl_message_handler!(GenericActor<T>, [GetValueMsg]);
+
+// Instead, do this for each concrete type you need:
+impl_message_handler!(GenericActor<u32>, [GetValueMsg]);
+impl_message_handler!(GenericActor<String>, [GetValueMsg]);
+```
+
+The limitation exists because macros in Rust are expanded at compile time before type checking occurs, so they can't directly work with generic type parameters.
+
+To use generic actors:
+1. Define your actor struct with appropriate type parameters
+2. Implement the `Actor` trait generically
+3. Implement message handling for the generic actor
+4. Call `impl_message_handler!` specifically for each concrete type instantiation you need
+5. When creating and spawning actors, use concrete types
+
+```rust
+// Example usage:
+let actor = GenericActor::new(123u32);
+let (actor_ref, handle) = spawn(actor);
+let reply: u32 = actor_ref.ask(GetValueMsg).await.expect("ask failed");
+```
+
+**Q23: How can I effectively use the `run_loop` method in my actors?**
+
+A23: The `run_loop` method is a powerful feature of the `rsActor` framework that provides a clean way to implement continuous or periodic tasks within an actor. It is called after `on_start` and runs for the entire lifetime of the actor. Here's how to use it effectively:
 
 *   **Continuous Processing:** The `run_loop` method is ideal for implementing continuous processing logic that should run throughout the actor's lifetime. Unlike spawning separate tasks, work in the `run_loop` is part of the actor's main execution flow.
 
-*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `run_loop`. For example:
+*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `run_loop`. `tokio::select!` makes it easy to handle multiple timers concurrently. For example:
 
     ```rust
     async fn run_loop(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut fast_interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut slow_interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
         loop {
-            interval.tick().await;
-            // Perform periodic work here
+            tokio::select! {
+                _ = fast_interval.tick() => {
+                    // Handle high-frequency tasks (every 500ms)
+                    self.process_high_frequency_work();
+                }
+                _ = slow_interval.tick() => {
+                    // Handle low-frequency tasks (every 5 seconds)
+                    self.process_low_frequency_work().await?;
+                }
+                // You can add more branches as needed, including channels, futures, etc.
+            }
         }
     }
     ```

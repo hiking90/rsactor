@@ -9,8 +9,8 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 
 *   **Minimalist Actor System**: Focuses on core actor model primitives.
 *   **Message Passing**:
-    *   `ask`: Send a message and asynchronously await a reply.
-    *   `tell`: Send a message without waiting for a reply.
+    *   `ask`/`ask_with_timeout`: Send a message and asynchronously await a reply.
+    *   `tell`/`tell_with_timeout`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
 *   **Actor Lifecycle with Simple Yet Powerful Task Control**: `on_start`, `on_stop`, and `run_loop` hooks form the actor's lifecycle. The distinctive `run_loop` feature (added in v0.4.0) provides a dedicated task execution environment that users can control with simple yet powerful primitives, unlike other actor frameworks. This gives developers complete control over their actor's task logic while the framework manages the underlying execution, eliminating the need for separate `tokio::spawn` calls. All lifecycle hooks are optional and have default implementations.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
@@ -18,19 +18,13 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead.
 
-## Version Differences
-
-### Key Changes in v0.4.0 (compared to v0.3.0 and below)
-*   **Optimized `ActorRef` Passing (Reference-Based)**: In v0.4.0, `ActorRef` is passed by reference (`&ActorRef`) to lifecycle methods like `on_start` and `on_stop`. This change focuses on optimization by reducing `ActorRef` cloning in these common method calls, rather than being a substantial performance gain across the board. `ActorRef` remains clonable for explicit duplication if needed.
-*   **Introduction of the `run_loop` Method**: v0.4.0 introduces the `run_loop` method as described in the Core Features section. This distinctive feature gives developers freedom to define custom task logic while maintaining reliable framework-managed execution.
-
 ## Getting Started
 
 ### 1. Add Dependency
 
 ```toml
 [dependencies]
-rsactor = "0.4" # Check crates.io for the latest version
+rsactor = "0.5" # Check crates.io for the latest version
 ```
 
 ### 2. Basic Usage Example
@@ -54,30 +48,45 @@ impl Actor for CounterActor {
     // on_start, on_stop, and run_loop are optional and have default implementations.
     // You can uncomment and implement them if needed.
 
-    // async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-    //     info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.count);
-    //     Ok(())
-    // }
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
+        info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.nt);
+        Ok(())
+    }
 
     // async fn on_stop(&mut self, actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
     //     info!("CounterActor (id: {}) stopping. Final count: {}. Reason: {:?}", actor_ref.id(), self.count, stop_reason);
     //     Ok(())
     // }
 
-    // async fn run_loop(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-    //     // Example: Log a message periodically or perform a long-running task.
-    //     // info!("CounterActor (id: {}) run_loop called.", actor_ref.id());
-    //     // The actor will stop when this method returns Ok(()) or Err(_).
-    //     loop {
-    //         // IMPORTANT: Every loop in run_loop MUST have at least one .await point
-    //         // to enable task switching so messages can be processed
-    //         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    // The main execution loop for the actor.
     //
-    //         // Perform your periodic task here
-    //         // if some_condition { break; } // Or return Ok(()) to stop.
-    //     }
-    //     Ok(()) // Actor stops when run_loop completes.
-    // }
+    // This method sets up two periodic timers and continuously processes their events:
+    // - One timer fires every 300 milliseconds
+    // - Another timer fires every 1 second
+    //
+    // The method employs Tokio's select mechanism to efficiently wait for either timer to ck,
+    // and then performs the corresponding action. This creates a non-blocking event loop at
+    // can handle multiple timing-based operations concurrently.
+    //
+    // Note: The actor will continue running until this method returns, either with Ok(())
+    // with an error. As currently implemented, this loop will run indefinitely.
+    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+        let mut tick_300ms = tokio::time::interval(std::time::Duration::from_millis));
+        let mut tick_1s = tokio::time::interval(std::time::Duration::from_secs(1));
+        // The actor will stop when this method returns Ok(()) or Err(_).
+        loop {
+            tokio::select! {
+                _ = tick_300ms.tick() => {
+                    println!("Tick: 300ms");
+                }
+                _ = tick_1s.tick() => {
+                    println!("Tick: 1s");
+                }
+            }
+        }
+        // If you add a break to exit the loop, return Ok(()) here to satisfy the tion signature.
+        // Ok(())
+    }
 }
 
 // Define message types
