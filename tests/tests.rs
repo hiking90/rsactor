@@ -255,6 +255,8 @@ async fn test_actor_ref_kill() {
 
     let (returned_actor, reason) = handle.await.expect("Actor task failed to complete");
 
+    assert_eq!(format!("{}", reason), "Killed");
+
     println!("Actor value: {:?}", returned_actor.counter);
 
     assert!(matches!(reason, ActorStopReason::Killed), "Stop reason was {:?}, expected ActorStopReason::Killed", reason);
@@ -693,6 +695,8 @@ async fn test_actor_with_string_error_type() {
     // Stop the actor
     actor_ref.stop().await.expect("Failed to stop StringErrorActor");
     let (_actor_state, reason) = handle.await.expect("StringErrorActor task failed");
+
+    assert_eq!(reason.to_string(), "Normal");
 
     assert!(matches!(reason, ActorStopReason::Normal), "StringErrorActor did not stop normally. Reason: {:?}", reason);
     assert!(*on_stop_called.lock().await, "on_stop should be called for StringErrorActor");
@@ -1183,6 +1187,9 @@ impl_message_handler!(generic_actor::GenericActor<u32>, [generic_actor::GetValue
 async fn test_generic_actor() {
     let actor = generic_actor::GenericActor::new(123u32);
     let (actor_ref, handle) = spawn(actor);
+    let expected_type_name = std::any::type_name::<generic_actor::GenericActor<u32>>();
+    assert_eq!(actor_ref.type_name(), expected_type_name);
+    assert_eq!(actor_ref.name(), format!("{}#{}", expected_type_name, actor_ref.id()));
     let reply: u32 = actor_ref.ask(generic_actor::GetValueMsg).await.expect("ask failed for GetValueMsg");
     assert_eq!(reply, 123);
     actor_ref.stop().await.expect("Failed to stop generic actor");
