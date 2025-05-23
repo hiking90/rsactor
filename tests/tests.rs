@@ -870,7 +870,7 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
 
     // Allow the actor to process messages (SlowMsg, then UpdateCounterMsg(1))
     // The UpdateCounterMsg(2) from tell_blocking should have failed and not be in the queue.
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg (100ms) + UpdateCounterMsg(1)
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg (100ms) + UpdateCounterMsg
 
     actor_ref.stop().await.expect("Failed to stop actor");
     let (actor_state, _reason) = handle.await.expect("Actor task failed");
@@ -1134,13 +1134,69 @@ async fn test_mailbox_capacity_error_when_full() {
         "Expected timeout error when mailbox is full, got: {:?}", result);
 
     // Allow the actor to process the queued messages
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg + UpdateCounterMsg
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg (100ms) + UpdateCounterMsg
 
-    // Ensure only the first UpdateCounterMsg was processed
-    assert_eq!(*counter.lock().await, 1, "Counter should be 1, indicating only UpdateCounterMsg(1) was processed");
-
-    // Clean up the actor
     actor_ref.stop().await.expect("Failed to stop actor");
-    handle.await.expect("Actor task failed");
-    assert!(*on_stop_called.lock().await);
+    let (actor_state, _reason) = handle.await.expect("Actor task failed");
+    assert!(*actor_state.on_stop_called.lock().await);
+    // Verify that only UpdateCounterMsg(1) was processed.
+    assert_eq!(*actor_state.counter.lock().await, 1, "Counter should be 1 after SlowMsg and UpdateCounterMsg(1)");
+}
+
+// === Generic Actor Test ===
+mod generic_actor {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    // Generic actor that can hold any type T
+    #[derive(Debug)]
+    pub(crate) struct GenericActor<T: Send + 'static> {
+        value: Arc<Mutex<T>>,
+    }
+
+    impl<T: Send + 'static> GenericActor<T> {
+        pub(crate) fn new(value: T) -> Self {
+            Self { value: Arc::new(Mutex::new(value)) }
+        }
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct GetValueMsg;
+
+    impl<T: Send + Clone + 'static> Message<GetValueMsg> for GenericActor<T> {
+        type Reply = T;
+        async fn handle(&mut self, _msg: GetValueMsg, _: &ActorRef) -> Self::Reply {
+            self.value.lock().await.clone()
+        }
+    }
+
+    impl<T: Send + 'static> Actor for GenericActor<T> {
+        type Error = anyhow::Error;
+}
+}
+
+// The impl_message_handler! macro must be invoked for concrete types
+impl_message_handler!(generic_actor::GenericActor<u32>, [generic_actor::GetValueMsg]);
+
+#[tokio::test]
+async fn test_generic_actor() {
+    let actor = generic_actor::GenericActor::new(123u32);
+    let (actor_ref, handle) = spawn(actor);
+    let reply: u32 = actor_ref.ask(generic_actor::GetValueMsg).await.expect("ask failed for GetValueMsg");
+    assert_eq!(reply, 123);
+    actor_ref.stop().await.expect("Failed to stop generic actor");
+    handle.await.expect("Generic actor task failed");
+}
+
+impl_message_handler!(generic_actor::GenericActor<u64>, [generic_actor::GetValueMsg]);
+
+#[tokio::test]
+async fn test_generic_actor_u64() {
+    let actor = generic_actor::GenericActor::new(9223372036854775808u64); // 2^63, large number to test u64 specifically
+    let (actor_ref, handle) = spawn(actor);
+    let reply: u64 = actor_ref.ask(generic_actor::GetValueMsg).await.expect("ask failed for GetValueMsg");
+    assert_eq!(reply, 9223372036854775808u64);
+    actor_ref.stop().await.expect("Failed to stop generic actor");
+    handle.await.expect("Generic actor task failed");
 }

@@ -48,30 +48,45 @@ impl Actor for CounterActor {
     // on_start, on_stop, and run_loop are optional and have default implementations.
     // You can uncomment and implement them if needed.
 
-    // async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-    //     info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.count);
-    //     Ok(())
-    // }
+    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
+        info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), self.nt);
+        Ok(())
+    }
 
     // async fn on_stop(&mut self, actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
     //     info!("CounterActor (id: {}) stopping. Final count: {}. Reason: {:?}", actor_ref.id(), self.count, stop_reason);
     //     Ok(())
     // }
 
-    // async fn run_loop(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-    //     // Example: Log a message periodically or perform a long-running task.
-    //     // info!("CounterActor (id: {}) run_loop called.", actor_ref.id());
-    //     // The actor will stop when this method returns Ok(()) or Err(_).
-    //     loop {
-    //         // IMPORTANT: Every loop in run_loop MUST have at least one .await point
-    //         // to enable task switching so messages can be processed
-    //         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    // The main execution loop for the actor.
     //
-    //         // Perform your periodic task here
-    //         // if some_condition { break; } // Or return Ok(()) to stop.
-    //     }
-    //     Ok(()) // Actor stops when run_loop completes.
-    // }
+    // This method sets up two periodic timers and continuously processes their events:
+    // - One timer fires every 300 milliseconds
+    // - Another timer fires every 1 second
+    //
+    // The method employs Tokio's select mechanism to efficiently wait for either timer to ck,
+    // and then performs the corresponding action. This creates a non-blocking event loop at
+    // can handle multiple timing-based operations concurrently.
+    //
+    // Note: The actor will continue running until this method returns, either with Ok(())
+    // with an error. As currently implemented, this loop will run indefinitely.
+    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+        let mut tick_300ms = tokio::time::interval(std::time::Duration::from_millis));
+        let mut tick_1s = tokio::time::interval(std::time::Duration::from_secs(1));
+        // The actor will stop when this method returns Ok(()) or Err(_).
+        loop {
+            tokio::select! {
+                _ = tick_300ms.tick() => {
+                    println!("Tick: 300ms");
+                }
+                _ = tick_1s.tick() => {
+                    println!("Tick: 1s");
+                }
+            }
+        }
+        // If you add a break to exit the loop, return Ok(()) here to satisfy the tion signature.
+        // Ok(())
+    }
 }
 
 // Define message types

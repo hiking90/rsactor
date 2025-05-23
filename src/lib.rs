@@ -436,6 +436,7 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 #[derive(Clone, Debug)]
 pub struct ActorRef {
     id: usize,
+    type_name: &'static str,
     sender: MailboxSender,
     terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
 }
@@ -443,9 +444,15 @@ pub struct ActorRef {
 impl ActorRef {
     // Creates a new ActorRef with a unique ID and the mailbox sender.
     // This is typically called by the System when an actor is spawned.
-    fn new_internal(id: usize, sender: MailboxSender, terminate_sender: mpsc::Sender<ControlSignal>) -> Self { // Changed type
+    fn new(
+        id: usize,
+        type_name: &'static str,
+        sender: MailboxSender,
+        terminate_sender: mpsc::Sender<ControlSignal>,
+    ) -> Self { // Changed type
         ActorRef {
             id,
+            type_name,
             sender,
             terminate_sender,
         }
@@ -454,6 +461,16 @@ impl ActorRef {
     /// Returns the unique ID of the actor.
     pub const fn id(&self) -> usize {
         self.id
+    }
+
+    /// Returns the type name of the actor.
+    pub const fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+
+    /// Returns a string representation of the actor's name, including its type and ID.
+    pub fn name(&self) -> String {
+        format!("{}#{}", self.type_name, self.id)
     }
 
     /// Checks if the actor is still alive by verifying if its channels are open.
@@ -1104,7 +1121,11 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     // This ensures that a kill signal can be sent even if the main mailbox is full.
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
-    let actor_ref = ActorRef::new_internal(id, mailbox_tx, terminate_tx); // Pass terminate_tx
+    let actor_ref = ActorRef::new(
+        id,
+        std::any::type_name::<T>(), // Use type name of the actor
+        mailbox_tx,
+        terminate_tx); // Pass terminate_tx
 
     let runtime = Runtime::new(actor, actor_ref.clone(), mailbox_rx, terminate_rx); // Pass terminate_rx
 
@@ -1146,7 +1167,9 @@ mod tests {
         let (terminate_tx, mut terminate_rx) = mpsc::channel::<ControlSignal>(1);
 
         // Create an actor_ref with the channels
-        let actor_ref = ActorRef::new_internal(id, mailbox_tx, terminate_tx);
+        let actor_ref = ActorRef::new(id,
+            std::any::type_name::<TestActor>(), // Use type name of the actor
+            mailbox_tx, terminate_tx);
 
         // But create a separate terminate_rx that is modified to simulate an error
         // We'll drop the original receiver and replace it with our test one

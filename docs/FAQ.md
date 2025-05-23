@@ -171,9 +171,57 @@ A20: Yes. Actors can hold `ActorRef`s to other actors and send messages to them 
 
 A21: No, `rsActor` is designed for local, in-process actor systems only. It does not provide features for network transparency or communication between actors in different processes or on different machines.
 
-**Q22: How can I effectively use the `run_loop` method in my actors?**
+**Q22: Can I use generic types with actors?**
 
-A22: The `run_loop` method is a powerful feature of the `rsActor` framework that provides a clean way to implement continuous or periodic tasks within an actor. It is called after `on_start` and runs for the entire lifetime of the actor. Here's how to use it effectively:
+A22: Yes, `rsActor` supports generic actors. You can define an actor with generic type parameters:
+
+```rust
+struct GenericActor<T: Send + 'static> {
+    value: T,
+}
+
+impl<T: Send + 'static> Actor for GenericActor<T> {
+    type Error = anyhow::Error;
+}
+
+impl<T: Send + Clone + 'static> Message<GetValueMsg> for GenericActor<T> {
+    type Reply = T;
+    async fn handle(&mut self, _msg: GetValueMsg, _: &ActorRef) -> Self::Reply {
+        self.value.clone()
+    }
+}
+```
+
+However, due to the nature of Rust's macro system, the `impl_message_handler!` macro must be called with concrete type instances rather than with type parameters:
+
+```rust
+// This won't work:
+// impl_message_handler!(GenericActor<T>, [GetValueMsg]);
+
+// Instead, do this for each concrete type you need:
+impl_message_handler!(GenericActor<u32>, [GetValueMsg]);
+impl_message_handler!(GenericActor<String>, [GetValueMsg]);
+```
+
+The limitation exists because macros in Rust are expanded at compile time before type checking occurs, so they can't directly work with generic type parameters.
+
+To use generic actors:
+1. Define your actor struct with appropriate type parameters
+2. Implement the `Actor` trait generically
+3. Implement message handling for the generic actor
+4. Call `impl_message_handler!` specifically for each concrete type instantiation you need
+5. When creating and spawning actors, use concrete types
+
+```rust
+// Example usage:
+let actor = GenericActor::new(123u32);
+let (actor_ref, handle) = spawn(actor);
+let reply: u32 = actor_ref.ask(GetValueMsg).await.expect("ask failed");
+```
+
+**Q23: How can I effectively use the `run_loop` method in my actors?**
+
+A23: The `run_loop` method is a powerful feature of the `rsActor` framework that provides a clean way to implement continuous or periodic tasks within an actor. It is called after `on_start` and runs for the entire lifetime of the actor. Here's how to use it effectively:
 
 *   **Continuous Processing:** The `run_loop` method is ideal for implementing continuous processing logic that should run throughout the actor's lifetime. Unlike spawning separate tasks, work in the `run_loop` is part of the actor's main execution flow.
 
