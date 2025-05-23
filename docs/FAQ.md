@@ -70,49 +70,6 @@ A11: Yes, for a given actor instance, messages sent to its mailbox are processed
 
 A12: Sending a message to an actor whose mailbox channel is closed (which happens when it's stopped or killed) will result in an error. For example, `tell` would return `Err(...)` and `ask` would also return `Err(...)` indicating the failure to send or receive a reply.
 
-**Q: Do the `tell()` or `ask()` methods in `ActorRef` not have a timeout feature? If needed, how can it be implemented?**
-
-A: Yes, the standard `tell()` and `ask()` methods in `rsActor`'s `ActorRef` do not have direct timeout parameters.
-
-If you need to apply a timeout to an `ask()` call, you can use the `tokio::time::timeout` function to wrap the `ask()` call.
-
-Here is a simple example of applying a timeout to `ask()`:
-
-```rust
-use rsactor::{ActorRef, Message}; // ... (other necessary imports)
-use std::time::Duration;
-use anyhow::Result;
-
-// ... (actor and message definitions)
-
-async fn ask_with_timeout<M, R>(
-    actor_ref: &ActorRef,
-    message: M,
-    timeout_duration: Duration,
-) -> Result<R, anyhow::Error>
-where
-    M: Send + 'static,
-    R: Send + 'static,
-{
-    match tokio::time::timeout(timeout_duration, actor_ref.ask(message)).await {
-        Ok(Ok(reply)) => Ok(reply), // Successfully received response within timeout
-        Ok(Err(e)) => Err(e), // Error occurred in ask itself (actor sent an error in response, or communication failed)
-        Err(_) => Err(anyhow::anyhow!("Request timed out after {:?}", timeout_duration)), // Timeout occurred
-    }
-}
-
-// Usage example:
-// let reply: Result<MyReplyType, _> = ask_with_timeout(
-//     &my_actor_ref,
-//     MyMessage,
-//     Duration::from_secs(5)
-// ).await;
-```
-
-In the case of `tell()`, it's a "fire-and-forget" method, so a timeout is generally not necessary. The `tell()` call itself is an operation to send a message to the actor's mailbox, and it's rare for this operation to take a very long time. If you want to control the possibility of a `tell()` call blocking (e.g., if the mailbox is full), you might need to directly use `ActorRef`'s `sender.send_timeout()` (if `mpsc::Sender` provides that functionality) or similar Tokio features, but this is not exposed in `rsActor`'s standard `tell()` interface.
-
-If you need to communicate with an actor within `tokio::task::spawn_blocking` and require a timeout, you can use `ActorRef`'s `ask_blocking(message, timeout)` and `tell_blocking(message, timeout)` methods. These methods directly support a timeout parameter.
-
 ## Actor Lifecycle and Termination
 
 **Q13: How do I manage an actor's lifecycle?**
@@ -225,14 +182,25 @@ A23: The `run_loop` method is a powerful feature of the `rsActor` framework that
 
 *   **Continuous Processing:** The `run_loop` method is ideal for implementing continuous processing logic that should run throughout the actor's lifetime. Unlike spawning separate tasks, work in the `run_loop` is part of the actor's main execution flow.
 
-*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `run_loop`. For example:
+*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `run_loop`. `tokio::select!` makes it easy to handle multiple timers concurrently. For example:
 
     ```rust
     async fn run_loop(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut fast_interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut slow_interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
         loop {
-            interval.tick().await;
-            // Perform periodic work here
+            tokio::select! {
+                _ = fast_interval.tick() => {
+                    // Handle high-frequency tasks (every 500ms)
+                    self.process_high_frequency_work();
+                }
+                _ = slow_interval.tick() => {
+                    // Handle low-frequency tasks (every 5 seconds)
+                    self.process_low_frequency_work().await?;
+                }
+                // You can add more branches as needed, including channels, futures, etc.
+            }
         }
     }
     ```
