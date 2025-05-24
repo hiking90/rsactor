@@ -1045,8 +1045,13 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                                 if let Some(tx) = reply_channel {
                                     // Send the error back to the asker
                                     if tx.send(Err(e)).is_err() {
-                                        debug!("Actor {} failed to send error reply: receiver dropped.", actor_id);
+                                        error!("Actor {} failed to send error reply: receiver dropped.", actor_id);
                                     }
+                                } else {
+                                    // If no reply channel, we can't send an error back.
+                                    // This is a design choice: if the message was sent with 'tell',
+                                    // we don't have a reply channel to send errors back.
+                                    error!("Actor {} received message without reply channel, cannot send error reply.", actor_id);
                                 }
                                 // User send a wrong message type. So, we don't stop the actor in release mode.
                                 // In debug mode, we can panic to help the developer.
@@ -1074,6 +1079,8 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
             maybe_result = actor.on_run(&actor_ref) => {
                 match maybe_result {
                     Ok(_) => {
+                        // on_run completed successfully, continue processing messages.
+                        debug!("Actor {} on_run completed successfully, continuing.", actor_id);
                     }
                     Err(e) => { // e is A::Error
                         let error_msg = format!("Actor {} on_run error: {:?}", actor_id, e);
