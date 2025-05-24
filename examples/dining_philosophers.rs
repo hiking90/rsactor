@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorStopReason, Message};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -53,6 +53,7 @@ struct StartThinking;
 struct StartEating;
 
 // --- Philosopher Actor Definition ---
+#[derive(Debug)]
 struct Philosopher {
     id: usize, // Logical ID (0 to N-1)
     name: String,
@@ -62,44 +63,37 @@ struct Philosopher {
     has_right_fork: bool,
 }
 
-impl std::fmt::Debug for Philosopher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Philosopher")
-            .field("id", &self.id)
-            .field("name", &self.name)
-            .field("eat_count", &self.eat_count)
-            .finish()
-    }
-}
-
 impl Actor for Philosopher {
+    type Args = (usize, String, ActorRef);
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        println!("Philosopher {} ({}) is joining the table.", self.id, self.name);
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+        let (id, name, table_ref) = args;
+        println!("Philosopher {} ({}) is joining the table.", id, name);
+
+        let philosopher = Self {
+            id,
+            name: name.clone(),
+            table_ref: table_ref.clone(),
+            eat_count: 0,
+            has_left_fork: false,
+            has_right_fork: false,
+        };
 
         // Register with the table
         let register_msg = RegisterPhilosopher {
-            logical_id: self.id,
+            logical_id: id,
             philosopher_ref: actor_ref.clone(),
         };
-        if let Err(e) = self.table_ref.tell(register_msg).await {
-            eprintln!("Philosopher {} ({}): Failed to send registration to table: {:?}", self.id, self.name, e);
+        if let Err(e) = table_ref.tell(register_msg).await {
+            eprintln!("Philosopher {} ({}): Failed to send registration to table: {:?}", id, name, e);
         }
 
         // Start the initial thinking cycle
         if let Err(e) = actor_ref.tell(StartThinking).await {
-            eprintln!("Philosopher {} ({}): Failed to send StartThinking to self: {:?}", self.id, self.name, e);
+            eprintln!("Philosopher {} ({}): Failed to send StartThinking to self: {:?}", id, name, e);
         }
-        Ok(())
-    }
-
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
-        println!(
-            "Philosopher {} ({}) is leaving. Eaten: {}. Reason: {:?}.",
-            self.id, self.name, self.eat_count, reason
-        );
-        Ok(())
+        Ok(philosopher)
     }
 }
 
@@ -262,26 +256,24 @@ impl_message_handler!(Philosopher, [StartThinking, StartEating]);
 
 
 // --- Table Actor Definition ---
+#[derive(Debug)]
 struct Table {
     /// `forks[i]` is true if fork `i` is available, false if taken.
     forks: Vec<bool>,
     /// Stores references to philosopher actors, keyed by their logical ID.
     philosophers: HashMap<usize, ActorRef>,
-    // self_ref: Option<ActorRef>, // Not strictly needed for Table unless it sends messages to itself
 }
 
 impl Actor for Table {
+    type Args = usize;
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        // self.self_ref = Some(actor_ref);
-        println!("Table actor is ready with {} forks.", self.forks.len());
-        Ok(())
-    }
-
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, reason: &ActorStopReason) -> Result<(), Self::Error> {
-        println!("Table actor is shutting down. Reason: {:?}", reason);
-        Ok(())
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+        println!("Table actor is ready with {} forks.", args);
+        Ok(Self {
+            forks: vec![true; args], // All forks initially available
+            philosophers: HashMap::new(),
+        })
     }
 }
 
@@ -361,29 +353,18 @@ async fn main() -> Result<()> {
     println!("Starting Dining Philosophers simulation ({} philosophers, {}ms)...", NUM_PHILOSOPHERS, SIMULATION_TIME_MS);
 
     // Spawn the Table actor
-    let table_actor_logic = Table {
-        forks: vec![true; NUM_PHILOSOPHERS], // All forks initially available
-        philosophers: HashMap::new(),
-    };
-    let (table_ref, table_join_handle) = spawn(table_actor_logic);
+    let (table_ref, table_join_handle) = spawn::<Table>(NUM_PHILOSOPHERS);
     println!("Table actor spawned with ID: {}", table_ref.id());
 
     // Spawn Philosopher actors
     let mut philosopher_refs: Vec<ActorRef> = Vec::new();
-    let mut philosopher_join_handles = Vec::new(); // Vec<tokio::task::JoinHandle<(Philosopher, ActorStopReason)>>
+    let mut philosopher_join_handles = Vec::new();
     let names = ["Socrates", "Plato", "Aristotle", "Descartes", "Kant", "Nietzsche", "Confucius"]; // More names
 
     for i in 0..NUM_PHILOSOPHERS {
         let philosopher_name = if i < names.len() { names[i] } else { "Philosopher" }.to_string();
-        let philosopher_logic = Philosopher {
-            id: i,
-            name: format!("{} #{}", philosopher_name, i),
-            table_ref: table_ref.clone(),
-            eat_count: 0,
-            has_left_fork: false, // Initialize new fields
-            has_right_fork: false, // Initialize new fields
-        };
-        let (p_ref, p_join) = spawn(philosopher_logic);
+        let name = format!("{} #{}", philosopher_name, i);
+        let (p_ref, p_join) = spawn::<Philosopher>((i, name, table_ref.clone()));
         println!("Philosopher {} spawned with Actor ID: {}", i, p_ref.id());
         philosopher_refs.push(p_ref);
         philosopher_join_handles.push(p_join);
@@ -412,17 +393,40 @@ async fn main() -> Result<()> {
     }
 
     println!("\nWaiting for table to terminate...");
-     match table_join_handle.await {
-        Ok((_actor_state, stop_reason)) => println!("Table terminated. Reason: {:?}", stop_reason),
+    match table_join_handle.await {
+        Ok(result) => match result {
+            ActorResult::Completed { actor, .. } => {
+                println!("Table terminated normally. Forks remaining: {:?}", actor.forks);
+            }
+            ActorResult::StartupFailed { cause } => {
+                eprintln!("Table failed to start: {:?}", cause);
+            }
+            ActorResult::RuntimeFailed { cause, .. } => {
+                eprintln!("Table failed during runtime: {:?}", cause);
+            }
+        },
         Err(e) => eprintln!("Error joining table task: {:?}", e),
     }
 
     println!("\n--- Final Eat Counts ---");
     for result in &results {
-        if let Ok((philosopher, _stop_reason)) = result {
-            println!("Philosopher {} ({}): {} meals", philosopher.id, philosopher.name, philosopher.eat_count);
-        } else {
-            eprintln!("Error joining philosopher task: {:?}", result);
+        match result {
+            Ok(ActorResult::Completed { actor, .. }) => {
+                println!("Philosopher {} ({}): {} meals", actor.id, actor.name, actor.eat_count);
+            }
+            Ok(ActorResult::StartupFailed { cause }) => {
+                eprintln!("Philosopher failed to start: {:?}", cause);
+            }
+            Ok(ActorResult::RuntimeFailed { actor: Some(philosopher), cause }) => {
+                eprintln!("Philosopher {} ({}) failed during runtime: {:?}, meals eaten: {}",
+                    philosopher.id, philosopher.name, cause, philosopher.eat_count);
+            }
+            Ok(ActorResult::RuntimeFailed { actor: None, cause }) => {
+                eprintln!("Unknown philosopher failed during runtime: {:?}", cause);
+            }
+            Err(e) => {
+                eprintln!("Error joining philosopher task: {:?}", e);
+            }
         }
     }
 

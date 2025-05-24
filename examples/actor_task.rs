@@ -8,7 +8,7 @@
 //! 2. Send data from the actor to the background task using mpsc::channel
 //! 3. Send data from the background task back to the actor using actor messages
 
-use rsactor::{Actor, ActorRef, ActorStopReason, Message};
+use rsactor::{Actor, ActorRef, Message};
 use anyhow::Result;
 use log::{info, debug};
 use std::time::Duration;
@@ -50,43 +50,30 @@ struct DataProcessorActor {
     running: bool,
 }
 
-impl DataProcessorActor {
-    fn new() -> Self {
-        Self {
+impl Actor for DataProcessorActor {
+    type Args = ();
+    type Error = anyhow::Error;
+
+    async fn on_start(_args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+        info!("DataProcessorActor (id: {}) starting...", actor_ref.id());
+
+        let mut actor = Self {
             factor: 1.0,
             latest_value: None,
             latest_timestamp: None,
             interval: tokio::time::interval(Duration::from_millis(500)),
             running: true,
-        }
-    }
-}
-
-impl Actor for DataProcessorActor {
-    type Error = anyhow::Error;
-
-    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        info!("DataProcessorActor (id: {}) starting...", actor_ref.id());
+        };
 
         // Reset the interval to ensure it starts ticking from now
-        self.interval = tokio::time::interval(Duration::from_millis(500));
-        self.running = true;
+        actor.interval = tokio::time::interval(Duration::from_millis(500));
+        actor.running = true;
 
         info!("DataProcessorActor started with event-based processing");
-        Ok(())
+        Ok(actor)
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
-        info!("DataProcessorActor stopping: {:?}", stop_reason);
-
-        // Stop generating events
-        self.running = false;
-
-        info!("DataProcessorActor stopped with latest value: {:?}", self.latest_value);
-        Ok(())
-    }
-
-    async fn run_loop(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
         loop {
             self.interval.tick().await;
 
@@ -178,8 +165,7 @@ async fn main() -> Result<()> {
     info!("Starting actor-task communication example");
 
     // Create and spawn our actor
-    let actor = DataProcessorActor::new();
-    let (actor_ref, join_handle) = rsactor::spawn(actor);
+    let (actor_ref, join_handle) = rsactor::spawn::<DataProcessorActor>(());
 
     // Wait a bit to get some initial data
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -229,12 +215,25 @@ async fn main() -> Result<()> {
     actor_ref.stop().await?;
 
     // Wait for the actor to finish (this will also wait for the background task)
-    let (actor, stop_reason) = join_handle.await?;
-    println!("Actor stopped with reason: {:?}", stop_reason);
+    let result = join_handle.await?;
 
-    // We can access the final state of the actor
-    println!("Final state: factor={:.2}, latest_value={:?}",
-             actor.factor, actor.latest_value);
+    match result {
+        rsactor::ActorResult::Completed { actor, killed } => {
+            println!("Actor completed successfully. Killed: {}", killed);
+            println!("Final state: factor={:.2}, latest_value={:?}",
+                     actor.factor, actor.latest_value);
+        }
+        rsactor::ActorResult::StartupFailed { cause } => {
+            println!("Actor failed to start: {}", cause);
+        }
+        rsactor::ActorResult::RuntimeFailed { actor, cause } => {
+            println!("Actor failed at runtime: {}", cause);
+            if let Some(actor) = actor {
+                println!("Final state: factor={:.2}, latest_value={:?}",
+                         actor.factor, actor.latest_value);
+            }
+        }
+    }
 
     Ok(())
 }

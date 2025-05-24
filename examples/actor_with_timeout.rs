@@ -14,26 +14,16 @@ struct TimeoutDemoActor {
     name: String,
 }
 
-impl TimeoutDemoActor {
-    fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
-    }
-}
-
 // Implement the Actor trait
 impl Actor for TimeoutDemoActor {
+    type Args = String;
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        info!("{} actor (id: {}) started", self.name, actor_ref.id());
-        Ok(())
-    }
-
-    async fn on_stop(&mut self, actor_ref: &ActorRef, reason: &rsactor::ActorStopReason) -> Result<(), Self::Error> {
-        info!("{} actor (id: {}) stopped. Reason: {:?}", self.name, actor_ref.id(), reason);
-        Ok(())
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+        info!("{} actor (id: {}) started", args, actor_ref.id());
+        Ok(Self {
+            name: args,
+        })
     }
 }
 
@@ -133,7 +123,7 @@ async fn main() -> Result<()> {
     info!("Starting actor_with_timeout example");
 
     // Create and spawn the actor
-    let (actor_ref, join_handle) = spawn(TimeoutDemoActor::new("TimeoutDemo"));
+    let (actor_ref, join_handle) = spawn::<TimeoutDemoActor>("TimeoutDemo".to_string());
 
     // Fast query with plenty of time - should succeed
     info!("\n=== Test 1: Fast query with long timeout (100ms) ===");
@@ -199,9 +189,19 @@ async fn main() -> Result<()> {
     // Stop the actor gracefully and wait for it to terminate
     info!("\n=== Stopping actor ===");
     actor_ref.stop().await?;
-    let (_actor, reason) = join_handle.await?;
+    let result = join_handle.await?;
 
-    info!("Actor stopped with reason: {:?}", reason);
+    match result {
+        rsactor::ActorResult::Completed { actor: _, killed } => {
+            info!("Actor stopped successfully. Killed: {}", killed);
+        }
+        rsactor::ActorResult::StartupFailed { cause } => {
+            info!("Actor failed to start: {}", cause);
+        }
+        rsactor::ActorResult::RuntimeFailed { actor: _, cause } => {
+            info!("Actor failed at runtime: {}", cause);
+        }
+    }
     info!("Example finished successfully");
 
     Ok(())

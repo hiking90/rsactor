@@ -9,43 +9,47 @@ participant "mpsc::channel (mailbox)" as MailboxChannel
 participant "mpsc::channel (terminate)" as TerminateChannel
 participant "Runtime" as Runtime_type
 participant "tokio::spawn" as tokio_spawn
-participant "Runtime::run_actor_lifecycle()" as run_lifecycle
-participant "Actor::on_start()" as on_start_method
-participant "Actor::run_loop()" as run_loop_method
+participant "run_actor_lifecycle()" as run_lifecycle
+participant "Actor::on_start(Args)" as on_start_method
+participant "Actor::on_run()" as on_run_method
 
-User -> UserActor: Defines struct & impl Actor, Message<M>
-User -> spawn_func: Calls spawn(user_actor_instance)
+User -> UserActor: Defines struct & impl Actor (with Args), Message<M>
+User -> spawn_func: Calls spawn(actor_args)
 activate spawn_func
 
 spawn_func -> MailboxChannel: Creates (mailbox_tx, mailbox_rx)
 spawn_func -> TerminateChannel: Creates (terminate_tx, terminate_rx)
 spawn_func -> ActorRef_type: Creates ActorRef (with id, mailbox_tx, terminate_tx)
-spawn_func -> Runtime_type: Creates Runtime (with actor_instance, actor_ref_clone, mailbox_rx, terminate_rx)
-spawn_func -> tokio_spawn: Spawns Runtime::run_actor_lifecycle()
-activate tokio_spawn
+spawn_func -> tokio_spawn: Spawns run_actor_lifecycle(args, actor_ref, ...)\nactivate tokio_spawn
 spawn_func --> User: Returns (ActorRef, JoinHandle)
 deactivate spawn_func
 
 tokio_spawn -> run_lifecycle: Executes
 activate run_lifecycle
-run_lifecycle -> on_start_method: Calls actor.on_start(actor_ref)
+run_lifecycle -> on_start_method: Calls T::on_start(args, actor_ref)
 activate on_start_method
-on_start_method --> run_lifecycle: Returns Result
+on_start_method --> run_lifecycle: Returns Result<ActorInstance, Error>
 deactivate on_start_method
-run_lifecycle -> run_loop_method: Calls actor.run_loop(actor_ref) if on_start is Ok
-activate run_loop_method
-run_loop_method --> run_lifecycle: Eventually returns Result
-deactivate run_loop_method
-note right of run_lifecycle: Processes messages concurrently with run_loop
 
-run_lifecycle -> on_stop_method: Calls actor.on_stop(actor_ref, &ActorStopReason) when run_loop completes
-activate on_stop_method
-on_stop_method --> run_lifecycle: Returns Result
-deactivate on_stop_method
+note right of run_lifecycle
+  If on_start is Ok, actor instance is created.
+  The runtime then repeatedly calls actor.on_run()
+  to get Futures for execution.
+  Message processing happens concurrently.
+end note
+run_lifecycle -> on_run_method: Calls actor.on_run(actor_ref)
+activate on_run_method
+on_run_method --> run_lifecycle: Returns Future<Output = Result<bool, Error>>
+deactivate on_run_method
+note right of run_lifecycle
+  If Future returns Ok(true), on_run may be called again.
+  If Ok(false) or Err, actor stops.
+  The outcome is ActorResult.
+end note
 
-run_lifecycle --> tokio_spawn: (Eventually completes)
+run_lifecycle --> tokio_spawn: (Eventually completes with ActorResult)
 deactivate run_lifecycle
-tokio_spawn --> User: (JoinHandle resolves when task finishes)
+tokio_spawn --> User: (JoinHandle resolves with ActorResult when task finishes)
 deactivate tokio_spawn
 
 @enduml

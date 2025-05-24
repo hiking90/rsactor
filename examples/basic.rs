@@ -1,9 +1,10 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{Actor, ActorRef, ActorStopReason, Message}; // MODIFIED: Added System
+use rsactor::{Actor, ActorRef, Message}; // MODIFIED: Removed ActorStopReason
 use anyhow::Result;
 use log::{info, debug}; // ADDED
+use tokio::time::{interval, Duration}; // MODIFIED: Added MissedTickBehavior
 
 // Message types
 struct Increment; // Message to increment the actor's counter
@@ -12,27 +13,47 @@ struct Decrement; // Message to decrement the actor's counter
 // Define the actor struct
 struct MyActor {
     count: u32, // Internal state of the actor
+    start_up: std::time::Instant, // Optional field to track the start time
+    tick_300ms: tokio::time::Interval, // Interval for 300ms ticks
+    tick_1s: tokio::time::Interval, // Interval for 1s ticks
 }
 
 // Implement the Actor trait for MyActor
 impl Actor for MyActor {
+    type Args = u32;
     type Error = anyhow::Error; // Define the error type for actor operations
 
     // Called when the actor is started
-    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        self.count = 0; // Initialize count on start
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
         info!(
             "MyActor (id: {}) started. Initial count: {}.",
             actor_ref.id(),
-            self.count
+            args
         );
-        Ok(())
+        Ok(MyActor {
+            count: args,
+            start_up: std::time::Instant::now(),
+            tick_300ms: interval(Duration::from_millis(300)),
+            tick_1s: interval(Duration::from_secs(1)),
+        })
     }
 
-    // Called when the actor is stopped
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, _stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
-        info!("MyActor stopping. Final count: {}.", self.count);
-        Ok(())
+    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+        // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
+        tokio::select! {
+            // Executes when the 300ms interval timer ticks.
+            _ = self.tick_300ms.tick() => {
+                println!("300ms tick. Elapsed: {:?}",
+                    self.start_up.elapsed()); // Print the current count
+            }
+            // Executes when the 1s interval timer ticks. (Currently no specific action)
+            _ = self.tick_1s.tick() => {
+                println!("1s tick. Elapsed: {:?} ",
+                    self.start_up.elapsed()); // Print the current count
+            }
+        }
+
+        Ok(true)
     }
 }
 
@@ -79,15 +100,13 @@ rsactor::impl_message_handler!(MyActor, [Increment, Decrement, DummyMessage]);
 async fn main() -> Result<()> {
     env_logger::init(); // Initialize the logger
 
-    // Create an instance of MyActor.
-    // Its `count` field is initialized here, but `on_start` will reset it to 0.
-    let actor_instance = MyActor { count: 100 };
-
     println!("Spawning MyActor...");
     // Spawn the actor. This returns an ActorRef for sending messages
     // and a JoinHandle to await the actor's completion.
-    let (actor_ref, join_handle) = rsactor::spawn(actor_instance); // MODIFIED: use system.spawn and await
+    let (actor_ref, join_handle) = rsactor::spawn::<MyActor>(100); // MODIFIED: use system.spawn and await
     println!("MyActor spawned with ref: {:?}", actor_ref);
+
+    tokio::time::sleep(Duration::from_millis(700)).await;
 
     println!("Sending Increment message...");
     // Send an Increment message and await the reply using `ask`.
@@ -104,6 +123,8 @@ async fn main() -> Result<()> {
     let count_after_inc_2: u32 = actor_ref.ask(Increment).await?;
     println!("Reply after Increment again: {}", count_after_inc_2);
 
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
     // Signal the actor to stop gracefully.
     // The actor will process any remaining messages in its mailbox before stopping.
     println!("Sending StopGracefully message to actor {}.", actor_ref.id());
@@ -112,16 +133,31 @@ async fn main() -> Result<()> {
     // Wait for the actor's task to complete.
     // `join_handle.await` returns a Result containing a tuple:
     // - The actor instance (allowing access to its final state).
-    // - The ActorStopReason indicating why it stopped.
+    // - The ActorResult indicating completion state and returned actor.
     println!("Waiting for actor {} to stop...", actor_ref.id());
-    let (stopped_actor, reason) = join_handle.await?;
-    // Successfully retrieved the actor and its stop reason.
-    println!(
-        "Actor {} stopped. Final count: {}. Reason: {:?}",
-        actor_ref.id(), // actor_ref is still in scope here
-        stopped_actor.count, // Access the final count from the returned actor instance
-        reason // The reason why the actor stopped
-    );
+    let result = join_handle.await?;
+    // Successfully retrieved the actor result.
+    match result {
+        rsactor::ActorResult::Completed { actor, killed } => {
+            println!(
+                "Actor {} stopped. Final count: {}. Killed: {}",
+                actor_ref.id(),
+                actor.count,
+                killed
+            );
+        }
+        rsactor::ActorResult::StartupFailed { cause } => {
+            println!("Actor {} failed to start: {}", actor_ref.id(), cause);
+        }
+        rsactor::ActorResult::RuntimeFailed { actor, cause } => {
+            println!(
+                "Actor {} failed at runtime: {}. Final count: {}",
+                actor_ref.id(),
+                cause,
+                actor.as_ref().map(|a| a.count).unwrap_or(0)
+            );
+        }
+    }
 
     println!("Main function finished.");
     Ok(())
