@@ -816,10 +816,12 @@ pub trait Actor: Sized + Send + 'static {
     /// The primary task execution logic for the actor, designed for iterative execution.
     ///
     /// The `rsactor` runtime calls `on_run` to obtain a `Future` representing a segment of work.
-    /// If this `Future` successfully completes by returning `Ok(true)`, the runtime may invoke
+    /// If this `Future` successfully completes by returning `Ok(())`, the runtime will invoke
     /// `on_run` again to acquire a new `Future` for the next segment of work. This pattern
     /// of repeated invocation allows the actor to manage ongoing or periodic tasks throughout
-    /// its lifecycle. This method replaces the earlier `run_loop` concept.
+    /// its lifecycle. The actor continues running as long as `on_run` returns `Ok(())`.
+    /// If `on_run` returns an `Err(_)`, the actor stops due to an error.
+    /// To stop the actor normally from within `on_run`, it should call `actor_ref.stop()` or `actor_ref.kill()`.
     ///
     /// `on_run`'s execution is concurrent with the actor's message handling capabilities,
     /// enabling the actor to perform background or main-loop tasks while continuing to
@@ -828,9 +830,11 @@ pub trait Actor: Sized + Send + 'static {
     /// # Key characteristics:
     ///
     /// - **Iterative Execution**: The `rsactor` runtime invokes `on_run` to obtain a `Future`.
-    ///   If this `Future` completes with `Ok(true)`, `on_run` may be called again by the
+    ///   If this `Future` completes with `Ok(())`, `on_run` will be called again by the
     ///   runtime to obtain a new `Future`. This allows for continuous or step-by-step
-    ///   task processing throughout the actor's active lifecycle.
+    ///   task processing throughout the actor's active lifecycle. The actor continues as long
+    ///   as `Err(_)` is not returned. For normal termination from within `on_run`,
+    ///   use `actor_ref.stop()` or `actor_ref.kill()`.
     ///
     /// - **State Persistence Across Invocations**: Because `on_run` can be invoked multiple
     ///   times by the runtime (each time generating a new `Future`), any state intended
@@ -864,6 +868,7 @@ pub trait Actor: Sized + Send + 'static {
     ///    # use tokio::time::{Interval, MissedTickBehavior};
     ///    # struct MyActor {
     ///    #     interval: Interval,
+    ///    #     ticks_done: u32, // Example state for controlling shutdown
     ///    # }
     ///    # impl MyActor {
     ///    # fn heavy_computation_needed(&self) -> bool { false }
@@ -874,14 +879,15 @@ pub trait Actor: Sized + Send + 'static {
     ///    # async fn on_start(duration: Self::Args, _actor_ref: &ActorRef) -> std::result::Result<Self, Self::Error> {
     ///    #     let mut interval = tokio::time::interval(duration);
     ///    #     interval.set_missed_tick_behavior(MissedTickBehavior::Delay); // Or Skip, Burst
-    ///    #     Ok(MyActor { interval })
+    ///    #     Ok(MyActor { interval, ticks_done: 0 })
     ///    # }
-    ///    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+    ///    async fn on_run(&mut self, actor_ref: &ActorRef) -> std::result::Result<(), Self::Error> { // Note: Return type is Result<(), Self::Error>
     ///        // self.interval is stored in the MyActor struct.
     ///        self.interval.tick().await; // This await point allows message processing.
     ///
     ///        // Perform the periodic task here.
-    ///        println!("Periodic task executed by actor {}", _actor_ref.name());
+    ///        println!("Periodic task executed by actor {}", actor_ref.name());
+    ///        self.ticks_done += 1;
     ///
     ///        // If your task is computationally intensive, ensure you still have an await
     ///        // or offload it (e.g., using tokio::task::spawn_blocking).
@@ -892,35 +898,53 @@ pub trait Actor: Sized + Send + 'static {
     ///            tokio::task::yield_now().await;
     ///        }
     ///
-    ///        // Return Ok(true) to have on_run called again by the runtime for the next tick.
-    ///        // To stop the actor based on some condition, return Ok(false) or an Err.
-    ///        Ok(true)
+    ///        // To stop the actor normally from within on_run, call actor_ref.stop() or actor_ref.kill().
+    ///        // For example, to stop after 10 ticks:
+    ///        if self.ticks_done >= 10 {
+    ///            println!("Actor {} stopping after {} ticks.", actor_ref.name(), self.ticks_done);
+    ///            actor_ref.stop().await?; // or actor_ref.kill()?
+    ///            // After calling stop/kill, on_run might not be called again as the actor shuts down.
+    ///            // It's good practice to return Ok(()) here, or handle potential errors from stop().
+    ///            return Ok(());
+    ///        }
+    ///
+    ///        // Return Ok(()) to have on_run called again by the runtime for the next tick.
+    ///        // If an Err is returned, the actor stops due to an error.
+    ///        Ok(())
     ///    }
     ///    # }
     ///    ```
     ///
     /// # Termination:
     ///
-    /// The `Future` returned by `on_run` can signal actor termination in two ways when it completes:
-    /// - Resolve to `Ok(false)` for normal, graceful termination.
-    /// - Resolve to `Err(_)` to indicate termination due to an error condition.
+    /// - If the `Future` returned by `on_run` completes with `Err(_)`, the actor terminates due to an error.
+    /// - If the `Future` completes with `Ok(())`, the actor continues running, and the runtime
+    ///   will invoke `on_run` again to get the next `Future` for execution.
     ///
-    /// If the `Future` resolves to `Ok(true)`, the actor continues running, and the runtime
-    /// will invoke `on_run` again to get the next `Future` for execution.
+    /// To stop the actor normally from within `on_run` (e.g., graceful shutdown),
+    /// the actor should explicitly call `actor_ref.stop().await?` or `actor_ref.kill()`.
+    /// After such a call, `on_run` is unlikely to be invoked again by the runtime,
+    /// as the actor will be in the process of shutting down.
     ///
     /// The `actor_ref` parameter is a reference to the actor's own `ActorRef`.
+    /// It can be used, for example, to call `actor_ref.stop()` or `actor_ref.kill()`
+    /// to initiate actor termination from within `on_run`.
     ///
-    /// If this method returns `Ok(false)` or `Err(_)`, the actor will be stopped.
-    /// Returning `Ok(false)` signifies normal termination.
-    /// Returning `Err(_)` signifies termination due to an error.
+    /// - Returning `Ok(())` signifies that the current segment of work completed successfully,
+    ///   and the actor should continue running (i.e., `on_run` will be called again).
+    /// - Returning `Err(_)` signifies termination due to an error.
     /// The specific outcome is captured in the `ActorResult`.
-    fn on_run(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = std::result::Result<bool, Self::Error>> + Send {
+    ///
+    /// The default implementation of `on_run` is a simple async block that sleeps for 1 second
+    /// and then returns `Ok(())`, causing it to be called repeatedly until the actor is
+    /// explicitly stopped or killed.
+    fn on_run(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // This sleep is critical - it creates an await point that allows
         // the Tokio runtime to switch tasks and process incoming messages.
         // Without at least one await point in a loop, message processing would starve.
         async {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            Ok(true)
+            Ok(())
         }
     }
 }
@@ -1049,12 +1073,7 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
 
             maybe_result = actor.on_run(&actor_ref) => {
                 match maybe_result {
-                    Ok(keep_running) => {
-                        if !keep_running {
-                            // If on_run returns false, we stop the actor.
-                            info!("Actor {} on_run signaled to stop.", actor_id);
-                            break; // Exit loop
-                        }
+                    Ok(_) => {
                     }
                     Err(e) => { // e is A::Error
                         let error_msg = format!("Actor {} on_run error: {:?}", actor_id, e);

@@ -293,7 +293,6 @@ async fn test_unhandled_message_type() {
 struct LifecycleErrorArgs {
     fail_on_start: bool,
     fail_on_run: bool,
-    return_false_on_run: bool,
     on_start_attempted: Arc<Mutex<bool>>,
     on_run_attempted: Arc<Mutex<bool>>,
 }
@@ -301,7 +300,6 @@ struct LifecycleErrorArgs {
 struct LifecycleErrorActor {
     _id: Identity,
     fail_on_run: bool,
-    return_false_on_run: bool, // Added field
     on_start_attempted: Arc<Mutex<bool>>,
     on_run_attempted: Arc<Mutex<bool>>,
 }
@@ -319,19 +317,16 @@ impl Actor for LifecycleErrorActor {
             Ok(LifecycleErrorActor {
                 _id,
                 fail_on_run: args.fail_on_run,
-                return_false_on_run: args.return_false_on_run,
                 on_start_attempted: args.on_start_attempted,
                 on_run_attempted: args.on_run_attempted,
             })
         }
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
         *self.on_run_attempted.lock().await = true;
         if self.fail_on_run {
             Err(anyhow::anyhow!("simulated on_run failure"))
-        } else if self.return_false_on_run {
-            Ok(false) // Actor requests to stop
         } else {
             loop {
                 // Simulate some work
@@ -356,7 +351,6 @@ async fn test_actor_fail_on_start() {
     let args = LifecycleErrorArgs {
         fail_on_start: true,
         fail_on_run: false,
-        return_false_on_run: false,
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
     };
@@ -382,7 +376,6 @@ async fn test_actor_fail_on_run() {
     let args = LifecycleErrorArgs {
         fail_on_start: false,
         fail_on_run: true,
-        return_false_on_run: false, // Default to false
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
     };
@@ -410,7 +403,6 @@ async fn test_actor_return_false_on_run() {
     let actor_args = LifecycleErrorArgs {
         fail_on_start: false,
         fail_on_run: false,
-        return_false_on_run: true, // Configure actor to return false from on_run
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
     };

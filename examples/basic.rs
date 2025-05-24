@@ -38,7 +38,7 @@ impl Actor for MyActor {
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
         // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
         tokio::select! {
             // Executes when the 300ms interval timer ticks.
@@ -53,7 +53,7 @@ impl Actor for MyActor {
             }
         }
 
-        Ok(true)
+        Ok(())
     }
 }
 
