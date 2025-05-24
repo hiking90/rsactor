@@ -283,7 +283,7 @@ impl Message<RegisterPhilosopher> for Table {
     type Reply = (); // Fire-and-forget
 
     async fn handle(&mut self, msg: RegisterPhilosopher, _: &ActorRef) -> Self::Reply {
-        println!("Table: Philosopher {} (Actor ID: {}) registered.", msg.logical_id, msg.philosopher_ref.id());
+        println!("Table: Philosopher {} (Actor ID: {}) registered.", msg.logical_id, msg.philosopher_ref.identity());
         self.philosophers.insert(msg.logical_id, msg.philosopher_ref);
     }
 }
@@ -354,7 +354,7 @@ async fn main() -> Result<()> {
 
     // Spawn the Table actor
     let (table_ref, table_join_handle) = spawn::<Table>(NUM_PHILOSOPHERS);
-    println!("Table actor spawned with ID: {}", table_ref.id());
+    println!("Table actor spawned with ID: {}", table_ref.identity());
 
     // Spawn Philosopher actors
     let mut philosopher_refs: Vec<ActorRef> = Vec::new();
@@ -365,7 +365,7 @@ async fn main() -> Result<()> {
         let philosopher_name = if i < names.len() { names[i] } else { "Philosopher" }.to_string();
         let name = format!("{} #{}", philosopher_name, i);
         let (p_ref, p_join) = spawn::<Philosopher>((i, name, table_ref.clone()));
-        println!("Philosopher {} spawned with Actor ID: {}", i, p_ref.id());
+        println!("Philosopher {} spawned with Actor ID: {}", i, p_ref.identity());
         philosopher_refs.push(p_ref);
         philosopher_join_handles.push(p_join);
     }

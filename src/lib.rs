@@ -149,36 +149,61 @@
 //! documentation.
 
 use std::{
-    any::Any, fmt::Debug, future::Future,
-    sync::{
+    any::Any, fmt::Debug, future::Future, sync::{
         atomic::{AtomicUsize, Ordering}, OnceLock
-    },
-    time::Duration
+    }, time::Duration
 };
 
 use tokio::sync::{mpsc, oneshot};
 use log::{info, error, warn, debug, trace};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Identity {
+    /// Unique ID of the actor
+    pub id: usize,
+    /// Type name of the actor
+    pub type_name: &'static str,
+}
+
+impl Identity {
+    /// Creates a new `ActorIdentity` with the given ID and type name.
+    pub fn new(id: usize, type_name: &'static str) -> Self {
+        Identity { id, type_name }
+    }
+
+    /// Returns a string representation of the actor's identity.
+    pub fn name(&self) -> String {
+        format!("{}#{}", self.type_name, self.id)
+    }
+}
+
+impl std::fmt::Display for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}#{}", self.type_name, self.id)
+    }
+}
+
 #[derive(Debug)]
+/// Represents errors that can occur in the rsactor framework.
 pub enum Error {
     /// Error when sending a message to an actor
     Send {
         /// ID of the actor that failed to receive the message
-        actor_id: usize,
+        identity: Identity,
         /// Additional context about the error
         details: String,
     },
     /// Error when receiving a response from an actor
     Receive {
         /// ID of the actor that failed to send a response
-        actor_id: usize,
+        identity: Identity,
         /// Additional context about the error
         details: String,
     },
     /// Error when a request times out
     Timeout {
         /// ID of the actor that timed out
-        actor_id: usize,
+        identity: Identity,
         /// The duration after which the request timed out
         timeout: Duration,
         /// Type of operation that timed out (e.g., "send", "ask")
@@ -187,9 +212,7 @@ pub enum Error {
     /// Error when a message type is not handled by an actor
     UnhandledMessageType {
         /// ID of the actor that timed out
-        actor_id: usize,
-        /// Actor type name
-        actor_type: String,
+        identity: Identity,
         /// Expected message types
         expected_types: Vec<String>,
         /// Actual message type ID
@@ -198,13 +221,13 @@ pub enum Error {
     /// Error when downcasting a reply to the expected type
     Downcast {
         /// ID of the actor that sent the incompatible reply
-        actor_id: usize,
+        identity: Identity,
         expected_type: String,
     },
     /// Error when a runtime operation fails
     Runtime {
         /// ID of the actor where the runtime error occurred
-        actor_id: usize,
+        identity: Identity,
         /// Additional context about the error
         details: String,
     },
@@ -218,32 +241,31 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Send { actor_id, details } => {
-                write!(f, "Failed to send message to actor {}: {}", actor_id, details)
+            Error::Send { identity: actor_id, details } => {
+                write!(f, "Failed to send message to actor {}: {}", actor_id.name(), details)
             }
-            Error::Receive { actor_id, details } => {
-                write!(f, "Failed to receive reply from actor {}: {}", actor_id, details)
+            Error::Receive { identity: actor_id, details } => {
+                write!(f, "Failed to receive reply from actor {}: {}", actor_id.name(), details)
             }
-            Error::Timeout { actor_id, timeout, operation } => {
+            Error::Timeout { identity: actor_id, timeout, operation } => {
                 write!(f, "{} operation to actor {} timed out after {:?}",
-                       operation, actor_id, timeout)
+                       operation, actor_id.name(), timeout)
             }
-            Error::UnhandledMessageType { actor_id, actor_type, expected_types, actual_type_id } => {
+            Error::UnhandledMessageType { identity: actor_id, expected_types, actual_type_id } => {
                 write!(
                     f,
-                    "Actor '{}#{}' received an unhandled message type. Expected one of: [{}]. Actual message type ID: {:?}",
-                    actor_type,
-                    actor_id,
+                    "Actor '{}' received an unhandled message type. Expected one of: [{}]. Actual message type ID: {:?}",
+                    actor_id.name(),
                     expected_types.join(", "),
                     actual_type_id
                 )
             }
-            Error::Downcast { actor_id , expected_type} => {
+            Error::Downcast { identity: actor_id, expected_type } => {
                 write!(f, "Failed to downcast reply from actor {} to expected type '{}'",
-                    actor_id, expected_type)
+                    actor_id.name(), expected_type)
             }
-            Error::Runtime { actor_id, details } => {
-                write!(f, "Runtime error in actor {}: {}", actor_id, details)
+            Error::Runtime { identity: actor_id, details } => {
+                write!(f, "Runtime error in actor {}: {}", actor_id.name(), details)
             }
             Error::MailboxCapacity { message } => {
                 write!(f, "Mailbox capacity error: {}", message)
@@ -324,8 +346,7 @@ macro_rules! impl_message_handler {
                 // If the message type was not found in the list of handled types:
                 let expected_msg_types: Vec<String> = vec![$(stringify!($msg_type).to_string()),*];
                 return Err($crate::Error::UnhandledMessageType {
-                    actor_id: actor_ref.id(),
-                    actor_type: stringify!($actor_type).to_string(),
+                    identity: actor_ref.identity(),
                     expected_types: expected_msg_types,
                     actual_type_id: _msg_any.type_id()
                 });
@@ -415,8 +436,7 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 ///   - [`kill`](ActorRef::kill): Immediately terminate the actor.
 #[derive(Clone, Debug)]
 pub struct ActorRef {
-    id: usize,
-    type_name: &'static str,
+    identity: Identity,
     sender: MailboxSender,
     terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
 }
@@ -425,32 +445,20 @@ impl ActorRef {
     // Creates a new ActorRef with a unique ID and the mailbox sender.
     // This is typically called by the System when an actor is spawned.
     fn new(
-        id: usize,
-        type_name: &'static str,
+        identity: Identity,
         sender: MailboxSender,
         terminate_sender: mpsc::Sender<ControlSignal>,
     ) -> Self { // Changed type
         ActorRef {
-            id,
-            type_name,
+            identity,
             sender,
             terminate_sender,
         }
     }
 
     /// Returns the unique ID of the actor.
-    pub const fn id(&self) -> usize {
-        self.id
-    }
-
-    /// Returns the type name of the actor.
-    pub const fn type_name(&self) -> &'static str {
-        self.type_name
-    }
-
-    /// Returns a string representation of the actor's name, including its type and ID.
-    pub fn name(&self) -> String {
-        format!("{}#{}", self.type_name, self.id)
+    pub const fn identity(&self) -> Identity {
+        self.identity
     }
 
     /// Checks if the actor is still alive by verifying if its channels are open.
@@ -477,7 +485,7 @@ impl ActorRef {
 
         if self.sender.send(envelope).await.is_err() {
             Err(Error::Send {
-                actor_id: self.id,
+                identity: self.identity,
                 details: "Mailbox channel closed".to_string(),
             })
         } else {
@@ -498,7 +506,7 @@ impl ActorRef {
         tokio::time::timeout(timeout, self.tell(msg))
             .await
             .map_err(|_| Error::Timeout {
-                actor_id: self.id,
+                identity: self.identity,
                 timeout,
                 operation: "tell".to_string(),
             })?
@@ -521,7 +529,7 @@ impl ActorRef {
 
         if self.sender.send(envelope).await.is_err() {
             return Err(Error::Send {
-                actor_id: self.id,
+                identity: self.identity,
                 details: "Mailbox channel closed".to_string(),
             });
         }
@@ -531,14 +539,14 @@ impl ActorRef {
                 match reply_any.downcast::<R>() {
                     Ok(reply) => Ok(*reply),
                     Err(_) => Err(Error::Downcast {
-                        actor_id: self.id,
+                        identity: self.identity,
                         expected_type: std::any::type_name::<R>().to_string(),
                     }),
                 }
             }
             Ok(Err(e)) => Err(e), // recv was Ok, actor reply was Err
             Err(_recv_err) => Err(Error::Receive { // recv itself failed
-                actor_id: self.id,
+                identity: self.identity,
                 details: "Reply channel closed unexpectedly".to_string(),
             }),
         }
@@ -558,7 +566,7 @@ impl ActorRef {
         tokio::time::timeout(timeout, self.ask(msg))
             .await
             .map_err(|_| Error::Timeout {
-                actor_id: self.id,
+                identity: self.identity,
                 timeout,
                 operation: "ask".to_string(),
             })?
@@ -569,7 +577,7 @@ impl ActorRef {
     /// The actor will stop processing messages and shut down as soon as possible.
     /// The actor's final result will indicate it was killed.
     pub fn kill(&self) -> Result<()> {
-        debug!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.id);
+        debug!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.identity);
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
@@ -579,13 +587,13 @@ impl ActorRef {
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // The channel is full. Since it has a capacity of 1,
                 // this means a Terminate message is already in the queue.
-                warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.id);
+                warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.identity);
                 // Considered Ok as the desired state (stopping/killed) is effectively met.
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // The channel is closed, which implies the actor is already stopped or has finished processing.
-                warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.id);
+                warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.identity);
                 // Considered Ok as the desired state (stopped) is met.
                 Ok(())
             }
@@ -598,13 +606,13 @@ impl ActorRef {
     /// New messages sent after this call might be ignored or fail.
     /// The actor's final result will indicate normal completion.
     pub async fn stop(&self) -> Result<()> {
-        debug!("Sending StopGracefully message to actor {}", self.id);
+        debug!("Sending StopGracefully message to actor {}", self.identity);
         match self.sender.send(MailboxMessage::StopGracefully).await {
             Ok(_) => Ok(()),
             Err(_) => {
                 // This error means the actor's mailbox channel is closed,
                 // which implies the actor is already stopping or has stopped.
-                warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", self.id);
+                warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", self.identity);
                 // Considered Ok as the desired state (stopped/stopping) is met.
                 Ok(())
             }
@@ -649,7 +657,7 @@ impl ActorRef {
     {
         let rt = tokio::runtime::Handle::try_current().map_err(|e| {
             Error::Runtime {
-                actor_id: self.id, // Assuming self.id is accessible here. If not, need to adjust.
+                identity: self.identity, // Assuming self.id is accessible here. If not, need to adjust.
                 details: format!("No tokio runtime available for tell_blocking: {}", e),
             }
         })?;
@@ -660,7 +668,7 @@ impl ActorRef {
                     tokio::time::timeout(duration, self.tell(msg))
                         .await
                         .map_err(|_| Error::Timeout {
-                            actor_id: self.id,
+                            identity: self.identity,
                             timeout: duration,
                             operation: "tell_blocking".to_string(),
                         })?
@@ -702,7 +710,7 @@ impl ActorRef {
     {
         let rt = tokio::runtime::Handle::try_current().map_err(|e| {
             Error::Runtime {
-                actor_id: self.id, // Assuming self.id is accessible here.
+                identity: self.identity, // Assuming self.id is accessible here.
                 details: format!("No tokio runtime available for ask_blocking: {}", e),
             }
         })?;
@@ -713,7 +721,7 @@ impl ActorRef {
                     tokio::time::timeout(duration, self.ask(msg))
                         .await
                         .map_err(|_| Error::Timeout {
-                            actor_id: self.id,
+                            identity: self.identity,
                             timeout: duration,
                             operation: "ask_blocking".to_string(),
                         })?
@@ -960,7 +968,7 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
     mut receiver: mpsc::Receiver<MailboxMessage>,
     mut terminate_receiver: mpsc::Receiver<ControlSignal>, // Added parameter - Changed type
 ) -> ActorResult<T> {
-    let actor_id = actor_ref.id();
+    let actor_id = actor_ref.identity();
 
     let mut actor = match T::on_start(args, &actor_ref).await {
         Ok(actor) => {
@@ -1102,8 +1110,7 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
     let actor_ref = ActorRef::new(
-        id,
-        std::any::type_name::<T>(), // Use type name of the actor
+        Identity::new(id, std::any::type_name::<T>()), // Use type name of the actor
         mailbox_tx,
         terminate_tx); // Pass terminate_tx
 

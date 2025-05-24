@@ -61,7 +61,7 @@ impl Actor for SyncDataProcessorActor {
     type Error = anyhow::Error;
 
     async fn on_start(_args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
-        info!("SyncDataProcessorActor (id: {}) starting...", actor_ref.id());
+        info!("SyncDataProcessorActor (id: {}) starting...", actor_ref.identity());
 
         // Create a tokio channel for actor -> task communication
         // We use a buffer size of 32 for the channel

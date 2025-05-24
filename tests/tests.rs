@@ -6,14 +6,12 @@ use std::sync::Arc;
 use log::debug; // Ensure 'log' crate is a dev-dependency or available
 
 use rsactor::{
-    Actor, ActorRef, ActorResult, Message,
-    impl_message_handler, spawn, spawn_with_mailbox_capacity,
-    set_default_mailbox_capacity, Error
+    impl_message_handler, set_default_mailbox_capacity, spawn, spawn_with_mailbox_capacity, Actor, ActorRef, ActorResult, Error, Identity, Message
 };
 
 // Test Actor Setup
 struct TestActor {
-    id: usize,
+    id: Identity,
     counter: Arc<Mutex<i32>>,
     last_processed_message_type: Arc<Mutex<Option<String>>>,
     // Declaration to check if the Send trait is sufficient
@@ -30,9 +28,9 @@ impl Actor for TestActor {
     type Error = anyhow::Error;
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
-        debug!("TestActor (id: {}) started.", actor_ref.id());
+        debug!("TestActor (id: {}) started.", actor_ref.identity());
         Ok(Self {
-            id: actor_ref.id(),
+            id: actor_ref.identity(),
             counter: args.counter,
             last_processed_message_type: args.last_processed_message_type.clone(),
             marker: std::marker::PhantomData,
@@ -121,14 +119,14 @@ async fn setup_actor() -> (
 async fn test_spawn_and_actor_ref_id() {
     let (actor_ref, handle, _counter, _lpmt) =
         setup_actor().await;
-    assert_ne!(actor_ref.id(), 0, "Actor ID should be non-zero");
+    assert_ne!(actor_ref.identity().id, 0, "Actor ID should be non-zero");
 
     actor_ref.stop().await.expect("Failed to stop actor");
     let result = handle.await.expect("Actor task failed");
     assert!(result.is_completed(), "Actor should have completed normally");
     let (actor, _) = result.into();
     if let Some(actor) = actor {
-        assert_eq!(actor.id, actor_ref.id(), "Actor state ID should match ActorRef ID");
+        assert_eq!(actor.id, actor_ref.identity(), "Actor state ID should match ActorRef ID");
     } else {
         panic!("Actor state should not be None");
     }
@@ -206,7 +204,7 @@ async fn test_actor_ref_stop() {
     assert!(result.is_completed(), "Actor should have completed normally");
     let (actor, _) = result.into();
     if let Some(actor) = actor {
-        assert_eq!(actor.id, actor_ref.id(), "Actor state ID should match ActorRef ID");
+        assert_eq!(actor.id, actor_ref.identity(), "Actor state ID should match ActorRef ID");
         assert_eq!(*actor.counter.lock().await, 100, "Counter should be 100 after stop");
     } else {
         panic!("Actor state should not be None");
@@ -245,7 +243,7 @@ async fn test_actor_ref_kill() {
 
         let final_lpmt = actor.last_processed_message_type.lock().await.clone();
         assert_eq!(final_lpmt, None, "Last processed message type should be None, indicating UpdateCounterMsg was not processed. Got: {:?}", final_lpmt);
-        assert_eq!(actor.id, actor_ref.id(), "Actor ID should match ActorRef ID");
+        assert_eq!(actor.id, actor_ref.identity(), "Actor ID should match ActorRef ID");
     } else {
         panic!("Actor state should not be None");
     }
@@ -301,7 +299,7 @@ struct LifecycleErrorArgs {
 }
 
 struct LifecycleErrorActor {
-    _id: usize,
+    _id: Identity,
     fail_on_run: bool,
     return_false_on_run: bool, // Added field
     on_start_attempted: Arc<Mutex<bool>>,
@@ -313,7 +311,7 @@ impl Actor for LifecycleErrorActor {
     type Error = anyhow::Error;
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
-        let _id = actor_ref.id();
+        let _id = actor_ref.identity();
         *args.on_start_attempted.lock().await = true;
         if args.fail_on_start {
             Err(anyhow::anyhow!("simulated on_start failure"))
@@ -503,7 +501,7 @@ impl_message_handler!(PanicActor, [PanicMsg]);
 
 // Actor with String as Error type
 struct StringErrorActor {
-    _id: usize,
+    _id: rsactor::Identity,
 }
 
 impl Actor for StringErrorActor {
@@ -513,9 +511,9 @@ impl Actor for StringErrorActor {
     async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
         let on_start_called = args;
         *on_start_called.lock().await = true;
-        debug!("StringErrorActor (id: {}) started.", actor_ref.id());
+        debug!("StringErrorActor (id: {}) started.", actor_ref.identity());
         Ok(Self {
-            _id: actor_ref.id(),
+            _id: actor_ref.identity(),
         })
     }
     // run_loop will use the default implementation which returns Ok(true)
@@ -941,8 +939,8 @@ fn test_runtime_error_outside_tokio() {
         assert!(format!("{}", e).contains("Runtime error in"));
 
         // Extract and validate error details
-        if let Error::Runtime { actor_id, details } = e {
-            assert_ne!(actor_id, 0, "Actor ID should be non-zero");
+        if let Error::Runtime { identity, details } = e {
+            assert_ne!(identity.id, 0, "Actor ID should be non-zero");
             assert!(details.contains("No tokio runtime available"),
                 "Error details should mention tokio runtime unavailability: {}", details);
         }
@@ -958,8 +956,8 @@ fn test_runtime_error_outside_tokio() {
     if let Err(e) = tell_result {
         assert!(matches!(e, Error::Runtime { .. }), "Expected Error::Runtime, got: {:?}", e);
 
-        if let Error::Runtime { actor_id, details } = e {
-            assert_ne!(actor_id, 0, "Actor ID should be non-zero");
+        if let Error::Runtime { identity, details } = e {
+            assert_ne!(identity.id, 0, "Actor ID should be non-zero");
             assert!(details.contains("No tokio runtime available"),
                 "Error details should mention tokio runtime unavailability: {}", details);
         }
@@ -1073,8 +1071,9 @@ impl_message_handler!(generic_actor::GenericActor<u32>, [generic_actor::GetValue
 async fn test_generic_actor() {
     let (actor_ref, handle) = spawn::<generic_actor::GenericActor<u32>>(123u32);
     let expected_type_name = std::any::type_name::<generic_actor::GenericActor<u32>>();
-    assert_eq!(actor_ref.type_name(), expected_type_name);
-    assert_eq!(actor_ref.name(), format!("{}#{}", expected_type_name, actor_ref.id()));
+    let identity = actor_ref.identity();
+    assert_eq!(identity.type_name, expected_type_name);
+    assert_eq!(identity.name(), format!("{}#{}", expected_type_name, actor_ref.identity()));
     let reply: u32 = actor_ref.ask(generic_actor::GetValueMsg).await.expect("ask failed for GetValueMsg");
     assert_eq!(reply, 123);
     actor_ref.stop().await.expect("Failed to stop generic actor");

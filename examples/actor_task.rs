@@ -55,7 +55,7 @@ impl Actor for DataProcessorActor {
     type Error = anyhow::Error;
 
     async fn on_start(_args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
-        info!("DataProcessorActor (id: {}) starting...", actor_ref.id());
+        info!("DataProcessorActor (id: {}) starting...", actor_ref.identity());
 
         let mut actor = Self {
             factor: 1.0,

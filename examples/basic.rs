@@ -27,7 +27,7 @@ impl Actor for MyActor {
     async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
         info!(
             "MyActor (id: {}) started. Initial count: {}.",
-            actor_ref.id(),
+            actor_ref.identity(),
             args
         );
         Ok(MyActor {
@@ -127,32 +127,32 @@ async fn main() -> Result<()> {
 
     // Signal the actor to stop gracefully.
     // The actor will process any remaining messages in its mailbox before stopping.
-    println!("Sending StopGracefully message to actor {}.", actor_ref.id());
+    println!("Sending StopGracefully message to actor {}.", actor_ref.identity());
     actor_ref.stop().await?; // Corrected method name
 
     // Wait for the actor's task to complete.
     // `join_handle.await` returns a Result containing a tuple:
     // - The actor instance (allowing access to its final state).
     // - The ActorResult indicating completion state and returned actor.
-    println!("Waiting for actor {} to stop...", actor_ref.id());
+    println!("Waiting for actor {} to stop...", actor_ref.identity());
     let result = join_handle.await?;
     // Successfully retrieved the actor result.
     match result {
         rsactor::ActorResult::Completed { actor, killed } => {
             println!(
                 "Actor {} stopped. Final count: {}. Killed: {}",
-                actor_ref.id(),
+                actor_ref.identity(),
                 actor.count,
                 killed
             );
         }
         rsactor::ActorResult::StartupFailed { cause } => {
-            println!("Actor {} failed to start: {}", actor_ref.id(), cause);
+            println!("Actor {} failed to start: {}", actor_ref.identity(), cause);
         }
         rsactor::ActorResult::RuntimeFailed { actor, cause } => {
             println!(
                 "Actor {} failed at runtime: {}. Final count: {}",
-                actor_ref.id(),
+                actor_ref.identity(),
                 cause,
                 actor.as_ref().map(|a| a.count).unwrap_or(0)
             );

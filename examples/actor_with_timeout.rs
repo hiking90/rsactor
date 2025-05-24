@@ -20,7 +20,7 @@ impl Actor for TimeoutDemoActor {
     type Error = anyhow::Error;
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
-        info!("{} actor (id: {}) started", args, actor_ref.id());
+        info!("{} actor (id: {}) started", args, actor_ref.identity());
         Ok(Self {
             name: args,
         })
