@@ -12,7 +12,7 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
     *   `ask`/`ask_with_timeout`: Send a message and asynchronously await a reply.
     *   `tell`/`tell_with_timeout`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Actor Lifecycle with Simple Yet Powerful Task Control**: `on_start` and `on_run` hooks form the actor's lifecycle. The distinctive `on_run` feature provides a dedicated task execution environment that users can control with simple yet powerful primitives, unlike other actor frameworks. This gives developers complete control over their actor's task logic while the framework manages the underlying execution, eliminating the need for separate `tokio::spawn` calls. All lifecycle hooks are optional and have default implementations.
+*   **Actor Lifecycle with Simple Yet Powerful Task Control**: `on_start`, `on_run`, and `on_stop` hooks form the actor's lifecycle. The distinctive `on_run` feature provides a dedicated task execution environment with simple yet powerful primitives, giving developers complete control over task logic while the framework manages execution.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
@@ -50,8 +50,8 @@ impl Actor for CounterActor {
     type Args = u32; // Define an args type for actor creation
     type Error = anyhow::Error;
 
-    // on_start and on_run are optional and have default implementations.
-    // You can uncomment and implement them if needed.
+    // on_start is required and must be implemented.
+    // on_run and on_stop are optional and have default implementations.
 
     async fn on_start(initial_count: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.identity(), initial_count);
@@ -76,6 +76,14 @@ impl Actor for CounterActor {
             }
         }
         // Return Ok(()) to continue running, or call actor_ref.stop() to gracefully stop
+        Ok(())
+    }
+
+    // Called when the actor is stopping, either gracefully or due to being killed.
+    // This provides an opportunity for cleanup before the actor terminates.
+    async fn on_stop(&mut self, _actor_ref: ActorRef<Self>, killed: bool) -> Result<(), Self::Error> {
+        info!("CounterActor stopping. Final count: {}. Killed: {}",
+              self.count, killed);
         Ok(())
     }
 }

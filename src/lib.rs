@@ -19,7 +19,7 @@
 //!   - `ask_with_timeout`: Send a message and await a reply, with a specified timeout.
 //!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
 //!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
-//! - **Actor Lifecycle with Simple Yet Powerful Task Control**: Actors have `on_start` and `on_run` lifecycle hooks.
+//! - **Actor Lifecycle with Simple Yet Powerful Task Control**: Actors have `on_start`, `on_run`, and `on_stop` lifecycle hooks.
 //!   The distinctive `on_run` feature provides a dedicated task execution environment that users can control
 //!   with simple yet powerful primitives, unlike other actor frameworks. This gives developers complete control over
 //!   their actor's task logic while the framework manages the underlying execution.
@@ -28,31 +28,12 @@
 //! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
 //!   handling multiple message types.
 //! - **Type Safety Features**: Two actor reference types provide different levels of type safety:
-//!   - `ActorRef<T>`: Compile-time type safety for message passing
-//!   - `UntypedActorRef`: Runtime type handling for dynamic scenarios
-//!
-//! ## Type Safety
-//!
-//! rsActor provides two actor reference types:
-//!
-//! ### `ActorRef<T>` - Compile-Time Type Safety
-//! - Only messages that the actor can handle are accepted at compile time
-//! - Reply types are automatically inferred from trait implementations
-//! - Zero runtime overhead for type checking
-//! - Recommended for most use cases
-//!
-//! ### `UntypedActorRef` - Runtime Type Handling
-//! - Allows storing different actor types in collections
-//! - Enables dynamic actor management and plugin systems
-//! - Developer responsible for ensuring type safety at runtime
-//! - Use only when type erasure is specifically needed
-//!
-//! **Warning**: When using `UntypedActorRef`, you must ensure message types match
-//! the target actor at runtime. Incorrect message types will result in runtime errors.
+//!   - `ActorRef<T>`: Compile-time type safety with zero runtime overhead (recommended)
+//!   - `UntypedActorRef`: Runtime type handling for collections and dynamic scenarios
 //!
 //! ## Core Concepts
 //!
-//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks (`on_start`, `on_run`).
+//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks (`on_start` required, `on_run` optional).
 //! - **`Message<M>`**: Trait for handling a message type `M` and defining its reply type.
 //! - **`ActorRef`**: Handle for sending messages to an actor.
 //! - **`spawn`**: Function to create and start an actor, returning an `ActorRef` and a `JoinHandle`.
@@ -63,10 +44,8 @@
 //!
 //! ## Getting Started
 //!
-//! Define an actor struct, implement `Actor` and `Message<M>` for each message type.
-//! Use `impl_message_handler!` to wire up message handling.
-//! All `Actor` lifecycle methods (`on_start`, `on_run`) are optional
-//! and have default implementations.
+//! Define an actor struct, implement `Actor` and `Message<M>` for each message type,
+//! then use `impl_message_handler!` to wire up message handling.
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
@@ -80,22 +59,11 @@
 //!     tick_1s: tokio::time::Interval,
 //! }
 //!
-//! impl MyActor {
-//!     fn new(data: &str) -> Self {
-//!         MyActor {
-//!             data: data.to_string(),
-//!             tick_300ms: tokio::time::interval(std::time::Duration::from_millis(300)),
-//!             tick_1s: tokio::time::interval(std::time::Duration::from_secs(1)),
-//!         }
-//!     }
-//! }
-//!
-//! // 2. Implement the Actor trait (on_start, on_stop, on_run are optional)
+//! // 2. Implement the Actor trait
 //! impl Actor for MyActor {
-//!     type Args = String; // Define an args type for actor creation
-//!     type Error = anyhow::Error; // Define an error type
+//!     type Args = String;
+//!     type Error = anyhow::Error;
 //!
-//!     // Required: Implement on_start for actor creation and initialization
 //!     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
 //!         println!("MyActor (data: '{}') started!", args);
 //!         Ok(MyActor {
@@ -105,9 +73,6 @@
 //!         })
 //!     }
 //!
-//!     // Optional: Implement on_run for the actor's main execution logic.
-//!     // This method is called after on_start. If it returns Ok(()), the actor continues running.
-//!     // If it returns Err(_), the actor stops due to an error.
 //!     async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
 //!         tokio::select! {
 //!             _ = self.tick_300ms.tick() => {
@@ -117,17 +82,17 @@
 //!                 println!("Tick: 1s");
 //!             }
 //!         }
-//!         Ok(()) // Continue running
+//!         Ok(())
 //!     }
 //! }
 //!
-//! // 3. Define your message types
-//! struct GetData; // A message to get the actor's data
-//! struct UpdateData(String); // A message to update the actor's data
+//! // 3. Define message types
+//! struct GetData;
+//! struct UpdateData(String);
 //!
 //! // 4. Implement Message<M> for each message type
 //! impl Message<GetData> for MyActor {
-//!     type Reply = String; // This message will return a String
+//!     type Reply = String;
 //!
 //!     async fn handle(&mut self, _msg: GetData, _actor_ref: ActorRef<Self>) -> Self::Reply {
 //!         self.data.clone()
@@ -135,7 +100,7 @@
 //! }
 //!
 //! impl Message<UpdateData> for MyActor {
-//!     type Reply = (); // This message does not return a value
+//!     type Reply = ();
 //!
 //!     async fn handle(&mut self, msg: UpdateData, _actor_ref: ActorRef<Self>) -> Self::Reply {
 //!         self.data = msg.0;
@@ -143,29 +108,24 @@
 //!     }
 //! }
 //!
-//! // 5. Use the macro to implement the MessageHandler trait
+//! // 5. Use the macro to implement MessageHandler
 //! impl_message_handler!(MyActor, [GetData, UpdateData]);
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     let (actor_ref, join_handle) = spawn::<MyActor>("initial data".to_string());
 //!
-//!
-//!     // Send an "ask" message and wait for a reply
+//!     // Send messages
 //!     let current_data: String = actor_ref.ask(GetData).await?;
 //!     println!("Received data: {}", current_data);
 //!
-//!     // Send a "tell" message (fire-and-forget)
 //!     actor_ref.tell(UpdateData("new data".to_string())).await?;
 //!
-//!     // Verify the update
 //!     let updated_data: String = actor_ref.ask(GetData).await?;
 //!     println!("Updated data: {}", updated_data);
 //!
-//!     // Stop the actor gracefully
+//!     // Stop the actor
 //!     actor_ref.stop().await?;
-//!
-//!     // Wait for the actor to terminate
 //!     let actor_result = join_handle.await?;
 //!     println!("Actor stopped with result: {:?}", actor_result);
 //!
