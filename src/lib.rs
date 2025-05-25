@@ -27,6 +27,28 @@
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
 //! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
 //!   handling multiple message types.
+//! - **Type Safety Features**: Two actor reference types provide different levels of type safety:
+//!   - `ActorRef<T>`: Compile-time type safety for message passing
+//!   - `UntypedActorRef`: Runtime type handling for dynamic scenarios
+//!
+//! ## Type Safety
+//!
+//! rsActor provides two actor reference types:
+//!
+//! ### `ActorRef<T>` - Compile-Time Type Safety
+//! - Only messages that the actor can handle are accepted at compile time
+//! - Reply types are automatically inferred from trait implementations
+//! - Zero runtime overhead for type checking
+//! - Recommended for most use cases
+//!
+//! ### `UntypedActorRef` - Runtime Type Handling
+//! - Allows storing different actor types in collections
+//! - Enables dynamic actor management and plugin systems
+//! - Developer responsible for ensuring type safety at runtime
+//! - Use only when type erasure is specifically needed
+//!
+//! **Warning**: When using `UntypedActorRef`, you must ensure message types match
+//! the target actor at runtime. Incorrect message types will result in runtime errors.
 //!
 //! ## Core Concepts
 //!

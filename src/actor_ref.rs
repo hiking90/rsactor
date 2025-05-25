@@ -17,6 +17,18 @@ use tokio::runtime::Handle;
 /// to the actor instance itself. It holds a sender channel to the actor's mailbox.
 /// This is the internal implementation that handles the actual message passing.
 ///
+/// ## ⚠️ Type Safety Warning
+///
+/// **Developer Responsibility**: When using `UntypedActorRef`, you are responsible for ensuring
+/// that message types match the target actor at runtime. Incorrect message types will result
+/// in runtime errors instead of compile-time errors.
+///
+/// **Recommended Usage**: Use `ActorRef<T>` by default for compile-time type safety.
+/// Only use `UntypedActorRef` when you specifically need type erasure for:
+/// - Collections of heterogeneous actors (`Vec<UntypedActorRef>`, `HashMap<String, UntypedActorRef>`)
+/// - Plugin systems with dynamically loaded actors
+/// - Generic actor management interfaces
+///
 /// ## Message Passing Methods
 ///
 /// - **Asynchronous Methods**:
@@ -366,6 +378,21 @@ impl UntypedActorRef {
 ///
 /// `ActorRef<T>` provides type-safe message passing to actors, ensuring that only
 /// messages that the actor can handle are sent, and that reply types are correctly typed.
+///
+/// ## ✅ Type Safety Benefits
+///
+/// - **Compile-Time Message Validation**: Only messages implementing `Message<M>` for actor `T` are accepted
+/// - **Automatic Reply Type Inference**: Return types are inferred from trait implementations
+/// - **Zero Runtime Overhead**: Type safety is enforced at compile time with no performance cost
+/// - **IDE Support**: Full autocomplete and type checking support
+///
+/// ## Recommended Usage
+///
+/// Use `ActorRef<T>` by default for all actor communication. It provides the same functionality
+/// as `UntypedActorRef` but with compile-time guarantees that prevent type-related runtime errors.
+///
+/// Only use `UntypedActorRef` when you specifically need type erasure for collections or
+/// dynamic actor management.
 ///
 /// This wrapper around `UntypedActorRef` provides compile-time type safety while delegating
 /// the actual message passing to the underlying `UntypedActorRef`.

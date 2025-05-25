@@ -223,26 +223,38 @@ A23: The `on_run` method is a powerful feature of the `rsActor` framework that p
 
 *   **Continuous Processing:** The `on_run` method is ideal for implementing continuous processing logic that should run throughout the actor's lifetime. Unlike spawning separate tasks, work in the `on_run` is part of the actor's main execution flow.
 
-*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `on_run`. `tokio::select!` makes it easy to handle multiple timers concurrently. For example:
+*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `on_run`. `tokio::select!` makes it easy to handle multiple timers concurrently. For example, first define your actor struct with interval fields:
 
     ```rust
-    async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
-        let mut fast_interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        let mut slow_interval = tokio::time::interval(std::time::Duration::from_secs(5));
+    struct MyActor {
+        // ... other fields ...
+        fast_interval: tokio::time::Interval,
+        slow_interval: tokio::time::Interval,
+    }
 
-        loop {
-            tokio::select! {
-                _ = fast_interval.tick() => {
-                    // Handle high-frequency tasks (every 500ms)
-                    self.process_high_frequency_work();
-                }
-                _ = slow_interval.tick() => {
-                    // Handle low-frequency tasks (every 5 seconds)
-                    self.process_low_frequency_work().await?;
-                }
-                // You can add more branches as needed, including channels, futures, etc.
+    // Initialize intervals in on_start
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(MyActor {
+            // ... initialize other fields ...
+            fast_interval: tokio::time::interval(std::time::Duration::from_millis(500)),
+            slow_interval: tokio::time::interval(std::time::Duration::from_secs(5)),
+        })
+    }
+
+    // Use the intervals in on_run without loop
+    async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+        tokio::select! {
+            _ = self.fast_interval.tick() => {
+                // Handle high-frequency tasks (every 500ms)
+                self.process_high_frequency_work();
             }
+            _ = self.slow_interval.tick() => {
+                // Handle low-frequency tasks (every 5 seconds)
+                self.process_low_frequency_work().await?;
+            }
+            // You can add more branches as needed, including channels, futures, etc.
         }
+        Ok(())
     }
     ```
 
@@ -254,7 +266,7 @@ A23: The `on_run` method is a powerful feature of the `rsActor` framework that p
 
 **Important Considerations:**
 
-*   **Responsiveness:** The `on_run` and message handlers share the same execution context. This means that if your `on_run` doesn't yield control by using `.await` points, it can block message processing. Always ensure your loop includes sufficient `.await` points.
+*   **Responsiveness:** The `on_run` and message handlers share the same execution context. This means that if your `on_run` doesn't yield control by using `.await` points, it can block message processing. The framework will call `on_run` repeatedly, so ensure each call includes sufficient `.await` points.
 
 *   **State Sharing:** Both the `on_run` and message handlers have access to the actor's state (`self`), allowing them to share data without additional synchronization mechanisms.
 
@@ -265,16 +277,15 @@ A23: The `on_run` method is a powerful feature of the `rsActor` framework that p
 
         ```rust
         async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
-            loop {
-                // Offload CPU-intensive or blocking I/O work
-                let result = tokio::task::spawn_blocking(|| {
-                    // Perform CPU-bound or blocking I/O work
-                    // Return the result
-                }).await?;
+            // Offload CPU-intensive or blocking I/O work
+            let result = tokio::task::spawn_blocking(|| {
+                // Perform CPU-bound or blocking I/O work
+                // Return the result
+            }).await?;
 
-                // Process the result
-                // Return Ok(()) to continue running
-            }
+            // Process the result
+            // Return Ok(()) to continue running - the framework will call on_run again
+            Ok(())
         }
         ```
 
@@ -282,6 +293,49 @@ A23: The `on_run` method is a powerful feature of the `rsActor` framework that p
 
 In summary, the `on_run` method provides an elegant way to implement continuous or periodic tasks within an actor without spawning separate Tokio tasks. It runs as part of the actor's main execution flow, has access to the actor's state, and can use the full range of async features available in the Tokio ecosystem. By using the `on_run`, you often eliminate the need to spawn separate tasks from an actor's methods, resulting in cleaner and more manageable actor implementations.
 
+## Type Safety
+
+**Q26: What's the difference between `ActorRef<T>` and `UntypedActorRef`?**
+
+A26: rsActor provides two types of actor references with different levels of type safety:
+
+- **`ActorRef<T>`**: Provides compile-time type safety. The compiler ensures that only valid message types can be sent, and reply types are automatically inferred. This is the recommended default for most use cases.
+- **`UntypedActorRef`**: Provides runtime type handling through type erasure. This allows storing different actor types in collections but requires developer responsibility for ensuring type safety at runtime.
+
+**Q27: When should I use `UntypedActorRef`?**
+
+A27: Use `UntypedActorRef` only when you specifically need type erasure:
+- **Collections**: Storing different actor types in the same `Vec`, `HashMap`, etc.
+- **Plugin Systems**: Managing actors loaded dynamically at runtime
+- **Heterogeneous Actor Groups**: When you need to manage actors of different types uniformly
+
+For normal actor communication, always prefer `ActorRef<T>` for its compile-time safety guarantees.
+
+**Q28: What are the risks of using `UntypedActorRef`?**
+
+A28: When using `UntypedActorRef`, you lose compile-time type safety:
+- **Runtime Errors**: Sending wrong message types will result in runtime errors instead of compile-time errors
+- **Developer Responsibility**: You must ensure message types match the target actor
+- **Less IDE Support**: You lose autocomplete and type checking benefits
+
+**Q29: How do I convert between `ActorRef<T>` and `UntypedActorRef`?**
+
+A29: You can easily get an `UntypedActorRef` from an `ActorRef<T>`:
+
+```rust
+let (typed_ref, _) = spawn::<MyActor>(());
+let untyped_ref: &UntypedActorRef = typed_ref.untyped_actor_ref();
+```
+
+**Note**: You cannot safely convert `UntypedActorRef` back to `ActorRef<T>` without additional type information and validation.
+
+**Q30: What happens if I send the wrong message type to an `UntypedActorRef`?**
+
+A30: Sending an incorrect message type will result in a runtime error. The actor's message handler will attempt to downcast the message to one of its supported types, and if no match is found, it will return an `Error::UnhandledMessageType` error. This error includes:
+- The actor's identity
+- List of expected message types
+- The actual type that was sent
+
 ---
 
-*This FAQ is based on the state of the `rsActor` project as of its `README.md` and `src/lib.rs` on May 24, 2025. Features and behaviors may change in future versions.*
+*This FAQ is based on the state of the `rsActor` project as of its `README.md` and `src/lib.rs` on May 25, 2025. Features and behaviors may change in future versions.*
