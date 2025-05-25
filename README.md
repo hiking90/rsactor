@@ -25,7 +25,7 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 
 ```toml
 [dependencies]
-rsactor = "0.5" # Check crates.io for the latest version
+rsactor = "0.6" # Check crates.io for the latest version
 ```
 
 ### 2. Basic Usage Example
