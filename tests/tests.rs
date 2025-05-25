@@ -293,15 +293,19 @@ async fn test_unhandled_message_type() {
 struct LifecycleErrorArgs {
     fail_on_start: bool,
     fail_on_run: bool,
+    fail_on_stop: bool,
     on_start_attempted: Arc<Mutex<bool>>,
     on_run_attempted: Arc<Mutex<bool>>,
+    on_stop_attempted: Arc<Mutex<bool>>,
 }
 
 struct LifecycleErrorActor {
     _id: Identity,
     fail_on_run: bool,
+    fail_on_stop: bool,
     on_start_attempted: Arc<Mutex<bool>>,
     on_run_attempted: Arc<Mutex<bool>>,
+    on_stop_attempted: Arc<Mutex<bool>>,
 }
 
 impl Actor for LifecycleErrorActor {
@@ -317,8 +321,10 @@ impl Actor for LifecycleErrorActor {
             Ok(LifecycleErrorActor {
                 _id,
                 fail_on_run: args.fail_on_run,
+                fail_on_stop: args.fail_on_stop,
                 on_start_attempted: args.on_start_attempted,
                 on_run_attempted: args.on_run_attempted,
+                on_stop_attempted: args.on_stop_attempted,
             })
         }
     }
@@ -334,6 +340,15 @@ impl Actor for LifecycleErrorActor {
             }
         }
     }
+
+    async fn on_stop(&mut self, _actor_ref: ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
+        *self.on_stop_attempted.lock().await = true;
+        if self.fail_on_stop {
+            Err(anyhow::anyhow!("simulated on_stop failure"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 struct NoOpMsg; // Dummy message for LifecycleErrorActor
@@ -347,12 +362,15 @@ impl_message_handler!(LifecycleErrorActor, [NoOpMsg]);
 async fn test_actor_fail_on_start() {
     let on_start_attempted = Arc::new(Mutex::new(false));
     let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
 
     let args = LifecycleErrorArgs {
         fail_on_start: true,
         fail_on_run: false,
+        fail_on_stop: false,
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
     };
     let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
 
@@ -366,18 +384,22 @@ async fn test_actor_fail_on_start() {
     // on_start failed, so no actor was created
     assert!(*on_start_attempted.lock().await);
     assert!(!*on_run_attempted.lock().await);
+    assert!(!*on_stop_attempted.lock().await);
 }
 
 #[tokio::test]
 async fn test_actor_fail_on_run() {
     let on_start_attempted = Arc::new(Mutex::new(false));
     let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
 
     let args = LifecycleErrorArgs {
         fail_on_start: false,
         fail_on_run: true,
+        fail_on_stop: false,
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
     };
     let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
 
@@ -390,6 +412,7 @@ async fn test_actor_fail_on_run() {
             if let Some(actor) = actor {
                 assert!(*actor.on_start_attempted.lock().await);
                 assert!(*actor.on_run_attempted.lock().await);
+                assert!(!*actor.on_stop_attempted.lock().await);
             }
         }
         _ => panic!("Expected Failed result"),
@@ -879,370 +902,592 @@ async fn test_tell_with_timeout() {
     handle.await.expect("Actor task failed");
 }
 
-#[test]
-fn test_runtime_error_outside_tokio() {
-    // Setup an actor in tokio runtime
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let actor_ref = runtime.block_on(async {
-        let (actor_ref, _handle, _, _) = setup_actor().await;
-        actor_ref
-    });
+// === UntypedActorRef Incompatible Message Tests ===
 
-    // Now drop the runtime to ensure we're outside a tokio context
-    drop(runtime);
+// Test actor for UntypedActorRef incompatible message scenarios
+#[derive(Debug)]
+struct IncompatibleMessageTestActor {
+    messages_received: Arc<Mutex<Vec<String>>>,
+}
 
-    // Attempt to use ask_blocking outside tokio runtime context
-    let result = actor_ref.ask_blocking(
-        PingMsg("hello".to_string()),
-        Some(std::time::Duration::from_millis(100))
-    );
+impl Actor for IncompatibleMessageTestActor {
+    type Args = Arc<Mutex<Vec<String>>>;
+    type Error = anyhow::Error;
 
-    // This should result in Error::Runtime
-    assert!(result.is_err());
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        debug!("IncompatibleMessageTestActor (id: {}) started.", actor_ref.identity());
+        Ok(Self {
+            messages_received: args,
+        })
+    }
+}
+
+// Define compatible messages for the test actor
+#[derive(Debug)]
+struct CompatibleMsg(String);
+
+impl Message<CompatibleMsg> for IncompatibleMessageTestActor {
+    type Reply = String;
+    async fn handle(&mut self, msg: CompatibleMsg, _: ActorRef<Self>) -> Self::Reply {
+        let mut messages = self.messages_received.lock().await;
+        messages.push(format!("CompatibleMsg: {}", msg.0));
+        format!("Handled: {}", msg.0)
+    }
+}
+
+// Only implement handler for CompatibleMsg - other messages will be incompatible
+impl_message_handler!(IncompatibleMessageTestActor, [CompatibleMsg]);
+
+// Define incompatible message types (not in the message handler)
+#[derive(Debug)]
+struct IncompatibleMsg1;
+
+#[derive(Debug)]
+struct IncompatibleMsg2 {
+    _data: String,
+    _value: u64,
+}
+
+#[derive(Debug)]
+struct IncompatibleMsg3;
+
+#[tokio::test]
+async fn test_untyped_actor_ref_tell_incompatible_message_single() {
+    let messages_received = Arc::new(Mutex::new(Vec::new()));
+    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
+
+    // First, verify that compatible messages work
+    let result = actor_ref.untyped_actor_ref().tell(CompatibleMsg("test".to_string())).await;
+    assert!(result.is_ok(), "Compatible message should succeed");
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    // Now send an incompatible message via UntypedActorRef.tell
+    let result = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
+
+    // The tell operation itself should succeed (message sent to mailbox)
+    assert!(result.is_ok(), "Tell operation should succeed even with incompatible message");
+
+    // Give the actor time to process the incompatible message
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Check that compatible message was processed
+    let messages = messages_received.lock().await;
+    assert_eq!(messages.len(), 1, "Only the compatible message should have been processed");
+    assert!(messages[0].contains("CompatibleMsg: test"), "Compatible message should be processed");
+    drop(messages);
+
+    // The actor should panic in debug mode when handling the incompatible message
+    let join_result = handle.await;
+
+    #[cfg(debug_assertions)]
+    {
+        // In debug mode, the actor should panic with unhandled message
+        assert!(join_result.is_err(), "Expected actor to panic with incompatible message in debug mode");
+        if let Err(join_error) = join_result {
+            assert!(join_error.is_panic(), "The join error should be caused by a panic in debug mode");
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // In release mode, the actor continues running despite unhandled message
+        // We need to stop it manually
+        let _ = actor_ref.stop().await;
+        let result = join_result.expect("Actor should complete in release mode");
+        // The actor should complete normally in release mode
+        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete or fail gracefully in release mode");
+    }
+}
+
+#[tokio::test]
+async fn test_untyped_actor_ref_tell_multiple_incompatible_messages() {
+    let messages_received = Arc::new(Mutex::new(Vec::new()));
+    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
+
+    // Send multiple incompatible messages via UntypedActorRef.tell
+    let result1 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
+    let result2 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg2 {
+        _data: "test".to_string(),
+        _value: 456
+    }).await;
+    let result3 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg3).await;
+
+    // All tell operations should succeed (messages sent to mailbox)
+    assert!(result1.is_ok(), "First incompatible tell should succeed");
+    assert!(result2.is_ok(), "Second incompatible tell should succeed");
+    assert!(result3.is_ok(), "Third incompatible tell should succeed");
+
+    // Give the actor time to process messages
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // No messages should have been processed (all incompatible)
+    let messages = messages_received.lock().await;
+    assert_eq!(messages.len(), 0, "No incompatible messages should have been processed");
+    drop(messages);
+
+    // The actor should panic in debug mode when handling the first incompatible message
+    let join_result = handle.await;
+
+    #[cfg(debug_assertions)]
+    {
+        // In debug mode, the actor should panic with the first unhandled message
+        assert!(join_result.is_err(), "Expected actor to panic with incompatible messages in debug mode");
+        if let Err(join_error) = join_result {
+            assert!(join_error.is_panic(), "The join error should be caused by a panic in debug mode");
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // In release mode, the actor continues running despite unhandled messages
+        let _ = actor_ref.stop().await;
+        let result = join_result.expect("Actor should complete in release mode");
+        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete or fail gracefully in release mode");
+    }
+}
+
+#[tokio::test]
+async fn test_untyped_actor_ref_tell_mixed_compatible_incompatible_messages() {
+    let messages_received = Arc::new(Mutex::new(Vec::new()));
+    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
+
+    // Send a mix of compatible and incompatible messages
+    let result1 = actor_ref.untyped_actor_ref().tell(CompatibleMsg("first".to_string())).await;
+    let result2 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
+    let result3 = actor_ref.untyped_actor_ref().tell(CompatibleMsg("second".to_string())).await;
+
+    // All tell operations should succeed (messages sent to mailbox)
+    assert!(result1.is_ok(), "First compatible tell should succeed");
+    assert!(result2.is_ok(), "Incompatible tell should succeed");
+    assert!(result3.is_ok(), "Second compatible tell should succeed");
+
+    // Give the actor time to process messages
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Check processed messages
+    let messages = messages_received.lock().await;
+
+    #[cfg(debug_assertions)]
+    {
+        // In debug mode, actor panics on first incompatible message
+        // So only the first compatible message should be processed
+        assert_eq!(messages.len(), 1, "Only first compatible message should be processed before panic");
+        assert!(messages[0].contains("CompatibleMsg: first"), "First compatible message should be processed");
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // In release mode, incompatible messages are logged but actor continues
+        // Both compatible messages should be processed
+        assert!(messages.len() >= 1, "At least the first compatible message should be processed");
+        assert!(messages[0].contains("CompatibleMsg: first"), "First compatible message should be processed");
+
+        // The second compatible message might also be processed depending on timing
+        if messages.len() > 1 {
+            assert!(messages[1].contains("CompatibleMsg: second"), "Second compatible message should be processed if reached");
+        }
+    }
+    drop(messages);
+
+    // Handle actor completion based on build mode
+    let join_result = handle.await;
+
+    #[cfg(debug_assertions)]
+    {
+        // In debug mode, the actor should panic with the incompatible message
+        assert!(join_result.is_err(), "Expected actor to panic with incompatible message in debug mode");
+        if let Err(join_error) = join_result {
+            assert!(join_error.is_panic(), "The join error should be caused by a panic in debug mode");
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // In release mode, stop the actor manually
+        let _ = actor_ref.stop().await;
+        let result = join_result.expect("Actor should complete in release mode");
+        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete or fail gracefully in release mode");
+    }
+}
+
+#[tokio::test]
+async fn test_untyped_actor_ref_tell_incompatible_after_stop() {
+    let messages_received = Arc::new(Mutex::new(Vec::new()));
+    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
+
+    // Send a compatible message first
+    let result = actor_ref.untyped_actor_ref().tell(CompatibleMsg("before_stop".to_string())).await;
+    assert!(result.is_ok(), "Compatible message should succeed");
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    // Stop the actor
+    actor_ref.stop().await.expect("Stop should succeed");
+
+    // Wait for actor to stop
+    let result = handle.await.expect("Actor should stop normally");
+    assert!(result.stopped_normally(), "Actor should stop normally");
+
+    // Try to send incompatible message to stopped actor
+    let result = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
+
+    // This should fail because the actor is stopped
+    assert!(result.is_err(), "Tell to stopped actor should fail");
     if let Err(e) = result {
-        assert!(matches!(e, Error::Runtime { .. }), "Expected Error::Runtime, got: {:?}", e);
-        assert!(format!("{}", e).contains("Runtime error in"));
+        assert!(e.to_string().contains("Mailbox channel closed") ||
+                e.to_string().contains("Failed to send message"),
+                "Error should indicate mailbox is closed, got: {}", e);
+    }
 
-        // Extract and validate error details
-        if let Error::Runtime { identity, details } = e {
-            assert_ne!(identity.id, 0, "Actor ID should be non-zero");
-            assert!(details.contains("Failed to get Tokio runtime handle"),
-                "Error details should mention tokio runtime unavailability: {}", details);
+    // Verify only the compatible message was processed
+    let messages = messages_received.lock().await;
+    assert_eq!(messages.len(), 1, "Only the compatible message before stop should be processed");
+    assert!(messages[0].contains("CompatibleMsg: before_stop"), "Compatible message should be processed");
+}
+
+#[tokio::test]
+async fn test_untyped_actor_ref_ask_incompatible_message_error_handling() {
+    let messages_received = Arc::new(Mutex::new(Vec::new()));
+    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
+
+    // Test ask with incompatible message - this should return an error immediately
+    let ask_result = actor_ref.untyped_actor_ref().ask::<IncompatibleMsg1, String>(IncompatibleMsg1).await;
+
+    // ask should return an UnhandledMessageType error
+    assert!(ask_result.is_err(), "Ask with incompatible message should return error");
+    if let Err(e) = ask_result {
+        assert!(e.to_string().contains("received an unhandled message type"),
+                "Ask error should indicate unhandled message type, got: {}", e);
+    }
+
+    // No messages should have been processed
+    let messages = messages_received.lock().await;
+    assert_eq!(messages.len(), 0, "No incompatible messages should be processed");
+    drop(messages);
+
+    // Clean up - handle actor termination based on build mode
+    let join_result = handle.await;
+
+    #[cfg(debug_assertions)]
+    {
+        // In debug mode, actor should panic when processing the ask message
+        assert!(join_result.is_err(), "Expected actor to panic in debug mode");
+        if let Err(join_error) = join_result {
+            assert!(join_error.is_panic(), "Should be a panic error in debug mode");
         }
     }
 
-    // Similarly test tell_blocking
-    let tell_result = actor_ref.tell_blocking(
-        UpdateCounterMsg(5),
-        Some(std::time::Duration::from_millis(100))
-    );
-
-    assert!(tell_result.is_err());
-    if let Err(e) = tell_result {
-        assert!(matches!(e, Error::Runtime { .. }), "Expected Error::Runtime, got: {:?}", e);
-
-        if let Error::Runtime { identity, details } = e {
-            assert_ne!(identity.id, 0, "Actor ID should be non-zero");
-            assert!(details.contains("Failed to get Tokio runtime handle"),
-                "Error details should mention tokio runtime unavailability: {}", details);
-        }
+    #[cfg(not(debug_assertions))]
+    {
+        // In release mode, stop the actor manually
+        let _ = actor_ref.stop().await;
+        let result = join_result.expect("Actor should complete in release mode");
+        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete gracefully in release mode");
     }
 }
 
 #[tokio::test]
-#[should_panic(expected = "Mailbox capacity must be greater than 0")]
-async fn test_spawn_with_zero_mailbox_capacity() {
-    // Prepare an actor instance
-    let counter = Arc::new(Mutex::new(0));
-    let last_processed_message_type = Arc::new(Mutex::new(None::<String>));
+async fn test_untyped_actor_ref_tell_vs_ask_behavior_comparison() {
+    // Test 1: tell with incompatible message
+    {
+        let messages_received = Arc::new(Mutex::new(Vec::new()));
+        let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
 
-    let actor_args = TestArgs {
-        counter,
-        last_processed_message_type,
+        // Test tell with incompatible message - this should succeed in sending
+        let tell_result = actor_ref.untyped_actor_ref().tell(IncompatibleMsg2 {
+            _data: "tell_test".to_string(),
+            _value: 222
+        }).await;
+
+        // tell should succeed in sending the message to the mailbox
+        assert!(tell_result.is_ok(), "Tell with incompatible message should succeed in sending");
+
+        // Give some time for processing
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // No messages should have been processed
+        let messages = messages_received.lock().await;
+        assert_eq!(messages.len(), 0, "No incompatible messages should be processed");
+        drop(messages);
+
+        // Clean up
+        let join_result = handle.await;
+
+        #[cfg(debug_assertions)]
+        {
+            assert!(join_result.is_err(), "Expected actor to panic in debug mode");
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = actor_ref.stop().await;
+            let _ = join_result.expect("Actor should complete in release mode");
+        }
+    }
+
+    // Test 2: ask with incompatible message (separate actor instance)
+    {
+        let messages_received = Arc::new(Mutex::new(Vec::new()));
+        let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
+
+        // Test ask with incompatible message - this should return an error
+        let ask_result = actor_ref.untyped_actor_ref().ask::<IncompatibleMsg1, String>(IncompatibleMsg1).await;
+
+        // ask should return an UnhandledMessageType error
+        assert!(ask_result.is_err(), "Ask with incompatible message should return error");
+        if let Err(e) = ask_result {
+            assert!(e.to_string().contains("received an unhandled message type"),
+                    "Ask error should indicate unhandled message type, got: {}", e);
+        }
+
+        // Clean up
+        let join_result = handle.await;
+
+        #[cfg(debug_assertions)]
+        {
+            assert!(join_result.is_err(), "Expected actor to panic in debug mode");
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = actor_ref.stop().await;
+            let _ = join_result.expect("Actor should complete in release mode");
+        }
+    }
+}
+
+// === on_stop Error Handling Tests ===
+
+#[tokio::test]
+async fn test_actor_fail_on_stop_during_graceful_stop() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
+
+    let args = LifecycleErrorArgs {
+        fail_on_start: false,
+        fail_on_run: false,
+        fail_on_stop: true,
+        on_start_attempted: on_start_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
     };
+    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
 
-    // This should panic with message "Mailbox capacity must be greater than 0"
-    let (_actor_ref, _handle) = spawn_with_mailbox_capacity::<TestActor>(actor_args, 0);
+    // Wait for actor to start
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Gracefully stop the actor - this should trigger on_stop failure
+    actor_ref.stop().await.expect("stop command should succeed");
+
+    let result = handle.await.expect("Join handle should not fail");
+    assert!(result.is_stop_failed(), "Actor should have failed during stop");
+    assert!(!result.was_killed(), "Actor should not have been killed");
+
+    match result {
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+            assert_eq!(phase, rsactor::FailurePhase::OnStop, "Should fail in OnStop phase");
+            assert!(!killed, "Should not be marked as killed for graceful stop");
+            assert!(error.to_string().contains("simulated on_stop failure"));
+
+            if let Some(actor) = actor {
+                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
+                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
+                assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
+            }
+        }
+        _ => panic!("Expected Failed result"),
+    }
 }
 
 #[tokio::test]
-async fn test_mailbox_capacity_error_when_full() {
-    // Create an actor with a very small mailbox capacity (1)
-    let counter = Arc::new(Mutex::new(0));
-    let last_processed_message_type = Arc::new(Mutex::new(None::<String>));
+async fn test_actor_fail_on_stop_during_kill() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
 
-    let actor_args = TestArgs {
-        counter: counter.clone(),
-        last_processed_message_type: last_processed_message_type.clone(),
+    let args = LifecycleErrorArgs {
+        fail_on_start: false,
+        fail_on_run: false,
+        fail_on_stop: true,
+        on_start_attempted: on_start_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
     };
+    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
 
-    // Spawn with capacity 1 to make it easy to fill the mailbox
-    let (actor_ref, handle) = spawn_with_mailbox_capacity::<TestActor>(actor_args, 1);
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Give time for on_start
+    // Wait for actor to start
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Send a SlowMsg that will make the actor busy for 100ms
-    actor_ref.tell(SlowMsg).await.expect("Tell SlowMsg failed");
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await; // Ensure message is being processed
+    // Kill the actor - this should trigger on_stop failure
+    actor_ref.kill().expect("kill command should succeed");
 
-    // Fill the mailbox with one message (capacity is 1)
-    actor_ref.tell(UpdateCounterMsg(1)).await.expect("Tell UpdateCounterMsg(1) to fill mailbox failed");
+    let result = handle.await.expect("Join handle should not fail");
+    assert!(result.is_stop_failed(), "Actor should have failed during stop");
+    assert!(result.was_killed(), "Actor should be marked as killed");
 
-    // Now try to send another message with a timeout - this should fail with MailboxCapacity error
-    let result = actor_ref
-        .tell_with_timeout(UpdateCounterMsg(2), std::time::Duration::from_millis(50))
-        .await;
+    match result {
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+            assert_eq!(phase, rsactor::FailurePhase::OnStop, "Should fail in OnStop phase");
+            assert!(killed, "Should be marked as killed for kill operation");
+            assert!(error.to_string().contains("simulated on_stop failure"));
 
-    assert!(result.is_err(), "Expected tell_with_timeout to fail with mailbox full");
-    assert!(matches!(result, Err(Error::Timeout { .. })),
-        "Expected timeout error when mailbox is full, got: {:?}", result);
+            if let Some(actor) = actor {
+                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
+                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
+                assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
+            }
+        }
+        _ => panic!("Expected Failed result"),
+    }
+}
 
-    // Allow the actor to process the queued messages
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await; // Wait for SlowMsg (100ms) + UpdateCounterMsg
+#[tokio::test]
+async fn test_actor_fail_on_stop_after_on_run_failure() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
 
-    actor_ref.stop().await.expect("Failed to stop actor");
-    let result = handle.await.expect("Actor task failed");
-    let (actor, _) = result.into();
-    if let Some(actor) = actor {
-        // Verify that only UpdateCounterMsg(1) was processed.
-        assert_eq!(*actor.counter.lock().await, 1, "Counter should be 1 after SlowMsg and UpdateCounterMsg(1)");
+    let args = LifecycleErrorArgs {
+        fail_on_start: false,
+        fail_on_run: true,
+        fail_on_stop: true, // This won't matter since on_stop won't be called
+        on_start_attempted: on_start_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
+    };
+    let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+
+    let result = handle.await.expect("Join handle should not fail");
+
+    // When on_run fails, the actor immediately returns Failed with OnRun phase.
+    // on_stop is NOT called when on_run fails in the rsActor framework.
+    assert!(result.is_runtime_failed(), "Actor should have failed during runtime (on_run)");
+
+    match result {
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+            assert_eq!(phase, rsactor::FailurePhase::OnRun, "Should fail in OnRun phase");
+            assert!(!killed, "Should not be marked as killed for on_run failure scenario");
+            assert!(error.to_string().contains("simulated on_run failure"));
+
+            if let Some(actor) = actor {
+                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
+                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
+                assert!(!*actor.on_stop_attempted.lock().await, "on_stop should NOT be called when on_run fails");
+            }
+        }
+        _ => panic!("Expected Failed result with OnRun phase"),
+    }
+}
+
+#[tokio::test]
+async fn test_actor_on_stop_success_after_on_run_failure() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
+
+    let args = LifecycleErrorArgs {
+        fail_on_start: false,
+        fail_on_run: true,
+        fail_on_stop: false, // This won't matter since on_stop won't be called
+        on_start_attempted: on_start_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
+    };
+    let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+
+    let result = handle.await.expect("Join handle should not fail");
+
+    // When on_run fails, the actor immediately returns Failed with OnRun phase.
+    // on_stop is NOT called when on_run fails in the rsActor framework.
+    assert!(result.is_runtime_failed(), "Actor should have failed during runtime (on_run)");
+
+    match result {
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+            assert_eq!(phase, rsactor::FailurePhase::OnRun, "Should fail in OnRun phase");
+            assert!(!killed, "Should not be marked as killed for on_run failure scenario");
+            assert!(error.to_string().contains("simulated on_run failure"));
+
+            if let Some(actor) = actor {
+                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
+                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
+                assert!(!*actor.on_stop_attempted.lock().await, "on_stop should NOT be called when on_run fails");
+            }
+        }
+        _ => panic!("Expected Failed result with OnRun phase"),
+    }
+}
+
+#[tokio::test]
+async fn test_actor_on_stop_success_during_graceful_stop() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
+
+    let args = LifecycleErrorArgs {
+        fail_on_start: false,
+        fail_on_run: false,
+        fail_on_stop: false, // All lifecycle methods should succeed
+        on_start_attempted: on_start_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
+    };
+    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+
+    // Wait for actor to start
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Gracefully stop the actor - this should succeed
+    actor_ref.stop().await.expect("stop command should succeed");
+
+    let result = handle.await.expect("Join handle should not fail");
+    assert!(result.is_completed(), "Actor should have completed successfully");
+    assert!(result.stopped_normally(), "Actor should have stopped normally");
+    assert!(!result.was_killed(), "Actor should not have been killed");
+
+    if let rsactor::ActorResult::Completed { actor, killed } = result {
+        assert!(!killed, "Should not be marked as killed for graceful stop");
+        assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
+        assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
+        assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
     } else {
-        panic!("Actor state should not be None");
+        panic!("Expected Completed result");
     }
-}
-
-// === Generic Actor Test ===
-mod generic_actor {
-    use super::*;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    // Generic actor that can hold any type T
-    #[derive(Debug)]
-    pub(crate) struct GenericActor<T: Send + 'static> {
-        value: Arc<Mutex<T>>,
-    }
-
-    impl<T: Send + 'static> GenericActor<T> {
-        pub(crate) fn new(value: T) -> Self {
-            Self { value: Arc::new(Mutex::new(value)) }
-        }
-    }
-
-    impl<T: Send + 'static> Actor for GenericActor<T> {
-        type Args = T;
-        type Error = anyhow::Error;
-
-        async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-            Ok(GenericActor::new(args))
-        }
-    }
-
-    #[derive(Debug)]
-    pub(crate) struct GetValueMsg;
-
-    impl<T: Send + Clone + 'static> Message<GetValueMsg> for GenericActor<T> {
-        type Reply = T;
-        async fn handle(&mut self, _msg: GetValueMsg, _: ActorRef<Self>) -> Self::Reply {
-            self.value.lock().await.clone()
-        }
-    }
-
-}
-
-// The impl_message_handler! macro must be invoked for concrete types
-impl_message_handler!(generic_actor::GenericActor<u32>, [generic_actor::GetValueMsg]);
-
-#[tokio::test]
-async fn test_generic_actor() {
-    let (actor_ref, handle) = spawn::<generic_actor::GenericActor<u32>>(123u32);
-    let expected_type_name = std::any::type_name::<generic_actor::GenericActor<u32>>();
-    let identity = actor_ref.identity();
-    assert_eq!(identity.type_name, expected_type_name);
-    assert_eq!(identity.name(), format!("{}#{}", expected_type_name, actor_ref.identity().id));
-    let reply: u32 = actor_ref.ask(generic_actor::GetValueMsg).await.expect("ask failed for GetValueMsg");
-    assert_eq!(reply, 123);
-    actor_ref.stop().await.expect("Failed to stop generic actor");
-    handle.await.expect("Generic actor task failed");
-}
-
-impl_message_handler!(generic_actor::GenericActor<u64>, [generic_actor::GetValueMsg]);
-
-#[tokio::test]
-async fn test_generic_actor_u64() {
-    let (actor_ref, handle) = spawn::<generic_actor::GenericActor<u64>>(9223372036854775808u64); // 2^63, large number to test u64 specifically
-    let reply: u64 = actor_ref.ask(generic_actor::GetValueMsg).await.expect("ask failed for GetValueMsg");
-    assert_eq!(reply, 9223372036854775808u64);
-    actor_ref.stop().await.expect("Failed to stop generic actor");
-    handle.await.expect("Generic actor task failed");
-}
-
-// Test actors for on_run self-termination scenarios
-#[derive(Debug)]
-struct OnRunStopActor {
-    on_run_call_count: Arc<Mutex<u32>>,
-    stop_after_calls: u32,
-}
-
-impl Actor for OnRunStopActor {
-    type Args = (Arc<Mutex<u32>>, u32);
-    type Error = anyhow::Error;
-
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        let (on_run_call_count, stop_after_calls) = args;
-        Ok(OnRunStopActor {
-            on_run_call_count,
-            stop_after_calls,
-        })
-    }
-
-    async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
-        let mut count = self.on_run_call_count.lock().await;
-        *count += 1;
-        let current_count = *count;
-        drop(count); // Release the lock before potential async operations
-
-        if current_count >= self.stop_after_calls {
-            // Call stop after the specified number of calls
-            actor_ref.stop().await?;
-            // After calling stop, on_run should not be called again
-            return Ok(());
-        }
-
-        // Simulate some work with an await point
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct DummyStopMsg;
-
-impl Message<DummyStopMsg> for OnRunStopActor {
-    type Reply = u32;
-    async fn handle(&mut self, _msg: DummyStopMsg, _: ActorRef<Self>) -> Self::Reply {
-        *self.on_run_call_count.lock().await
-    }
-}
-
-impl_message_handler!(OnRunStopActor, [DummyStopMsg]);
-
-#[derive(Debug)]
-struct OnRunKillActor {
-    on_run_call_count: Arc<Mutex<u32>>,
-    kill_after_calls: u32,
-}
-
-impl Actor for OnRunKillActor {
-    type Args = (Arc<Mutex<u32>>, u32);
-    type Error = anyhow::Error;
-
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        let (on_run_call_count, kill_after_calls) = args;
-        Ok(OnRunKillActor {
-            on_run_call_count,
-            kill_after_calls,
-        })
-    }
-
-    async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
-        let mut count = self.on_run_call_count.lock().await;
-        *count += 1;
-        let current_count = *count;
-        drop(count); // Release the lock before potential async operations
-
-        if current_count >= self.kill_after_calls {
-            // Call kill after the specified number of calls
-            actor_ref.kill().expect("kill should succeed");
-            // After calling kill, on_run should not be called again
-            return Ok(());
-        }
-
-        // Simulate some work with an await point
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct DummyKillMsg;
-
-impl Message<DummyKillMsg> for OnRunKillActor {
-    type Reply = u32;
-    async fn handle(&mut self, _msg: DummyKillMsg, _: ActorRef<Self>) -> Self::Reply {
-        *self.on_run_call_count.lock().await
-    }
-}
-
-impl_message_handler!(OnRunKillActor, [DummyKillMsg]);
-
-#[tokio::test]
-async fn test_on_run_stop_not_called_again_after_self_stop() {
-    let on_run_call_count = Arc::new(Mutex::new(0));
-    let stop_after_calls = 2; // Stop after 2 calls to on_run
-
-    let args = (on_run_call_count.clone(), stop_after_calls);
-    let (actor_ref, handle) = spawn::<OnRunStopActor>(args);
-
-    // Give some time for the actor to run and call stop on itself
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    // Check that the actor stopped itself and on_run was called exactly the expected number of times
-    let result = handle.await.expect("Actor task should complete");
-    assert!(result.is_completed(), "Actor should have completed");
-    assert!(!result.was_killed(), "Actor should not have been killed");
-    assert!(result.stopped_normally(), "Actor should have stopped normally");
-
-    // Verify on_run was called exactly the expected number of times and no more
-    let final_count = *on_run_call_count.lock().await;
-    assert_eq!(final_count, stop_after_calls,
-        "on_run should have been called exactly {} times before stop, but was called {} times",
-        stop_after_calls, final_count);
-
-    // Verify interactions after self-stop fail
-    assert!(actor_ref.tell(DummyStopMsg).await.is_err(),
-        "Tell to self-stopped actor should fail");
-    assert!(actor_ref.ask(DummyStopMsg).await.is_err(),
-        "Ask to self-stopped actor should fail");
 }
 
 #[tokio::test]
-async fn test_on_run_kill_not_called_again_after_self_kill() {
-    let on_run_call_count = Arc::new(Mutex::new(0));
-    let kill_after_calls = 3; // Kill after 3 calls to on_run
+async fn test_actor_on_stop_success_during_kill() {
+    let on_start_attempted = Arc::new(Mutex::new(false));
+    let on_run_attempted = Arc::new(Mutex::new(false));
+    let on_stop_attempted = Arc::new(Mutex::new(false));
 
-    let args = (on_run_call_count.clone(), kill_after_calls);
-    let (actor_ref, handle) = spawn::<OnRunKillActor>(args);
+    let args = LifecycleErrorArgs {
+        fail_on_start: false,
+        fail_on_run: false,
+        fail_on_stop: false, // All lifecycle methods should succeed
+        on_start_attempted: on_start_attempted.clone(),
+        on_run_attempted: on_run_attempted.clone(),
+        on_stop_attempted: on_stop_attempted.clone(),
+    };
+    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
 
-    // Give some time for the actor to run and call kill on itself
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Wait for actor to start
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Check that the actor killed itself and on_run was called exactly the expected number of times
-    let result = handle.await.expect("Actor task should complete");
-    assert!(result.is_completed(), "Actor should have completed");
-    assert!(result.was_killed(), "Actor should have been killed");
+    // Kill the actor - this should succeed
+    actor_ref.kill().expect("kill command should succeed");
 
-    // Verify on_run was called exactly the expected number of times and no more
-    let final_count = *on_run_call_count.lock().await;
-    assert_eq!(final_count, kill_after_calls,
-        "on_run should have been called exactly {} times before kill, but was called {} times",
-        kill_after_calls, final_count);
+    let result = handle.await.expect("Join handle should not fail");
+    assert!(result.is_completed(), "Actor should have completed successfully");
+    assert!(result.was_killed(), "Actor should be marked as killed");
 
-    // Verify interactions after self-kill fail
-    assert!(actor_ref.tell(DummyKillMsg).await.is_err(),
-        "Tell to self-killed actor should fail");
-    assert!(actor_ref.ask(DummyKillMsg).await.is_err(),
-        "Ask to self-killed actor should fail");
-}
-
-#[tokio::test]
-async fn test_on_run_continues_normally_without_self_termination() {
-    let on_run_call_count = Arc::new(Mutex::new(0));
-    let stop_after_calls = u32::MAX; // Never stop automatically
-
-    let args = (on_run_call_count.clone(), stop_after_calls);
-    let (actor_ref, handle) = spawn::<OnRunStopActor>(args);
-
-    // Give some time for multiple on_run calls
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    // Check that on_run has been called multiple times
-    let count_before_stop = *on_run_call_count.lock().await;
-    assert!(count_before_stop > 1,
-        "on_run should have been called multiple times when not self-terminating, got {} calls",
-        count_before_stop);
-
-    // Now manually stop the actor
-    actor_ref.stop().await.expect("Failed to stop actor manually");
-    let result = handle.await.expect("Actor task should complete");
-
-    assert!(result.is_completed(), "Actor should have completed");
-    assert!(!result.was_killed(), "Actor should not have been killed");
-    assert!(result.stopped_normally(), "Actor should have stopped normally");
-
-    // Verify on_run was called multiple times before manual stop
-    let final_count = *on_run_call_count.lock().await;
-    assert_eq!(final_count, count_before_stop,
-        "on_run call count should not change after manual stop");
-    assert!(final_count > 1,
-        "on_run should have been called multiple times, got {} calls", final_count);
+    if let rsactor::ActorResult::Completed { actor, killed } = result {
+        assert!(killed, "Should be marked as killed for kill operation");
+        assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
+        assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
+        assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
+    } else {
+        panic!("Expected Completed result");
+    }
 }

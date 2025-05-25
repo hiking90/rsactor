@@ -125,61 +125,11 @@ impl<T: Actor> ActorResult<T> {
         self.actor().is_some()
     }
 
-    /// Maps the actor instance if present, leaving other variants unchanged.
-    pub fn map_actor<U, F>(self, f: F) -> ActorResult<U>
-    where
-        F: FnOnce(T) -> U,
-        U: Actor<Error = T::Error>
-    {
-        match self {
-            ActorResult::Completed { actor, killed } => {
-                ActorResult::Completed { actor: f(actor), killed }
-            }
-            ActorResult::Failed { actor, error: cause, phase, killed } => {
-                ActorResult::Failed {
-                    actor: actor.map(f),
-                    error: cause,
-                    phase,
-                    killed
-                }
-            }
-        }
-    }
-
-    /// Applies a function to the actor if present and successful completion.
-    pub fn and_then<R, E, F>(self, f: F) -> std::result::Result<R, E> // Swapped E and F generic parameters to match usage
-    where
-        F: FnOnce(T) -> std::result::Result<R, E>,
-        E: From<T::Error> + From<&'static str>
-    {
-        match self {
-            ActorResult::Completed { actor, killed: false } => f(actor),
-            ActorResult::Completed { killed: true, .. } => {
-                Err(E::from("Actor was killed"))
-            }
-            ActorResult::Failed { error: cause, .. } => Err(E::from(cause)),
-        }
-    }
-
     /// Converts to a standard Result, preserving the actor on success
     pub fn to_result(self) -> std::result::Result<T, T::Error> {
         match self {
             ActorResult::Completed { actor, .. } => Ok(actor),
             ActorResult::Failed { error: cause, .. } => Err(cause),
-        }
-    }
-
-    /// Converts to a standard Result, only succeeding if actor stopped normally (not killed)
-    pub fn to_result_if_normal(self) -> std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>
-    where
-        T::Error: std::error::Error + Send + Sync + 'static
-    {
-        match self {
-            ActorResult::Completed { actor, killed: false } => Ok(actor),
-            ActorResult::Completed { killed: true, .. } => {
-                Err("Actor was killed".into())
-            }
-            ActorResult::Failed { error: cause, .. } => Err(Box::new(cause)),
         }
     }
 }
