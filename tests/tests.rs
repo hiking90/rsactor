@@ -906,7 +906,7 @@ fn test_runtime_error_outside_tokio() {
         // Extract and validate error details
         if let Error::Runtime { identity, details } = e {
             assert_ne!(identity.id, 0, "Actor ID should be non-zero");
-            assert!(details.contains("No tokio runtime available"),
+            assert!(details.contains("Failed to get Tokio runtime handle"),
                 "Error details should mention tokio runtime unavailability: {}", details);
         }
     }
@@ -923,7 +923,7 @@ fn test_runtime_error_outside_tokio() {
 
         if let Error::Runtime { identity, details } = e {
             assert_ne!(identity.id, 0, "Actor ID should be non-zero");
-            assert!(details.contains("No tokio runtime available"),
+            assert!(details.contains("Failed to get Tokio runtime handle"),
                 "Error details should mention tokio runtime unavailability: {}", details);
         }
     }

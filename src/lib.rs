@@ -156,6 +156,12 @@
 //! For more details on specific components, please refer to their individual
 //! documentation.
 
+mod error;
+pub use error::{Error, Result};
+
+mod actor_ref;
+pub use actor_ref::ActorRef;
+
 use std::{
     any::Any, fmt::Debug, future::Future, sync::{
         atomic::{AtomicUsize, Ordering}, OnceLock
@@ -163,7 +169,7 @@ use std::{
 };
 
 use tokio::sync::{mpsc, oneshot};
-use log::{info, error, warn, debug, trace};
+use log::{info, error, debug, trace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Identity {
@@ -190,102 +196,6 @@ impl std::fmt::Display for Identity {
         write!(f, "{}#{}", self.type_name, self.id)
     }
 }
-
-#[derive(Debug)]
-/// Represents errors that can occur in the rsactor framework.
-pub enum Error {
-    /// Error when sending a message to an actor
-    Send {
-        /// ID of the actor that failed to receive the message
-        identity: Identity,
-        /// Additional context about the error
-        details: String,
-    },
-    /// Error when receiving a response from an actor
-    Receive {
-        /// ID of the actor that failed to send a response
-        identity: Identity,
-        /// Additional context about the error
-        details: String,
-    },
-    /// Error when a request times out
-    Timeout {
-        /// ID of the actor that timed out
-        identity: Identity,
-        /// The duration after which the request timed out
-        timeout: Duration,
-        /// Type of operation that timed out (e.g., "send", "ask")
-        operation: String,
-    },
-    /// Error when a message type is not handled by an actor
-    UnhandledMessageType {
-        /// ID of the actor that timed out
-        identity: Identity,
-        /// Expected message types
-        expected_types: Vec<String>,
-        /// Actual message type ID
-        actual_type_id: std::any::TypeId,
-    },
-    /// Error when downcasting a reply to the expected type
-    Downcast {
-        /// ID of the actor that sent the incompatible reply
-        identity: Identity,
-        expected_type: String,
-    },
-    /// Error when a runtime operation fails
-    Runtime {
-        /// ID of the actor where the runtime error occurred
-        identity: Identity,
-        /// Additional context about the error
-        details: String,
-    },
-    /// Error related to mailbox capacity configuration
-    MailboxCapacity {
-        /// The error message
-        message: String,
-    },
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Send { identity: actor_id, details } => {
-                write!(f, "Failed to send message to actor {}: {}", actor_id.name(), details)
-            }
-            Error::Receive { identity: actor_id, details } => {
-                write!(f, "Failed to receive reply from actor {}: {}", actor_id.name(), details)
-            }
-            Error::Timeout { identity: actor_id, timeout, operation } => {
-                write!(f, "{} operation to actor {} timed out after {:?}",
-                       operation, actor_id.name(), timeout)
-            }
-            Error::UnhandledMessageType { identity: actor_id, expected_types, actual_type_id } => {
-                write!(
-                    f,
-                    "Actor '{}' received an unhandled message type. Expected one of: [{}]. Actual message type ID: {:?}",
-                    actor_id.name(),
-                    expected_types.join(", "),
-                    actual_type_id
-                )
-            }
-            Error::Downcast { identity: actor_id, expected_type } => {
-                write!(f, "Failed to downcast reply from actor {} to expected type '{}'",
-                    actor_id.name(), expected_type)
-            }
-            Error::Runtime { identity: actor_id, details } => {
-                write!(f, "Runtime error in actor {}: {}", actor_id.name(), details)
-            }
-            Error::MailboxCapacity { message } => {
-                write!(f, "Mailbox capacity error: {}", message)
-            }
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-/// A Result type specialized for rsactor operations.
-pub type Result<T> = std::result::Result<T, Error>;
 
 /// Implements the `MessageHandler` trait for a given actor type.
 ///
@@ -369,7 +279,7 @@ macro_rules! impl_message_handler {
 /// and control messages like `StopGracefully`. The `Terminate` control signal
 /// is handled through a separate dedicated channel.
 #[derive(Debug)]
-enum MailboxMessage {
+enum MailboxMessage { // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
     /// A user-defined message to be processed by the actor.
     Envelope {
         /// The message payload.
@@ -384,13 +294,13 @@ enum MailboxMessage {
 
 /// Represents control signals that can be sent to an actor.
 #[derive(Debug)]
-enum ControlSignal {
+enum ControlSignal { // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
     /// A signal for the actor to terminate immediately.
     Terminate,
 }
 
 // Type alias for the sender part of the actor's mailbox channel.
-type MailboxSender = mpsc::Sender<MailboxMessage>;
+type MailboxSender = mpsc::Sender<MailboxMessage>; // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
 
 // Counter for generating unique actor IDs.
 static ACTOR_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -420,325 +330,7 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
         })
 }
 
-/// A reference to an actor, allowing messages to be sent to it.
-///
-/// `ActorRef` provides a way to interact with actors without having direct access
-/// to the actor instance itself. It holds a sender channel to the actor's mailbox.
-///
-/// ## Message Passing Methods
-///
-/// - **Asynchronous Methods**:
-///   - [`ask`](ActorRef::ask): Send a message and await a reply.
-///   - [`ask_with_timeout`](ActorRef::ask_with_timeout): Send a message and await a reply with a timeout.
-///   - [`tell`](ActorRef::tell): Send a message without waiting for a reply.
-///   - [`tell_with_timeout`](ActorRef::tell_with_timeout): Send a message without waiting for a reply with a timeout.
-///
-/// - **Blocking Methods for Tokio Blocking Contexts**:
-///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a reply is received.
-///   - [`tell_blocking`](ActorRef::tell_blocking): Send a message and block until it is sent.
-///
-///   These methods are for use within `tokio::task::spawn_blocking` contexts.
-///
-/// - **Control Methods**:
-///   - [`stop`](ActorRef::stop): Gracefully stop the actor.
-///   - [`kill`](ActorRef::kill): Immediately terminate the actor.
-#[derive(Clone, Debug)]
-pub struct ActorRef {
-    identity: Identity,
-    sender: MailboxSender,
-    terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
-}
-
-impl ActorRef {
-    // Creates a new ActorRef with a unique ID and the mailbox sender.
-    // This is typically called by the System when an actor is spawned.
-    fn new(
-        identity: Identity,
-        sender: MailboxSender,
-        terminate_sender: mpsc::Sender<ControlSignal>,
-    ) -> Self { // Changed type
-        ActorRef {
-            identity,
-            sender,
-            terminate_sender,
-        }
-    }
-
-    /// Returns the unique ID of the actor.
-    pub const fn identity(&self) -> Identity {
-        self.identity
-    }
-
-    /// Checks if the actor is still alive by verifying if its channels are open.
-    pub fn is_alive(&self) -> bool {
-        // Check if the sender channel is open
-        !self.sender.is_closed() && !self.terminate_sender.is_closed()
-    }
-
-    /// Sends a message to the actor without awaiting a reply (fire-and-forget).
-    ///
-    /// The message is sent to the actor's mailbox for processing.
-    /// This method returns immediately.
-    pub async fn tell<M>(&self, msg: M) -> Result<()>
-    where
-        M: Send + 'static,
-    {
-        // For 'tell', no reply is expected, so no need for a reply_channel.
-        let msg_any = Box::new(msg) as Box<dyn Any + Send>;
-
-        let envelope = MailboxMessage::Envelope {
-            payload: msg_any,
-            reply_channel: None, // reply_channel is None for tell
-        };
-
-        if self.sender.send(envelope).await.is_err() {
-            Err(Error::Send {
-                identity: self.identity,
-                details: "Mailbox channel closed".to_string(),
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Sends a message to the actor without awaiting a reply (fire-and-forget) with a timeout.
-    ///
-    /// Similar to `tell`, but allows specifying a timeout for the send operation.
-    /// The message is sent to the actor's mailbox, and this method will return once
-    /// the message is sent or timeout if the send operation doesn't complete
-    /// within the specified duration.
-    pub async fn tell_with_timeout<M>(&self, msg: M, timeout: std::time::Duration) -> Result<()>
-    where
-        M: Send + 'static,
-    {
-        tokio::time::timeout(timeout, self.tell(msg))
-            .await
-            .map_err(|_| Error::Timeout {
-                identity: self.identity,
-                timeout,
-                operation: "tell".to_string(),
-            })?
-    }
-
-    /// Sends a message to the actor and awaits a reply.
-    ///
-    /// The message is sent to the actor\\'s mailbox, and this method will wait for
-    /// the actor to process the message and send a reply.
-    pub async fn ask<M, R>(&self, msg: M) -> Result<R>
-    where
-        M: Send + 'static,
-        R: Send + 'static,
-    {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let envelope = MailboxMessage::Envelope {
-            payload: Box::new(msg),
-            reply_channel: Some(reply_tx),
-        };
-
-        if self.sender.send(envelope).await.is_err() {
-            return Err(Error::Send {
-                identity: self.identity,
-                details: "Mailbox channel closed".to_string(),
-            });
-        }
-
-        match reply_rx.await {
-            Ok(Ok(reply_any)) => { // recv was Ok, actor reply was Ok
-                match reply_any.downcast::<R>() {
-                    Ok(reply) => Ok(*reply),
-                    Err(_) => Err(Error::Downcast {
-                        identity: self.identity,
-                        expected_type: std::any::type_name::<R>().to_string(),
-                    }),
-                }
-            }
-            Ok(Err(e)) => Err(e), // recv was Ok, actor reply was Err
-            Err(_recv_err) => Err(Error::Receive { // recv itself failed
-                identity: self.identity,
-                details: "Reply channel closed unexpectedly".to_string(),
-            }),
-        }
-    }
-
-    /// Sends a message to the actor and awaits a reply with a timeout.
-    ///
-    /// Similar to `ask`, but allows specifying a timeout for the operation.
-    /// The message is sent to the actor's mailbox, and this method will wait for
-    /// the actor to process the message and send a reply, or timeout if the reply
-    /// doesn't arrive within the specified duration.
-    pub async fn ask_with_timeout<M, R>(&self, msg: M, timeout: std::time::Duration) -> Result<R>
-    where
-        M: Send + 'static,
-        R: Send + 'static,
-    {
-        tokio::time::timeout(timeout, self.ask(msg))
-            .await
-            .map_err(|_| Error::Timeout {
-                identity: self.identity,
-                timeout,
-                operation: "ask".to_string(),
-            })?
-    }
-
-    /// Sends an immediate termination signal to the actor.
-    ///
-    /// The actor will stop processing messages and shut down as soon as possible.
-    /// The actor's final result will indicate it was killed.
-    pub fn kill(&self) -> Result<()> {
-        debug!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.identity);
-        // Use the dedicated terminate_sender with try_send
-        match self.terminate_sender.try_send(ControlSignal::Terminate) {
-            Ok(_) => {
-                // Successfully sent the terminate message.
-                Ok(())
-            }
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                // The channel is full. Since it has a capacity of 1,
-                // this means a Terminate message is already in the queue.
-                warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.identity);
-                // Considered Ok as the desired state (stopping/killed) is effectively met.
-                Ok(())
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                // The channel is closed, which implies the actor is already stopped or has finished processing.
-                warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.identity);
-                // Considered Ok as the desired state (stopped) is met.
-                Ok(())
-            }
-        }
-    }
-
-    /// Sends a graceful stop signal to the actor.
-    ///
-    /// The actor will process all messages currently in its mailbox and then stop.
-    /// New messages sent after this call might be ignored or fail.
-    /// The actor's final result will indicate normal completion.
-    pub async fn stop(&self) -> Result<()> {
-        debug!("Sending StopGracefully message to actor {}", self.identity);
-        match self.sender.send(MailboxMessage::StopGracefully).await {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                // This error means the actor's mailbox channel is closed,
-                // which implies the actor is already stopping or has stopped.
-                warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", self.identity);
-                // Considered Ok as the desired state (stopped/stopping) is met.
-                Ok(())
-            }
-        }
-    }
-
-    // =========================================================================
-    // Blocking functions for Tokio blocking tasks
-    // =========================================================================
-
-    /// # Blocking Functions for Tokio Tasks
-    ///
-    /// These functions are intended for scenarios where CPU-intensive or other blocking operations
-    /// are performed within a `tokio::task::spawn_blocking` task, and communication
-    /// with actors is necessary. They allow such tasks to interact with the actor system
-    /// synchronously, without using `async/await` directly within the blocking task.
-    ///
-    /// ## Example
-    ///
-    /// The following example illustrates using `tell_blocking`. A similar approach applies to `ask_blocking`.
-    ///
-    /// ```rust,no_run
-    /// # use rsactor::{Actor, ActorRef};
-    /// # use std::time::Duration;
-    /// # fn example(actor_ref: ActorRef) { // Assuming actor_ref is an ActorRef to a suitable actor
-    /// let actor_clone = actor_ref.clone();
-    /// tokio::task::spawn_blocking(move || {
-    ///     // Perform CPU-intensive work
-    ///
-    ///     // Send results to actor
-    ///     actor_clone.tell_blocking("Work completed", Some(Duration::from_secs(1)))
-    ///         .expect("Failed to send message");
-    /// });
-    /// # }
-    /// ```
-    ///
-    /// For more comprehensive examples, including `ask_blocking`, refer to
-    /// `examples/actor_blocking_tasks.rs`.
-    pub fn tell_blocking<M>(&self, msg: M, timeout: Option<std::time::Duration>) -> Result<()>
-    where
-        M: Send + 'static,
-    {
-        let rt = tokio::runtime::Handle::try_current().map_err(|e| {
-            Error::Runtime {
-                identity: self.identity, // Assuming self.id is accessible here. If not, need to adjust.
-                details: format!("No tokio runtime available for tell_blocking: {}", e),
-            }
-        })?;
-
-        match timeout {
-            Some(duration) => {
-                rt.block_on(async {
-                    tokio::time::timeout(duration, self.tell(msg))
-                        .await
-                        .map_err(|_| Error::Timeout {
-                            identity: self.identity,
-                            timeout: duration,
-                            operation: "tell_blocking".to_string(),
-                        })?
-                })
-            },
-            None => rt.block_on(self.tell(msg)),
-        }
-    }
-
-    /// Synchronous version of `ask` that blocks until the reply is received.
-    ///
-    /// The message is sent to the actor's mailbox, and this method will block until
-    /// the actor processes the message and sends a reply or the timeout expires.
-    ///
-    /// # Examples
-    ///
-    /// For a complete example, see `examples/actor_blocking_tasks.rs`.
-    ///
-    /// ```rust,no_run
-    /// use rsactor::ActorRef;
-    /// use std::time::Duration;
-    /// struct QueryMessage;
-    /// fn main() -> anyhow::Result<()> {
-    ///     let actor_ref: ActorRef = panic!(); // Placeholder
-    ///     let result = tokio::task::spawn_blocking(move || {
-    ///         let timeout = Some(Duration::from_secs(2));
-    ///         let response: String = actor_ref.ask_blocking(QueryMessage, timeout).unwrap();
-    ///         // Process response...
-    ///         response
-    ///     });
-    ///     Ok(())
-    /// }
-    /// ```
-    /// Refer to the `examples/actor_blocking_tasks.rs` file for a runnable demonstration.
-    pub fn ask_blocking<M, R>(&self, msg: M, timeout: Option<std::time::Duration>) -> Result<R>
-    where
-        M: Send + 'static,
-        R: Send + 'static,
-    {
-        let rt = tokio::runtime::Handle::try_current().map_err(|e| {
-            Error::Runtime {
-                identity: self.identity, // Assuming self.id is accessible here.
-                details: format!("No tokio runtime available for ask_blocking: {}", e),
-            }
-        })?;
-
-        match timeout {
-            Some(duration) => {
-                rt.block_on(async {
-                    tokio::time::timeout(duration, self.ask(msg))
-                        .await
-                        .map_err(|_| Error::Timeout {
-                            identity: self.identity,
-                            timeout: duration,
-                            operation: "ask_blocking".to_string(),
-                        })?
-                })
-            },
-            None => rt.block_on(self.ask(msg)),
-        }
-    }
-}
+// ActorRef struct and impl removed
 
 /// Represents the phase during which an actor failure occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
