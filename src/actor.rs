@@ -149,6 +149,7 @@ pub trait Actor: Sized + Send + 'static {
     /// - Returning `Ok(())` signifies that the current segment of work completed successfully,
     ///   and the actor should continue running (i.e., `on_run` will be called again).
     /// - Returning `Err(_)` signifies termination due to an error.
+    ///
     /// The specific outcome is captured in the `ActorResult`.
     ///
     /// The default implementation of `on_run` is a simple async block that sleeps for 1 second
