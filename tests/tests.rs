@@ -385,41 +385,14 @@ async fn test_actor_fail_on_run() {
     assert!(result.is_runtime_failed(), "Actor should have failed at runtime");
 
     match result {
-        rsactor::ActorResult::RuntimeFailed { actor, cause } => {
-            assert!(cause.to_string().contains("simulated on_run failure"));
+        rsactor::ActorResult::Failed { actor, error , ..} => {
+            assert!(error.to_string().contains("simulated on_run failure"));
             if let Some(actor) = actor {
                 assert!(*actor.on_start_attempted.lock().await);
                 assert!(*actor.on_run_attempted.lock().await);
             }
         }
         _ => panic!("Expected RuntimeFailed result"),
-    }
-}
-
-#[tokio::test]
-async fn test_actor_return_false_on_run() {
-    let on_start_attempted = Arc::new(Mutex::new(false));
-    let on_run_attempted = Arc::new(Mutex::new(false));
-    let actor_args = LifecycleErrorArgs {
-        fail_on_start: false,
-        fail_on_run: false,
-        on_start_attempted: on_start_attempted.clone(),
-        on_run_attempted: on_run_attempted.clone(),
-    };
-    let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(actor_args);
-
-    let result = handle.await.expect("Join handle should not fail");
-    // Expect completed with killed=false because on_run returning false is a graceful shutdown
-    assert!(result.is_completed(), "Actor should have completed normally");
-    assert!(!result.was_killed(), "Actor should not have been killed");
-    assert!(result.stopped_normally(), "Actor should have stopped normally");
-
-    match result {
-        rsactor::ActorResult::Completed { actor, killed: _ } => {
-            assert!(*actor.on_start_attempted.lock().await, "on_start should be attempted");
-            assert!(*actor.on_run_attempted.lock().await, "on_run should be attempted");
-        }
-        _ => panic!("Expected Completed result"),
     }
 }
 
@@ -1065,7 +1038,7 @@ async fn test_generic_actor() {
     let expected_type_name = std::any::type_name::<generic_actor::GenericActor<u32>>();
     let identity = actor_ref.identity();
     assert_eq!(identity.type_name, expected_type_name);
-    assert_eq!(identity.name(), format!("{}#{}", expected_type_name, actor_ref.identity()));
+    assert_eq!(identity.name(), format!("{}#{}", expected_type_name, actor_ref.identity().id));
     let reply: u32 = actor_ref.ask(generic_actor::GetValueMsg).await.expect("ask failed for GetValueMsg");
     assert_eq!(reply, 123);
     actor_ref.stop().await.expect("Failed to stop generic actor");

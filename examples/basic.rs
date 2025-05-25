@@ -146,14 +146,13 @@ async fn main() -> Result<()> {
                 killed
             );
         }
-        rsactor::ActorResult::StartupFailed { cause } => {
-            println!("Actor {} failed to start: {}", actor_ref.identity(), cause);
-        }
-        rsactor::ActorResult::RuntimeFailed { actor, cause } => {
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
             println!(
-                "Actor {} failed at runtime: {}. Final count: {}",
+                "Actor {} stop failed: {}. Phase: {}, Killed: {}. Final count: {}",
                 actor_ref.identity(),
-                cause,
+                error,
+                phase,
+                killed,
                 actor.as_ref().map(|a| a.count).unwrap_or(0)
             );
         }

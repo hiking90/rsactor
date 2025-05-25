@@ -54,11 +54,17 @@
 //! #[derive(Debug)]
 //! struct MyActor {
 //!     data: String,
+//!     tick_300ms: tokio::time::Interval,
+//!     tick_1s: tokio::time::Interval,
 //! }
 //!
 //! impl MyActor {
 //!     fn new(data: &str) -> Self {
-//!         MyActor { data: data.to_string() }
+//!         MyActor {
+//!             data: data.to_string(),
+//!             tick_300ms: tokio::time::interval(std::time::Duration::from_millis(300)),
+//!             tick_1s: tokio::time::interval(std::time::Duration::from_secs(1)),
+//!         }
 //!     }
 //! }
 //!
@@ -70,25 +76,27 @@
 //!     // Required: Implement on_start for actor creation and initialization
 //!     async fn on_start(args: Self::Args, _actor_ref: &ActorRef) -> std::result::Result<Self, Self::Error> {
 //!         println!("MyActor (data: '{}') started!", args);
-//!         Ok(MyActor { data: args })
+//!         Ok(MyActor {
+//!             data: args,
+//!             tick_300ms: tokio::time::interval(std::time::Duration::from_millis(300)),
+//!             tick_1s: tokio::time::interval(std::time::Duration::from_secs(1)),
+//!         })
 //!     }
 //!
 //!     // Optional: Implement on_run for the actor's main execution logic.
 //!     // This method is called after on_start. If it returns Ok(false), the actor stops normally.
 //!     // If it returns Err(_), the actor stops due to an error.
 //!     // If it returns Ok(true), the actor continues running.
-//!     async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
-//!         let mut tick_300ms = tokio::time::interval(std::time::Duration::from_millis(300));
-//!         let mut tick_1s = tokio::time::interval(std::time::Duration::from_secs(1));
+//!     async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
 //!         tokio::select! {
-//!             _ = tick_300ms.tick() => {
+//!             _ = self.tick_300ms.tick() => {
 //!                 println!("Tick: 300ms");
 //!             }
-//!             _ = tick_1s.tick() => {
+//!             _ = self.tick_1s.tick() => {
 //!                 println!("Tick: 1s");
 //!             }
 //!         }
-//!         Ok(true) // Continue running
+//!         Ok(()) // Continue running
 //!     }
 //! }
 //!
@@ -732,6 +740,27 @@ impl ActorRef {
     }
 }
 
+/// Represents the phase during which an actor failure occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailurePhase {
+    /// Actor failed during the `on_start` lifecycle hook.
+    OnStart,
+    /// Actor failed during execution.
+    OnRun,
+    /// Actor failed during the `on_stop` lifecycle hook.
+    OnStop,
+}
+
+impl std::fmt::Display for FailurePhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FailurePhase::OnStart => write!(f, "OnStart"),
+            FailurePhase::OnRun => write!(f, "OnRun"),
+            FailurePhase::OnStop => write!(f, "OnStop"),
+        }
+    }
+}
+
 /// Result type returned when an actor's lifecycle completes.
 #[derive(Debug)]
 pub enum ActorResult<T: Actor> {
@@ -740,14 +769,12 @@ pub enum ActorResult<T: Actor> {
         actor: T,
         killed: bool,
     },
-    /// Actor failed to start during the `on_start` lifecycle hook.
-    StartupFailed {
-        cause: T::Error,
-    },
-    /// Actor failed during execution.
-    RuntimeFailed {
+    /// Actor failed during one of its lifecycle phases.
+    Failed {
         actor: Option<T>,
-        cause: T::Error,
+        error: T::Error,
+        phase: FailurePhase,
+        killed: bool,
     },
 }
 
@@ -755,8 +782,7 @@ impl<T: Actor> From<ActorResult<T>> for (Option<T>, Option<T::Error>) {
     fn from(result: ActorResult<T>) -> Self {
         match result {
             ActorResult::Completed { actor, .. } => (Some(actor), None),
-            ActorResult::StartupFailed { cause } => (None, Some(cause)),
-            ActorResult::RuntimeFailed { actor, cause } => (actor, Some(cause)),
+            ActorResult::Failed { actor, error: cause, .. } => (actor, Some(cause)),
         }
     }
 }
@@ -770,7 +796,7 @@ impl<T: Actor> ActorResult<T> {
 
     /// Returns `true` if the actor was killed.
     pub fn was_killed(&self) -> bool {
-        matches!(self, ActorResult::Completed { killed: true, .. })
+        matches!(self, ActorResult::Completed { killed: true, .. } | ActorResult::Failed { killed: true, .. })
     }
 
     /// Returns `true` if the actor stopped normally.
@@ -780,16 +806,120 @@ impl<T: Actor> ActorResult<T> {
 
     /// Returns `true` if the actor failed to start.
     pub fn is_startup_failed(&self) -> bool {
-        matches!(self, ActorResult::StartupFailed { .. })
+        matches!(self, ActorResult::Failed { phase: FailurePhase::OnStart, .. })
     }
 
     /// Returns `true` if the actor failed during runtime.
     pub fn is_runtime_failed(&self) -> bool {
-        matches!(self, ActorResult::RuntimeFailed { .. })
+        matches!(self, ActorResult::Failed { phase: FailurePhase::OnRun, .. })
+    }
+
+    /// Returns `true` if the actor failed during the stop phase.
+    pub fn is_stop_failed(&self) -> bool {
+        matches!(self, ActorResult::Failed { phase: FailurePhase::OnStop, .. })
+    }
+
+    /// Returns the actor instance if available, regardless of the result type.
+    pub fn actor(&self) -> Option<&T> {
+        match self {
+            ActorResult::Completed { actor, .. } => Some(actor),
+            ActorResult::Failed { actor, .. } => actor.as_ref(),
+        }
+    }
+
+    /// Consumes the result and returns the actor instance if available.
+    pub fn into_actor(self) -> Option<T> {
+        match self {
+            ActorResult::Completed { actor, .. } => Some(actor),
+            ActorResult::Failed { actor, .. } => actor,
+        }
+    }
+
+    /// Returns the error if the result represents a failure.
+    pub fn error(&self) -> Option<&T::Error> {
+        match self {
+            ActorResult::Completed { .. } => None,
+            ActorResult::Failed { error: cause, .. } => Some(cause),
+        }
+    }
+
+    /// Consumes the result and returns the error if it represents a failure.
+    pub fn into_error(self) -> Option<T::Error> {
+        match self {
+            ActorResult::Completed { .. } => None,
+            ActorResult::Failed { error: cause, .. } => Some(cause),
+        }
+    }
+
+    /// Returns true if the result represents any kind of failure.
+    pub fn is_failed(&self) -> bool {
+        !self.is_completed()
+    }
+
+    /// Returns true if the result contains an actor instance.
+    pub fn has_actor(&self) -> bool {
+        self.actor().is_some()
+    }
+
+    /// Maps the actor instance if present, leaving other variants unchanged.
+    pub fn map_actor<U, F>(self, f: F) -> ActorResult<U>
+    where
+        F: FnOnce(T) -> U,
+        U: Actor<Error = T::Error>
+    {
+        match self {
+            ActorResult::Completed { actor, killed } => {
+                ActorResult::Completed { actor: f(actor), killed }
+            }
+            ActorResult::Failed { actor, error: cause, phase, killed } => {
+                ActorResult::Failed {
+                    actor: actor.map(f),
+                    error: cause,
+                    phase,
+                    killed
+                }
+            }
+        }
+    }
+
+    /// Applies a function to the actor if present and successful completion.
+    pub fn and_then<F, R, E>(self, f: F) -> std::result::Result<R, E>
+    where
+        F: FnOnce(T) -> std::result::Result<R, E>,
+        E: From<T::Error> + From<&'static str>
+    {
+        match self {
+            ActorResult::Completed { actor, killed: false } => f(actor),
+            ActorResult::Completed { killed: true, .. } => {
+                Err(E::from("Actor was killed"))
+            }
+            ActorResult::Failed { error: cause, .. } => Err(E::from(cause)),
+        }
+    }
+
+    /// Converts to a standard Result, preserving the actor on success
+    pub fn to_result(self) -> std::result::Result<T, T::Error> {
+        match self {
+            ActorResult::Completed { actor, .. } => Ok(actor),
+            ActorResult::Failed { error: cause, .. } => Err(cause),
+        }
+    }
+
+    /// Converts to a standard Result, only succeeding if actor stopped normally (not killed)
+    pub fn to_result_if_normal(self) -> std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>
+    where
+        T::Error: std::error::Error + Send + Sync + 'static
+    {
+        match self {
+            ActorResult::Completed { actor, killed: false } => Ok(actor),
+            ActorResult::Completed { killed: true, .. } => {
+                Err("Actor was killed".into())
+            }
+            ActorResult::Failed { error: cause, .. } => Err(Box::new(cause)),
+        }
     }
 }
 
-// pub trait ReplyError: Any + Send + Debug + 'static {}
 
 /// Defines the behavior of an actor.
 ///
@@ -886,7 +1016,7 @@ pub trait Actor: Sized + Send + 'static {
     ///        self.interval.tick().await; // This await point allows message processing.
     ///
     ///        // Perform the periodic task here.
-    ///        println!("Periodic task executed by actor {}", actor_ref.name());
+    ///        println!("Periodic task executed by actor {}", actor_ref.identity());
     ///        self.ticks_done += 1;
     ///
     ///        // If your task is computationally intensive, ensure you still have an await
@@ -901,7 +1031,7 @@ pub trait Actor: Sized + Send + 'static {
     ///        // To stop the actor normally from within on_run, call actor_ref.stop() or actor_ref.kill().
     ///        // For example, to stop after 10 ticks:
     ///        if self.ticks_done >= 10 {
-    ///            println!("Actor {} stopping after {} ticks.", actor_ref.name(), self.ticks_done);
+    ///            println!("Actor {} stopping after {} ticks.", actor_ref.identity(), self.ticks_done);
     ///            actor_ref.stop().await?; // or actor_ref.kill()?
     ///            // After calling stop/kill, on_run might not be called again as the actor shuts down.
     ///            // It's good practice to return Ok(()) here, or handle potential errors from stop().
@@ -946,6 +1076,12 @@ pub trait Actor: Sized + Send + 'static {
             tokio::time::sleep(Duration::from_secs(1)).await;
             Ok(())
         }
+    }
+
+    fn on_stop(&mut self, _actor_ref: &ActorRef, _killed: bool) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+        // Default implementation does nothing on stop.
+        // Override this method in your actor if you need to perform cleanup.
+        async { Ok(()) }
     }
 }
 
@@ -1001,7 +1137,12 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
         }
         Err(e) => {
             error!("Actor {} on_start failed: {:?}", actor_id, e);
-            return ActorResult::StartupFailed { cause: e }
+            return ActorResult::Failed {
+                actor: None,
+                error: e,
+                phase: FailurePhase::OnStart,
+                killed: false
+            }
         }
     };
 
@@ -1019,6 +1160,18 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                 if let Some(ControlSignal::Terminate) = maybe_signal {
                     info!("Actor {} received Terminate signal. Stopping immediately.", actor_id);
                     was_killed = true;
+
+                    // Call on_stop for kill scenario
+                    if let Err(e) = actor.on_stop(&actor_ref, true).await {
+                        error!("Actor {} on_stop failed during kill: {:?}", actor_id, e);
+                        return ActorResult::Failed {
+                            actor: Some(actor),
+                            error: e,
+                            phase: FailurePhase::OnStop,
+                            killed: true,
+                        };
+                    }
+
                     break; // Exit the loop
                 } else {
                     // Channel closed or unexpected signal, this is an error state.
@@ -1064,14 +1217,24 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                     }
                     Some(MailboxMessage::StopGracefully) => {
                         info!("Actor {} received StopGracefully. Will stop after processing current messages.", actor_id);
+
+                        // Call on_stop for graceful stop scenario
+                        if let Err(e) = actor.on_stop(&actor_ref, false).await {
+                            error!("Actor {} on_stop failed during graceful stop: {:?}", actor_id, e);
+                            return ActorResult::Failed {
+                                actor: Some(actor),
+                                error: e,
+                                phase: FailurePhase::OnStop,
+                                killed: false,
+                            };
+                        }
+
                         break;
                     }
                     // Terminate is handled by its own dedicated channel and select branch.
                     None => {
                         // Mailbox closed, meaning all senders (ActorRefs) are dropped.
-                        // This is a form of graceful shutdown.
-                        debug!("Actor {} mailbox closed (all ActorRefs dropped). Stopping.", actor_id);
-                        break; // Exit loop
+                        unreachable!("Actor {} mailbox closed unexpectedly. This should not happen unless all ActorRefs are dropped.", actor_id);
                     }
                 }
             }
@@ -1085,9 +1248,11 @@ async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                     Err(e) => { // e is A::Error
                         let error_msg = format!("Actor {} on_run error: {:?}", actor_id, e);
                         error!("{}", error_msg);
-                        return ActorResult::RuntimeFailed {
+                        return ActorResult::Failed {
                             actor: Some(actor),
-                            cause: e
+                            error: e,
+                            phase: FailurePhase::OnRun,
+                            killed: false
                         };
                     }
                 }

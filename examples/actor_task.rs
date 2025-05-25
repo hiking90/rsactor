@@ -223,11 +223,8 @@ async fn main() -> Result<()> {
             println!("Final state: factor={:.2}, latest_value={:?}",
                      actor.factor, actor.latest_value);
         }
-        rsactor::ActorResult::StartupFailed { cause } => {
-            println!("Actor failed to start: {}", cause);
-        }
-        rsactor::ActorResult::RuntimeFailed { actor, cause } => {
-            println!("Actor failed at runtime: {}", cause);
+        rsactor::ActorResult::Failed { actor, error, killed, phase} => {
+            println!("Actor stop failed: {error}. Phase: {phase}, Killed: {killed}");
             if let Some(actor) = actor {
                 println!("Final state: factor={:.2}, latest_value={:?}",
                          actor.factor, actor.latest_value);

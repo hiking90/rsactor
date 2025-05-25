@@ -195,11 +195,8 @@ async fn main() -> Result<()> {
         rsactor::ActorResult::Completed { actor: _, killed } => {
             info!("Actor stopped successfully. Killed: {}", killed);
         }
-        rsactor::ActorResult::StartupFailed { cause } => {
-            info!("Actor failed to start: {}", cause);
-        }
-        rsactor::ActorResult::RuntimeFailed { actor: _, cause } => {
-            info!("Actor failed at runtime: {}", cause);
+        rsactor::ActorResult::Failed { error, killed, phase, .. } => {
+            info!("Actor stop failed: {}. Killed: {}, Phase: {}", error, killed, phase);
         }
     }
     info!("Example finished successfully");

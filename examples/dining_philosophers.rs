@@ -398,11 +398,8 @@ async fn main() -> Result<()> {
             ActorResult::Completed { actor, .. } => {
                 println!("Table terminated normally. Forks remaining: {:?}", actor.forks);
             }
-            ActorResult::StartupFailed { cause } => {
-                eprintln!("Table failed to start: {:?}", cause);
-            }
-            ActorResult::RuntimeFailed { cause, .. } => {
-                eprintln!("Table failed during runtime: {:?}", cause);
+            ActorResult::Failed { error, .. } => {
+                eprintln!("Table failed to start: {:?}", error);
             }
         },
         Err(e) => eprintln!("Error joining table task: {:?}", e),
@@ -414,15 +411,8 @@ async fn main() -> Result<()> {
             Ok(ActorResult::Completed { actor, .. }) => {
                 println!("Philosopher {} ({}): {} meals", actor.id, actor.name, actor.eat_count);
             }
-            Ok(ActorResult::StartupFailed { cause }) => {
-                eprintln!("Philosopher failed to start: {:?}", cause);
-            }
-            Ok(ActorResult::RuntimeFailed { actor: Some(philosopher), cause }) => {
-                eprintln!("Philosopher {} ({}) failed during runtime: {:?}, meals eaten: {}",
-                    philosopher.id, philosopher.name, cause, philosopher.eat_count);
-            }
-            Ok(ActorResult::RuntimeFailed { actor: None, cause }) => {
-                eprintln!("Unknown philosopher failed during runtime: {:?}", cause);
+            Ok(ActorResult::Failed { error, phase, .. }) => {
+                eprintln!("Philosopher failed to phase({phase}): {:?}", error);
             }
             Err(e) => {
                 eprintln!("Error joining philosopher task: {:?}", e);

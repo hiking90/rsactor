@@ -280,11 +280,8 @@ async fn main() -> Result<()> {
                      actor.factor, actor.latest_value);
             actor.task_handle.await.expect("Failed to join task handle");
         }
-        rsactor::ActorResult::StartupFailed { cause } => {
-            println!("Actor failed to start: {}", cause);
-        }
-        rsactor::ActorResult::RuntimeFailed { actor, cause } => {
-            println!("Actor failed at runtime: {}", cause);
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+            println!("Actor stop failed: {error}. Phase: {phase}, Killed: {killed}");
             if let Some(actor) = actor {
                 println!("Final state: factor={:.2}, latest_value={:?}",
                          actor.factor, actor.latest_value);
