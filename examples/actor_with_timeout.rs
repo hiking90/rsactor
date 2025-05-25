@@ -14,26 +14,16 @@ struct TimeoutDemoActor {
     name: String,
 }
 
-impl TimeoutDemoActor {
-    fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
-    }
-}
-
 // Implement the Actor trait
 impl Actor for TimeoutDemoActor {
+    type Args = String;
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        info!("{} actor (id: {}) started", self.name, actor_ref.id());
-        Ok(())
-    }
-
-    async fn on_stop(&mut self, actor_ref: &ActorRef, reason: &rsactor::ActorStopReason) -> Result<(), Self::Error> {
-        info!("{} actor (id: {}) stopped. Reason: {:?}", self.name, actor_ref.id(), reason);
-        Ok(())
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        info!("{} actor (id: {}) started", args, actor_ref.identity());
+        Ok(Self {
+            name: args,
+        })
     }
 }
 
@@ -49,7 +39,7 @@ struct ConfigurableQuery {
 impl Message<FastQuery> for TimeoutDemoActor {
     type Reply = String;
 
-    async fn handle(&mut self, msg: FastQuery, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: FastQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
         // This is a fast handler that completes quickly
         debug!("{} handling a FastQuery: {}", self.name, msg.0);
         format!("Fast response to: {}", msg.0)
@@ -59,7 +49,7 @@ impl Message<FastQuery> for TimeoutDemoActor {
 impl Message<SlowQuery> for TimeoutDemoActor {
     type Reply = String;
 
-    async fn handle(&mut self, msg: SlowQuery, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: SlowQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
         // This is a slow handler that takes time to complete
         debug!("{} handling a SlowQuery: {}. Will take 500ms", self.name, msg.0);
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -70,7 +60,7 @@ impl Message<SlowQuery> for TimeoutDemoActor {
 impl Message<ConfigurableQuery> for TimeoutDemoActor {
     type Reply = String;
 
-    async fn handle(&mut self, msg: ConfigurableQuery, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: ConfigurableQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
         debug!("{} handling ConfigurableQuery with delay {}ms: {}",
                self.name, msg.delay_ms, msg.question);
         tokio::time::sleep(Duration::from_millis(msg.delay_ms)).await;
@@ -82,7 +72,7 @@ impl Message<ConfigurableQuery> for TimeoutDemoActor {
 impl_message_handler!(TimeoutDemoActor, [FastQuery, SlowQuery, ConfigurableQuery]);
 
 // Demo helper function for ask_with_timeout
-async fn demonstrate_ask_with_timeout(actor_ref: &ActorRef, query: &str, timeout_ms: u64, expected_delay_ms: u64) {
+async fn demonstrate_ask_with_timeout(actor_ref: &ActorRef<TimeoutDemoActor>, query: &str, timeout_ms: u64, expected_delay_ms: u64) {
     let timer = std::time::Instant::now();
     let query_msg = ConfigurableQuery {
         question: query.to_string(),
@@ -103,7 +93,7 @@ async fn demonstrate_ask_with_timeout(actor_ref: &ActorRef, query: &str, timeout
 }
 
 // Demo helper function for tell_with_timeout
-async fn demonstrate_tell_with_timeout(actor_ref: &ActorRef, query: &str, timeout_ms: u64, expected_delay_ms: u64) {
+async fn demonstrate_tell_with_timeout(actor_ref: &ActorRef<TimeoutDemoActor>, query: &str, timeout_ms: u64, expected_delay_ms: u64) {
     let timer = std::time::Instant::now();
     let query_msg = ConfigurableQuery {
         question: query.to_string(),
@@ -133,7 +123,7 @@ async fn main() -> Result<()> {
     info!("Starting actor_with_timeout example");
 
     // Create and spawn the actor
-    let (actor_ref, join_handle) = spawn(TimeoutDemoActor::new("TimeoutDemo"));
+    let (actor_ref, join_handle) = spawn::<TimeoutDemoActor>("TimeoutDemo".to_string());
 
     // Fast query with plenty of time - should succeed
     info!("\n=== Test 1: Fast query with long timeout (100ms) ===");
@@ -199,9 +189,16 @@ async fn main() -> Result<()> {
     // Stop the actor gracefully and wait for it to terminate
     info!("\n=== Stopping actor ===");
     actor_ref.stop().await?;
-    let (_actor, reason) = join_handle.await?;
+    let result = join_handle.await?;
 
-    info!("Actor stopped with reason: {:?}", reason);
+    match result {
+        rsactor::ActorResult::Completed { actor: _, killed } => {
+            info!("Actor stopped successfully. Killed: {}", killed);
+        }
+        rsactor::ActorResult::Failed { error, killed, phase, .. } => {
+            info!("Actor stop failed: {}. Killed: {}, Phase: {}", error, killed, phase);
+        }
+    }
     info!("Example finished successfully");
 
     Ok(())

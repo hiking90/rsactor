@@ -12,7 +12,7 @@
 //! to be used within tokio::task::spawn_blocking tasks where a Tokio runtime is accessible.
 //! They are NOT intended for use in general synchronous code or threads created with std::thread::spawn.
 
-use rsactor::{Actor, ActorRef, ActorStopReason, Message};
+use rsactor::{Actor, ActorRef, Message};
 use anyhow::Result;
 use log::{info, debug};
 use tokio::sync::mpsc; // Using tokio channels for communication
@@ -38,12 +38,9 @@ struct ProcessedData {
 enum TaskCommand {
     /// Change the processing interval
     ChangeInterval(Duration),
-    /// Request to stop the task
+    /// Stop the background task
     Stop,
 }
-
-/// Message to send a command to the background task
-struct SendTaskCommand(TaskCommand);
 
 /// Define our actor that will spawn a sync background task
 struct SyncDataProcessorActor {
@@ -54,35 +51,21 @@ struct SyncDataProcessorActor {
     /// Latest timestamp when data was received
     latest_timestamp: Option<std::time::Instant>,
     /// Sender to communicate with the background task
-    task_sender: Option<mpsc::Sender<TaskCommand>>,
+    task_sender: mpsc::Sender<TaskCommand>,
     /// Task handle to await the background task
-    task_handle: Option<task::JoinHandle<()>>,
-}
-
-impl SyncDataProcessorActor {
-    fn new() -> Self {
-        Self {
-            factor: 1.0,
-            latest_value: None,
-            latest_timestamp: None,
-            task_sender: None,
-            task_handle: None,
-        }
-    }
+    task_handle: task::JoinHandle<()>,
 }
 
 impl Actor for SyncDataProcessorActor {
+    type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(&mut self, actor_ref: &ActorRef) -> Result<(), Self::Error> {
-        info!("SyncDataProcessorActor (id: {}) starting...", actor_ref.id());
+    async fn on_start(_args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        info!("SyncDataProcessorActor (id: {}) starting...", actor_ref.identity());
 
         // Create a tokio channel for actor -> task communication
         // We use a buffer size of 32 for the channel
         let (task_tx, mut task_rx) = mpsc::channel::<TaskCommand>(32);
-
-        // Store the sender in our actor state
-        self.task_sender = Some(task_tx);
 
         // Clone the actor_ref for the task to send messages back
         let task_actor_ref = actor_ref.clone();
@@ -151,44 +134,16 @@ impl Actor for SyncDataProcessorActor {
             info!("Synchronous background task stopping");
         });
 
-        // Store the task handle
-        self.task_handle = Some(handle);
+        let actor = Self {
+            factor: 1.0,
+            latest_value: None,
+            latest_timestamp: None,
+            task_sender: task_tx,
+            task_handle: handle,
+        };
 
         info!("SyncDataProcessorActor started and sync background task spawned");
-        Ok(())
-    }
-
-    async fn on_stop(&mut self, _actor_ref: &ActorRef, stop_reason: &ActorStopReason) -> Result<(), Self::Error> {
-        info!("SyncDataProcessorActor stopping: {:?}", stop_reason);
-
-        // Signal the background task to stop if we still have a sender
-        if let Some(sender) = self.task_sender.take() {
-            info!("Sending stop command to sync background task");
-            // For tokio channels, send is async but we can ignore errors here
-            // since we're shutting down anyway
-            let _ = sender.send(TaskCommand::Stop).await;
-        }
-
-        // Wait for the task to complete if we have a handle
-        if let Some(handle) = self.task_handle.take() {
-            info!("Waiting for sync background task to complete");
-            // Use a timeout to avoid blocking forever if the task is stuck
-            match tokio::time::timeout(Duration::from_secs(2), handle).await {
-                Ok(result) => {
-                    if let Err(e) = result {
-                        info!("Sync background task ended with error: {}", e);
-                    } else {
-                        info!("Sync background task completed successfully");
-                    }
-                }
-                Err(_) => {
-                    info!("Timeout waiting for sync background task to complete");
-                }
-            }
-        }
-
-        info!("SyncDataProcessorActor stopped with latest value: {:?}", self.latest_value);
-        Ok(())
+        Ok(actor)
     }
 }
 
@@ -197,7 +152,7 @@ impl Actor for SyncDataProcessorActor {
 impl Message<GetState> for SyncDataProcessorActor {
     type Reply = (f64, Option<f64>, Option<std::time::Instant>);
 
-    async fn handle(&mut self, _msg: GetState, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetState, _: ActorRef<Self>) -> Self::Reply {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
 }
@@ -205,7 +160,7 @@ impl Message<GetState> for SyncDataProcessorActor {
 impl Message<SetFactor> for SyncDataProcessorActor {
     type Reply = f64; // Return the new factor
 
-    async fn handle(&mut self, msg: SetFactor, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: SetFactor, _: ActorRef<Self>) -> Self::Reply {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!("Changed factor from {:.2} to {:.2}", old_factor, self.factor);
@@ -216,7 +171,7 @@ impl Message<SetFactor> for SyncDataProcessorActor {
 impl Message<ProcessedData> for SyncDataProcessorActor {
     type Reply = (); // No reply needed for data coming from the task
 
-    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: ProcessedData, _: ActorRef<Self>) -> Self::Reply {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -234,31 +189,26 @@ impl Message<ProcessedData> for SyncDataProcessorActor {
 }
 
 // Handler for sending commands to the background task
-impl Message<SendTaskCommand> for SyncDataProcessorActor {
+impl Message<TaskCommand> for SyncDataProcessorActor {
     type Reply = bool;
 
-    async fn handle(&mut self, msg: SendTaskCommand, _: &ActorRef) -> Self::Reply {
-        if let Some(sender) = &self.task_sender {
-            // With tokio channels, send is asynchronous
-            match sender.send(msg.0).await {
-                Ok(_) => {
-                    info!("Sent command to sync task");
-                    true
-                }
-                Err(_) => {
-                    info!("Failed to send command to sync task");
-                    false
-                }
+    async fn handle(&mut self, msg: TaskCommand, _: ActorRef<Self>) -> Self::Reply {
+        // With tokio channels, send is asynchronous
+        match self.task_sender.send(msg).await {
+            Ok(_) => {
+                info!("Sent command to sync task");
+                true
             }
-        } else {
-            info!("No task sender available");
-            false
+            Err(_) => {
+                info!("Failed to send command to sync task");
+                false
+            }
         }
     }
 }
 
 // Implement the message handler trait for our actor
-rsactor::impl_message_handler!(SyncDataProcessorActor, [GetState, SetFactor, ProcessedData, SendTaskCommand]);
+rsactor::impl_message_handler!(SyncDataProcessorActor, [GetState, SetFactor, ProcessedData, TaskCommand]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -270,8 +220,7 @@ async fn main() -> Result<()> {
     info!("Starting actor-sync-task communication example");
 
     // Create and spawn our actor
-    let actor = SyncDataProcessorActor::new();
-    let (actor_ref, join_handle) = rsactor::spawn(actor);
+    let (actor_ref, join_handle) = rsactor::spawn::<SyncDataProcessorActor>(());
 
     // Wait a bit to get some initial data
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -293,8 +242,8 @@ async fn main() -> Result<()> {
     // Change the task's data generation interval
     println!("Changing the sync task's data generation interval...");
 
-    let command_result = actor_ref.ask(SendTaskCommand(
-        TaskCommand::ChangeInterval(Duration::from_millis(200))
+    let command_result = actor_ref.ask(
+        TaskCommand::ChangeInterval(Duration::from_millis(200)
     )).await?;
 
     if command_result {
@@ -315,17 +264,30 @@ async fn main() -> Result<()> {
         println!("Data age: {:?}", ts.elapsed());
     }
 
+    actor_ref.ask(TaskCommand::Stop).await?;
+
     // Stop the actor gracefully
     println!("Stopping actor...");
     actor_ref.stop().await?;
 
     // Wait for the actor to finish (this will also wait for the background task)
-    let (actor, stop_reason) = join_handle.await?;
-    println!("Actor stopped with reason: {:?}", stop_reason);
+    let result = join_handle.await?;
 
-    // We can access the final state of the actor
-    println!("Final state: factor={:.2}, latest_value={:?}",
-             actor.factor, actor.latest_value);
+    match result {
+        rsactor::ActorResult::Completed { actor, killed } => {
+            println!("Actor completed successfully. Killed: {}", killed);
+            println!("Final state: factor={:.2}, latest_value={:?}",
+                     actor.factor, actor.latest_value);
+            actor.task_handle.await.expect("Failed to join task handle");
+        }
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+            println!("Actor stop failed: {error}. Phase: {phase}, Killed: {killed}");
+            if let Some(actor) = actor {
+                println!("Final state: factor={:.2}, latest_value={:?}",
+                         actor.factor, actor.latest_value);
+            }
+        }
+    }
 
     Ok(())
 }
