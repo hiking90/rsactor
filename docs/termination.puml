@@ -7,12 +7,21 @@ participant "MailboxChannel (mpsc)" as MailboxChannel
 participant "TerminateChannel (mpsc)" as TerminateChannel
 participant "run_actor_lifecycle()" as Lifecycle
 participant "Actor::on_run()" as on_run_method
+participant "Actor::on_stop()" as on_stop_method
 participant "JoinHandle" as JoinHandle_obj
 
 box "Actor Task" #LightCoral
     participant Lifecycle
     participant on_run_method
+    participant on_stop_method
 end box
+
+== Normal Operation ==
+Lifecycle -> on_run_method: Calls actor.on_run(actor_ref) continuously
+activate on_run_method
+note right of on_run_method: on_run() runs in a loop\nuntil stop/kill signal received
+on_run_method --> Lifecycle: Returns Ok(()) or Err(error)
+note right of Lifecycle: If Ok(()), on_run is called again\nIf Err(), actor fails
 
 == Stop Operation (Graceful) ==
 Client -> ActorRef_obj: actor_ref.stop().await
@@ -24,6 +33,12 @@ note right of Client: Client awaits JoinHandle or stop() completion
 MailboxChannel -> Lifecycle: receiver.recv() gets StopGracefully
 activate Lifecycle
 Lifecycle -> Lifecycle: Sets was_killed = false
+Lifecycle -> on_run_method: Signals to exit current on_run
+deactivate on_run_method
+Lifecycle -> on_stop_method: Calls actor.on_stop(StopReason::Graceful)
+activate on_stop_method
+on_stop_method --> Lifecycle: Returns Ok(()) or Err(error)
+deactivate on_stop_method
 Lifecycle -> Lifecycle: Breaks message loop
 Lifecycle -> MailboxChannel: receiver.close()
 Lifecycle -> TerminateChannel: terminate_receiver.close()
@@ -39,25 +54,30 @@ deactivate ActorRef_obj
 TerminateChannel -> Lifecycle: terminate_receiver.recv() gets Terminate (prioritized via biased select!)
 activate Lifecycle
 Lifecycle -> Lifecycle: Sets was_killed = true
+Lifecycle -> on_run_method: Aborts current on_run immediately
+deactivate on_run_method
+Lifecycle -> on_stop_method: Calls actor.on_stop(StopReason::Killed)
+activate on_stop_method
+on_stop_method --> Lifecycle: Returns Ok(()) or Err(error)
+deactivate on_stop_method
 Lifecycle -> Lifecycle: Breaks message loop immediately
 Lifecycle -> MailboxChannel: receiver.close()
 Lifecycle -> TerminateChannel: terminate_receiver.close()
 Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Completed { killed: true, .. }
 deactivate Lifecycle
 
-== Termination via on_run ==
+== Termination via on_run Error ==
 Lifecycle -> on_run_method: Calls actor.on_run(actor_ref)
 activate on_run_method
-alt on_run returns Err(error) (Runtime error)
-    on_run_method --> Lifecycle: Returns Err(cause)
-    Lifecycle -> Lifecycle: Sets was_killed = false (or true if error implies kill)
-    Lifecycle -> Lifecycle: Breaks message loop (or stops further on_run calls)
-    Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Failed { cause, .. }
-else on_run returns Ok(()) (Continue)
-    on_run_method --> Lifecycle: Returns Ok(())
-    note right of Lifecycle: Lifecycle may call on_run again
-end
+on_run_method --> Lifecycle: Returns Err(error)
 deactivate on_run_method
+Lifecycle -> Lifecycle: Sets was_killed = false
+Lifecycle -> on_stop_method: Calls actor.on_stop(StopReason::Error(error))
+activate on_stop_method
+on_stop_method --> Lifecycle: Returns Ok(()) or Err(cleanup_error)
+deactivate on_stop_method
+Lifecycle -> Lifecycle: Breaks message loop
+Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Failed { cause, .. }
 deactivate Lifecycle
 
 @enduml

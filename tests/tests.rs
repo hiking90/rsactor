@@ -1055,3 +1055,194 @@ async fn test_generic_actor_u64() {
     actor_ref.stop().await.expect("Failed to stop generic actor");
     handle.await.expect("Generic actor task failed");
 }
+
+// Test actors for on_run self-termination scenarios
+#[derive(Debug)]
+struct OnRunStopActor {
+    on_run_call_count: Arc<Mutex<u32>>,
+    stop_after_calls: u32,
+}
+
+impl Actor for OnRunStopActor {
+    type Args = (Arc<Mutex<u32>>, u32);
+    type Error = anyhow::Error;
+
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        let (on_run_call_count, stop_after_calls) = args;
+        Ok(OnRunStopActor {
+            on_run_call_count,
+            stop_after_calls,
+        })
+    }
+
+    async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+        let mut count = self.on_run_call_count.lock().await;
+        *count += 1;
+        let current_count = *count;
+        drop(count); // Release the lock before potential async operations
+
+        if current_count >= self.stop_after_calls {
+            // Call stop after the specified number of calls
+            actor_ref.stop().await?;
+            // After calling stop, on_run should not be called again
+            return Ok(());
+        }
+
+        // Simulate some work with an await point
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct DummyStopMsg;
+
+impl Message<DummyStopMsg> for OnRunStopActor {
+    type Reply = u32;
+    async fn handle(&mut self, _msg: DummyStopMsg, _: ActorRef<Self>) -> Self::Reply {
+        *self.on_run_call_count.lock().await
+    }
+}
+
+impl_message_handler!(OnRunStopActor, [DummyStopMsg]);
+
+#[derive(Debug)]
+struct OnRunKillActor {
+    on_run_call_count: Arc<Mutex<u32>>,
+    kill_after_calls: u32,
+}
+
+impl Actor for OnRunKillActor {
+    type Args = (Arc<Mutex<u32>>, u32);
+    type Error = anyhow::Error;
+
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        let (on_run_call_count, kill_after_calls) = args;
+        Ok(OnRunKillActor {
+            on_run_call_count,
+            kill_after_calls,
+        })
+    }
+
+    async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+        let mut count = self.on_run_call_count.lock().await;
+        *count += 1;
+        let current_count = *count;
+        drop(count); // Release the lock before potential async operations
+
+        if current_count >= self.kill_after_calls {
+            // Call kill after the specified number of calls
+            actor_ref.kill().expect("kill should succeed");
+            // After calling kill, on_run should not be called again
+            return Ok(());
+        }
+
+        // Simulate some work with an await point
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct DummyKillMsg;
+
+impl Message<DummyKillMsg> for OnRunKillActor {
+    type Reply = u32;
+    async fn handle(&mut self, _msg: DummyKillMsg, _: ActorRef<Self>) -> Self::Reply {
+        *self.on_run_call_count.lock().await
+    }
+}
+
+impl_message_handler!(OnRunKillActor, [DummyKillMsg]);
+
+#[tokio::test]
+async fn test_on_run_stop_not_called_again_after_self_stop() {
+    let on_run_call_count = Arc::new(Mutex::new(0));
+    let stop_after_calls = 2; // Stop after 2 calls to on_run
+
+    let args = (on_run_call_count.clone(), stop_after_calls);
+    let (actor_ref, handle) = spawn::<OnRunStopActor>(args);
+
+    // Give some time for the actor to run and call stop on itself
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Check that the actor stopped itself and on_run was called exactly the expected number of times
+    let result = handle.await.expect("Actor task should complete");
+    assert!(result.is_completed(), "Actor should have completed");
+    assert!(!result.was_killed(), "Actor should not have been killed");
+    assert!(result.stopped_normally(), "Actor should have stopped normally");
+
+    // Verify on_run was called exactly the expected number of times and no more
+    let final_count = *on_run_call_count.lock().await;
+    assert_eq!(final_count, stop_after_calls,
+        "on_run should have been called exactly {} times before stop, but was called {} times",
+        stop_after_calls, final_count);
+
+    // Verify interactions after self-stop fail
+    assert!(actor_ref.tell(DummyStopMsg).await.is_err(),
+        "Tell to self-stopped actor should fail");
+    assert!(actor_ref.ask(DummyStopMsg).await.is_err(),
+        "Ask to self-stopped actor should fail");
+}
+
+#[tokio::test]
+async fn test_on_run_kill_not_called_again_after_self_kill() {
+    let on_run_call_count = Arc::new(Mutex::new(0));
+    let kill_after_calls = 3; // Kill after 3 calls to on_run
+
+    let args = (on_run_call_count.clone(), kill_after_calls);
+    let (actor_ref, handle) = spawn::<OnRunKillActor>(args);
+
+    // Give some time for the actor to run and call kill on itself
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Check that the actor killed itself and on_run was called exactly the expected number of times
+    let result = handle.await.expect("Actor task should complete");
+    assert!(result.is_completed(), "Actor should have completed");
+    assert!(result.was_killed(), "Actor should have been killed");
+
+    // Verify on_run was called exactly the expected number of times and no more
+    let final_count = *on_run_call_count.lock().await;
+    assert_eq!(final_count, kill_after_calls,
+        "on_run should have been called exactly {} times before kill, but was called {} times",
+        kill_after_calls, final_count);
+
+    // Verify interactions after self-kill fail
+    assert!(actor_ref.tell(DummyKillMsg).await.is_err(),
+        "Tell to self-killed actor should fail");
+    assert!(actor_ref.ask(DummyKillMsg).await.is_err(),
+        "Ask to self-killed actor should fail");
+}
+
+#[tokio::test]
+async fn test_on_run_continues_normally_without_self_termination() {
+    let on_run_call_count = Arc::new(Mutex::new(0));
+    let stop_after_calls = u32::MAX; // Never stop automatically
+
+    let args = (on_run_call_count.clone(), stop_after_calls);
+    let (actor_ref, handle) = spawn::<OnRunStopActor>(args);
+
+    // Give some time for multiple on_run calls
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Check that on_run has been called multiple times
+    let count_before_stop = *on_run_call_count.lock().await;
+    assert!(count_before_stop > 1,
+        "on_run should have been called multiple times when not self-terminating, got {} calls",
+        count_before_stop);
+
+    // Now manually stop the actor
+    actor_ref.stop().await.expect("Failed to stop actor manually");
+    let result = handle.await.expect("Actor task should complete");
+
+    assert!(result.is_completed(), "Actor should have completed");
+    assert!(!result.was_killed(), "Actor should not have been killed");
+    assert!(result.stopped_normally(), "Actor should have stopped normally");
+
+    // Verify on_run was called multiple times before manual stop
+    let final_count = *on_run_call_count.lock().await;
+    assert_eq!(final_count, count_before_stop,
+        "on_run call count should not change after manual stop");
+    assert!(final_count > 1,
+        "on_run should have been called multiple times, got {} calls", final_count);
+}
