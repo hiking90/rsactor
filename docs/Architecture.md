@@ -32,8 +32,8 @@ This section describes the sequence of events when a user defines an actor and s
     a.  It first calls the actor's `A::on_start(args, actor_ref.clone())` lifecycle hook, passing the user-provided `args` and a clone of the `ActorRef`. This method is responsible for creating and returning the actor instance (`Ok(Self)`).
     b.  If `on_start()` returns `Ok(actor_instance)`, this instance is stored in the `Runtime`. The runtime then calls the actor's `on_run()` lifecycle hook which contains the actor's main execution logic and runs for its lifetime.
     c.  Concurrently with `on_run()`, the runtime also processes messages from the mailbox using `tokio::select!`. This enables the actor to handle incoming messages while executing its `on_run()` logic.
-    d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` method will then ensure the `JoinHandle` resolves to `ActorResult::StartupFailed { cause: e }`.
-    e.  When `on_run()` completes (e.g. returns `Ok(false)` or `Err(_)`), or if the actor is stopped/killed, the actor's lifecycle ends. The `JoinHandle` will resolve to an appropriate `ActorResult` (e.g., `ActorResult::Completed` or `ActorResult::RuntimeFailed`).
+    d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` method will then ensure the `JoinHandle` resolves to `ActorResult::Failed { cause: e, phase: FailurePhase::OnStart, .. }`.
+    e.  When `on_run()` completes (returns `Err(_)`), or if the actor is stopped/killed, the actor's lifecycle ends. The `JoinHandle` will resolve to an appropriate `ActorResult` (e.g., `ActorResult::Completed` or `ActorResult::Failed`).
 
 ## 2. Message Passing (tell/ask)
 
@@ -82,7 +82,7 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
 *   **`ControlSignal::Terminate`:** A control signal for immediate termination, sent via a dedicated, prioritized channel.
 *   **Mailbox Channel & Terminate Channel:** Used to deliver these signals.
 *   **`Runtime`:** Handles these signals in its `tokio::select!` loop.
-*   **`ActorResult<A>`:** An enum (`Completed`, `StartupFailed`, `RuntimeFailed`) indicating the outcome of the actor's lifecycle. The `Completed` variant includes the final actor state and a `killed` flag.
+*   **`ActorResult<A>`:** An enum (`Completed`, `Failed`) indicating the outcome of the actor's lifecycle. The `Completed` variant includes the final actor state and a `killed` flag. The `Failed` variant includes error details, failure phase, and optional actor state.
 *   **`JoinHandle<ActorResult<A>>`:** Resolves when the actor's task completes, providing the `ActorResult`.
 
 **Diagram:**
@@ -95,27 +95,25 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
     b.  `ActorRef::stop` sends a `MailboxMessage::StopGracefully` message to the actor via its main mailbox channel.
     c.  The `Runtime`, in its message loop, receives `StopGracefully`.
     d.  The message loop is broken. The `on_run` method is expected to detect the shutdown signal (e.g., by checking a flag or if its communication channels close) and return.
-    e.  Once `on_run` returns (e.g., `Ok(false)` or `Ok(true)` if it was just processing messages and the mailbox closes), the actor's task prepares to finish.
+    e.  Once `on_run` returns (typically `Ok(())` if it was just processing messages and the mailbox closes), the actor's task prepares to finish.
     f.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: false }`.
 
 2.  **`kill()` (Immediate Termination):**
-    a.  The client calls `actor_ref.kill().await`.
+    a.  The client calls `actor_ref.kill()`.
     b.  `ActorRef::kill` sends a `ControlSignal::Terminate` message via the dedicated, prioritized termination channel (`terminate_sender`).
     c.  The `Runtime`'s `tokio::select!` loop is `biased` to prioritize checking the `terminate_receiver`.
     d.  Upon receiving `ControlSignal::Terminate`:
-        i.  The `Runtime` signals the `on_run` method to terminate (e.g., by dropping a shared token or closing a channel it might be listening to).
-        ii. It immediately breaks out of the message processing loop, effectively ignoring any unprocessed messages in the main mailbox.
-    e.  The `on_run` method should detect this immediate termination signal and exit promptly.
-    f.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: true }`.
+        i.  The `Runtime` immediately breaks out of the message processing loop, effectively ignoring any unprocessed messages in the main mailbox.
+        ii. It calls `on_stop` with `killed: true`.
+    e.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: true }`.
 
-3.  **`on_run` returning `Ok(false)` or `Err(_)`:**
-    a.  If `on_run` returns `Ok(false)`, it signals a normal completion. The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: false }`.
-    b.  If `on_run` returns `Err(e)`, it signals a runtime failure. The `JoinHandle` resolves with `ActorResult::RuntimeFailed { actor: Some(final_actor_state), cause: e }` (actor state might be included if recoverable).
+3.  **`on_run` returning `Err(_)`:**
+    a.  If `on_run` returns `Err(e)`, it signals a runtime failure. The `JoinHandle` resolves with `ActorResult::Failed { actor: Some(final_actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`.
 
 4.  **All `ActorRef`s dropped:**
     a.  If all `ActorRef` instances for an actor are dropped, its mailbox channel will close.
     b.  The `Runtime`'s message receiving loop (`self.receiver.recv().await`) will eventually return `None`.
-    c.  This also signals the `on_run` method to complete.
+    c.  This triggers the actor termination sequence with `on_stop` being called.
     d.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: false }`.
 
-In all scenarios, the `ActorResult` provides the final state of the actor if it completed or failed at runtime, allowing for potential recovery or inspection. The `on_stop` hook is no longer part of the `Actor` trait; cleanup logic should be handled by the actor when its `on_run` method concludes or by the code that awaits the `JoinHandle` and processes the `ActorResult`.
+In all scenarios, the `ActorResult` provides the final state of the actor if it completed or failed at runtime, allowing for potential recovery or inspection. The `on_stop` hook is called before the actor terminates to allow for cleanup.

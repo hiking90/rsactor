@@ -51,19 +51,18 @@ impl Actor for CounterActor {
     // on_start and on_run are optional and have default implementations.
     // You can uncomment and implement them if needed.
 
-    async fn on_start(initial_count: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
-        info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.id(), initial_count);
+    async fn on_start(initial_count: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+        info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.identity(), initial_count);
         Ok(CounterActor { count: initial_count })
     }
 
     // The main execution loop for the actor.
-    // This method is called after on_start. If it returns Ok(false), the actor stops normally.
+    // This method is called after on_start. If it returns Ok(()), the actor continues running.
     // If it returns Err(_), the actor stops due to an error.
-    // If it returns Ok(true), the actor continues running.
-    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<bool, Self::Error> {
+    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         let mut tick_300ms = tokio::time::interval(std::time::Duration::from_millis(300));
         let mut tick_1s = tokio::time::interval(std::time::Duration::from_secs(1));
-        // The actor will stop when this method returns Ok(false) or Err(_).
+        // The actor will stop when this method returns Err(_) or when actor_ref.stop() is called.
         // For this example, we'll let it run for a short period then stop.
         for _ in 0..5 { // Run for 5 ticks of the 1s timer
             tokio::select! {
@@ -75,7 +74,8 @@ impl Actor for CounterActor {
                 }
             }
         }
-        Ok(false) // Signal normal stop
+        // Return Ok(()) to continue running, or call actor_ref.stop() to gracefully stop
+        Ok(())
     }
 }
 
@@ -87,7 +87,7 @@ struct GetCountMsg;
 impl Message<IncrementMsg> for CounterActor {
     type Reply = u32; // New count
 
-    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
         self.count += msg.0;
         self.count
     }
@@ -97,7 +97,7 @@ impl Message<IncrementMsg> for CounterActor {
 impl Message<GetCountMsg> for CounterActor {
     type Reply = u32; // Current count
 
-    async fn handle(&mut self, _msg: GetCountMsg, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetCountMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
         self.count
     }
 }
@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
     info!("Creating CounterActor");
 
     let (actor_ref, join_handle) = spawn::<CounterActor>(0u32); // Pass initial count
-    info!("CounterActor spawned with ID: {}", actor_ref.id());
+    info!("CounterActor spawned with ID: {}", actor_ref.identity());
 
     let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;
     info!("Incremented count: {}", new_count);
@@ -123,12 +123,12 @@ async fn main() -> Result<()> {
     // Actor will stop itself based on on_run logic.
     // If you want to stop it explicitly:
     // actor_ref.stop().await?;
-    // info!("Stop signal sent to CounterActor (ID: {})", actor_ref.id());
+    // info!("Stop signal sent to CounterActor (ID: {})", actor_ref.identity());
 
     let actor_result = join_handle.await?;
     info!(
         "CounterActor (ID: {}) task completed. Result: {:?}",
-        actor_ref.id(),
+        actor_ref.identity(),
         actor_result
     );
 
@@ -137,11 +137,8 @@ async fn main() -> Result<()> {
         ActorResult::Completed { actor, killed } => {
             info!("Actor completed. Final count: {}. Killed: {}", actor.count, killed);
         }
-        ActorResult::StartupFailed { cause } => {
-            info!("Actor startup failed: {:?}", cause);
-        }
-        ActorResult::RuntimeFailed { actor, cause } => {
-            info!("Actor runtime failed: {:?}. Actor state at failure: {:?}", cause, actor);
+        ActorResult::Failed { actor, error, phase, killed } => {
+            info!("Actor failed during phase {:?}: {:?}. Actor state at failure: {:?}. Killed: {}", phase, error, actor, killed);
         }
     }
 
@@ -182,7 +179,7 @@ struct MyActor;
 impl Actor for MyActor {
     type Args = (); // Added Args
     type Error = anyhow::Error;
-    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef) -> Result<Self, Self::Error> { // Updated on_start
+    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> { // Updated on_start
         Ok(MyActor)
     }
     // on_run is optional
@@ -190,12 +187,12 @@ impl Actor for MyActor {
 
 impl Message<MyMessage> for MyActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: MyMessage, _actor_ref: &ActorRef) -> Self::Reply {}
+    async fn handle(&mut self, _msg: MyMessage, _actor_ref: ActorRef<Self>) -> Self::Reply {}
 }
 
 impl Message<MyQuery> for MyActor {
     type Reply = String;
-    async fn handle(&mut self, _msg: MyQuery, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: MyQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
         "response".to_string()
     }
 }

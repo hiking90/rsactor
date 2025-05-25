@@ -392,7 +392,7 @@ async fn test_actor_fail_on_run() {
                 assert!(*actor.on_run_attempted.lock().await);
             }
         }
-        _ => panic!("Expected RuntimeFailed result"),
+        _ => panic!("Expected Failed result"),
     }
 }
 

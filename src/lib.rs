@@ -84,9 +84,8 @@
 //!     }
 //!
 //!     // Optional: Implement on_run for the actor's main execution logic.
-//!     // This method is called after on_start. If it returns Ok(false), the actor stops normally.
+//!     // This method is called after on_start. If it returns Ok(()), the actor continues running.
 //!     // If it returns Err(_), the actor stops due to an error.
-//!     // If it returns Ok(true), the actor continues running.
 //!     async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
 //!         tokio::select! {
 //!             _ = self.tick_300ms.tick() => {
