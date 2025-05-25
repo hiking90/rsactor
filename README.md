@@ -268,183 +268,21 @@ async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
 
 ## Type Safety Features
 
-rsActor provides two actor reference types that offer different levels of type safety:
+rsActor provides two actor reference types:
 
-### `ActorRef<T>` - Type-Safe Actor References
+### `ActorRef<T>` - Compile-Time Type Safety
+- **Recommended for most use cases**
+- Only accepts messages the actor can handle (compile-time validation)
+- Return types automatically inferred from trait implementations
+- Zero runtime overhead
 
-`ActorRef<T>` provides **compile-time type safety** for message passing:
+### `UntypedActorRef` - Runtime Type Handling
+- **Use only when type erasure is needed**
+- Enables storing different actor types in collections
+- Supports dynamic actor management and plugin systems
+- Developer responsible for ensuring type safety at runtime
 
-- **Message Type Safety**: Only messages that the actor can handle (via `Message<M>` trait) are accepted at compile time
-- **Reply Type Safety**: Return types are automatically inferred from the `Message<M>` trait implementation
-- **Zero Runtime Overhead**: Type safety is enforced at compile time with no performance cost
-
-```rust
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
-
-#[derive(Debug)]
-struct Calculator;
-
-impl Actor for Calculator {
-    type Args = ();
-    type Error = anyhow::Error;
-
-    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(Calculator)
-    }
-}
-
-struct Add(i32, i32);
-struct Multiply(i32, i32);
-
-impl Message<Add> for Calculator {
-    type Reply = i32;  // Compile-time guarantee of reply type
-
-    async fn handle(&mut self, msg: Add, _actor_ref: ActorRef<Self>) -> Self::Reply {
-        msg.0 + msg.1
-    }
-}
-
-impl Message<Multiply> for Calculator {
-    type Reply = i32;
-
-    async fn handle(&mut self, msg: Multiply, _actor_ref: ActorRef<Self>) -> Self::Reply {
-        msg.0 * msg.1
-    }
-}
-
-impl_message_handler!(Calculator, [Add, Multiply]);
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let (calc_ref, _handle) = spawn::<Calculator>(());
-
-    // ✅ Type-safe: Compiler knows the return type is i32
-    let sum: i32 = calc_ref.ask(Add(5, 3)).await?;
-    let product: i32 = calc_ref.ask(Multiply(4, 7)).await?;
-
-    // ❌ Compile error: Calculator doesn't handle String messages
-    // calc_ref.ask("invalid message").await?;
-
-    println!("Sum: {}, Product: {}", sum, product);
-    Ok(())
-}
-```
-
-### `UntypedActorRef` - Type-Erased Actor References
-
-`UntypedActorRef` provides **runtime type handling** for dynamic scenarios:
-
-- **Collection Management**: Store different actor types in the same collection (Vec, HashMap, etc.)
-- **Plugin Systems**: Handle actors loaded dynamically at runtime
-- **Heterogeneous Actor Groups**: Manage actors of different types uniformly
-
-⚠️ **Developer Responsibility**: When using `UntypedActorRef`, you are responsible for ensuring type safety at runtime.
-
-```rust
-use rsactor::{Actor, ActorRef, UntypedActorRef, Message, impl_message_handler, spawn};
-use std::collections::HashMap;
-
-// Different actor types
-#[derive(Debug)]
-struct Logger;
-
-#[derive(Debug)]
-struct Counter { count: u32 }
-
-impl Actor for Logger {
-    type Args = ();
-    type Error = anyhow::Error;
-    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(Logger)
-    }
-}
-
-impl Actor for Counter {
-    type Args = u32;
-    type Error = anyhow::Error;
-    async fn on_start(initial: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(Counter { count: initial })
-    }
-}
-
-// Message types
-struct LogMessage(String);
-struct IncrementMessage;
-
-impl Message<LogMessage> for Logger {
-    type Reply = ();
-    async fn handle(&mut self, msg: LogMessage, _actor_ref: ActorRef<Self>) -> Self::Reply {
-        println!("LOG: {}", msg.0);
-    }
-}
-
-impl Message<IncrementMessage> for Counter {
-    type Reply = u32;
-    async fn handle(&mut self, _msg: IncrementMessage, _actor_ref: ActorRef<Self>) -> Self::Reply {
-        self.count += 1;
-        self.count
-    }
-}
-
-impl_message_handler!(Logger, [LogMessage]);
-impl_message_handler!(Counter, [IncrementMessage]);
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Create different actor types
-    let (logger_ref, _) = spawn::<Logger>(());
-    let (counter_ref, _) = spawn::<Counter>(0);
-
-    // Store in a collection using UntypedActorRef
-    let mut actors: HashMap<String, UntypedActorRef> = HashMap::new();
-    actors.insert("logger".to_string(), logger_ref.untyped_actor_ref().clone());
-    actors.insert("counter".to_string(), counter_ref.untyped_actor_ref().clone());
-
-    // ⚠️ Developer responsibility: Ensure correct message types at runtime
-    if let Some(logger) = actors.get("logger") {
-        logger.tell(LogMessage("Hello from untyped ref!".to_string())).await?;
-    }
-
-    if let Some(counter) = actors.get("counter") {
-        let new_count: u32 = counter.ask(IncrementMessage).await?;
-        println!("Counter: {}", new_count);
-    }
-
-    // ❌ Runtime error: Sending wrong message type to wrong actor
-    // This will compile but fail at runtime!
-    // actors.get("logger").unwrap().ask::<IncrementMessage, u32>(IncrementMessage).await?;
-
-    Ok(())
-}
-```
-
-### Type Safety Guidelines
-
-1. **Use `ActorRef<T>` by default** for type safety and better development experience
-2. **Use `UntypedActorRef` only when necessary** for:
-   - Collections of heterogeneous actors
-   - Dynamic actor loading/plugin systems
-   - Interfacing with external APIs that require type erasure
-
-3. **When using `UntypedActorRef`**:
-   - Document expected message types clearly
-   - Consider wrapping in higher-level abstractions
-   - Use defensive programming (error handling for type mismatches)
-   - Test thoroughly for runtime type errors
-
-### Converting Between Reference Types
-
-You can easily convert between typed and untyped actor references:
-
-```rust
-let (typed_ref, _) = spawn::<MyActor>(());
-
-// Get untyped reference from typed reference
-let untyped_ref: &UntypedActorRef = typed_ref.untyped_actor_ref();
-
-// Note: You cannot safely convert UntypedActorRef back to ActorRef<T>
-// without additional type information and validation
-```
+**Conversion**: You can get an `UntypedActorRef` from `ActorRef<T>` using `typed_ref.untyped_actor_ref()`
 
 ## Further Information
 
