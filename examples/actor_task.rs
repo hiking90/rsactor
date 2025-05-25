@@ -54,7 +54,7 @@ impl Actor for DataProcessorActor {
     type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(_args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+    async fn on_start(_args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("DataProcessorActor (id: {}) starting...", actor_ref.identity());
 
         let mut actor = Self {
@@ -73,7 +73,7 @@ impl Actor for DataProcessorActor {
         Ok(actor)
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         loop {
             self.interval.tick().await;
 
@@ -101,7 +101,7 @@ impl Actor for DataProcessorActor {
 impl Message<GetState> for DataProcessorActor {
     type Reply = (f64, Option<f64>, Option<std::time::Instant>);
 
-    async fn handle(&mut self, _msg: GetState, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetState, _: ActorRef<Self>) -> Self::Reply {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
 }
@@ -109,7 +109,7 @@ impl Message<GetState> for DataProcessorActor {
 impl Message<SetFactor> for DataProcessorActor {
     type Reply = f64; // Return the new factor
 
-    async fn handle(&mut self, msg: SetFactor, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: SetFactor, _: ActorRef<Self>) -> Self::Reply {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!("Changed factor from {:.2} to {:.2}", old_factor, self.factor);
@@ -120,7 +120,7 @@ impl Message<SetFactor> for DataProcessorActor {
 impl Message<ProcessedData> for DataProcessorActor {
     type Reply = (); // No reply needed for data coming from the task
 
-    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: ProcessedData, _: ActorRef<Self>) -> Self::Reply {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -141,7 +141,7 @@ impl Message<ProcessedData> for DataProcessorActor {
 impl Message<SendTaskCommand> for DataProcessorActor {
     type Reply = bool;
 
-    async fn handle(&mut self, msg: SendTaskCommand, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: SendTaskCommand, _actor_ref: ActorRef<Self>) -> Self::Reply {
         match msg.0 {
             TaskCommand::ChangeInterval(new_interval) => {
                 self.interval = tokio::time::interval(new_interval);

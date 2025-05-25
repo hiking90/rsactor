@@ -27,7 +27,7 @@ impl Actor for TestActor {
     type Args = TestArgs;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         debug!("TestActor (id: {}) started.", actor_ref.identity());
         Ok(Self {
             id: actor_ref.identity(),
@@ -49,7 +49,7 @@ struct SlowMsg; // Added for timeout tests
 
 impl Message<PingMsg> for TestActor {
     type Reply = String;
-    async fn handle(&mut self, msg: PingMsg, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: PingMsg, _: ActorRef<Self>) -> Self::Reply {
         let mut lpmt = self.last_processed_message_type.lock().await;
         *lpmt = Some("PingMsg".to_string());
         format!("pong: {}", msg.0)
@@ -58,7 +58,7 @@ impl Message<PingMsg> for TestActor {
 
 impl Message<UpdateCounterMsg> for TestActor {
     type Reply = (); // tell type messages often use this.
-    async fn handle(&mut self, msg: UpdateCounterMsg, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, msg: UpdateCounterMsg, _: ActorRef<Self>) -> Self::Reply {
         let mut counter = self.counter.lock().await;
         *counter += msg.0;
         let mut lpmt = self.last_processed_message_type.lock().await;
@@ -68,7 +68,7 @@ impl Message<UpdateCounterMsg> for TestActor {
 
 impl Message<GetCounterMsg> for TestActor {
     type Reply = i32;
-    async fn handle(&mut self, _msg: GetCounterMsg, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetCounterMsg, _: ActorRef<Self>) -> Self::Reply {
         let mut lpmt = self.last_processed_message_type.lock().await;
         *lpmt = Some("GetCounterMsg".to_string());
         *self.counter.lock().await
@@ -78,7 +78,7 @@ impl Message<GetCounterMsg> for TestActor {
 // Added for timeout tests
 impl Message<SlowMsg> for TestActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: SlowMsg, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: SlowMsg, _: ActorRef<Self>) -> Self::Reply {
         let mut lpmt = self.last_processed_message_type.lock().await;
         *lpmt = Some("SlowMsg".to_string());
         tokio::time::sleep(std::time::Duration::from_millis(100)).await // Sleep for 100ms
@@ -88,7 +88,7 @@ impl Message<SlowMsg> for TestActor {
 impl_message_handler!(TestActor, [PingMsg, UpdateCounterMsg, GetCounterMsg, SlowMsg]);
 
 async fn setup_actor() -> (
-    ActorRef,
+    ActorRef<TestActor>,
     tokio::task::JoinHandle<ActorResult<TestActor>>,
     Arc<Mutex<i32>>,
     Arc<Mutex<Option<String>>>,
@@ -194,7 +194,7 @@ async fn test_actor_ref_stop() {
 
     actor_ref.tell(UpdateCounterMsg(100)).await.unwrap();
 
-    let ask_future = actor_ref.ask::<_, i32>(GetCounterMsg); // Send before stop
+    let ask_future = actor_ref.ask(GetCounterMsg); // Send before stop
     let count_val = ask_future.await.expect("ask sent before stop should succeed");
     assert_eq!(count_val, 100);
 
@@ -212,7 +212,7 @@ async fn test_actor_ref_stop() {
 
     // Interactions after stop
     assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to stopped actor should fail");
-    assert!(actor_ref.ask::<PingMsg, String>(PingMsg("test".to_string())).await.is_err(), "Ask to stopped actor should fail");
+    assert!(actor_ref.ask(PingMsg("test".to_string())).await.is_err(), "Ask to stopped actor should fail");
 }
 
 #[tokio::test]
@@ -250,14 +250,14 @@ async fn test_actor_ref_kill() {
 
     // Interactions after kill should still fail
     assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to killed actor should fail");
-    assert!(actor_ref.ask::<PingMsg, String>(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
+    assert!(actor_ref.ask(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
 }
 
 #[tokio::test]
 async fn test_ask_wrong_reply_type() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
-    let result = actor_ref.ask::<PingMsg, i32>(PingMsg("hello".to_string())).await;
+    let result = actor_ref.untyped_actor_ref().ask::<PingMsg, i32>(PingMsg("hello".to_string())).await;
     assert!(result.is_err());
     if let Err(e) = result {
         assert!(e.to_string().contains("Failed to downcast reply"));
@@ -273,7 +273,7 @@ async fn test_unhandled_message_type() {
 
     struct UnhandledMsg; // Not in impl_message_handler! for TestActor
 
-    let result = actor_ref.ask::<UnhandledMsg, ()>(UnhandledMsg).await;
+    let result = actor_ref.untyped_actor_ref().ask::<UnhandledMsg, ()>(UnhandledMsg).await;
     assert!(result.is_err());
     if let Err(e) = result {
         assert!(e.to_string().contains("received an unhandled message type."));
@@ -308,7 +308,7 @@ impl Actor for LifecycleErrorActor {
     type Args = LifecycleErrorArgs;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         let _id = actor_ref.identity();
         *args.on_start_attempted.lock().await = true;
         if args.fail_on_start {
@@ -323,7 +323,7 @@ impl Actor for LifecycleErrorActor {
         }
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         *self.on_run_attempted.lock().await = true;
         if self.fail_on_run {
             Err(anyhow::anyhow!("simulated on_run failure"))
@@ -339,7 +339,7 @@ impl Actor for LifecycleErrorActor {
 struct NoOpMsg; // Dummy message for LifecycleErrorActor
 impl Message<NoOpMsg> for LifecycleErrorActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef) -> Self::Reply {}
+    async fn handle(&mut self, _msg: NoOpMsg, _: ActorRef<Self>) -> Self::Reply {}
 }
 impl_message_handler!(LifecycleErrorActor, [NoOpMsg]);
 
@@ -448,7 +448,7 @@ impl Actor for PanicActor {
     type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(PanicActor {
         })
     }
@@ -458,7 +458,7 @@ struct PanicMsg; // Define PanicMsg
 
 impl Message<PanicMsg> for PanicActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: PanicMsg, _: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: PanicMsg, _: ActorRef<Self>) -> Self::Reply {
         panic!("Simulated panic in message handler");
     }
 }
@@ -473,7 +473,7 @@ impl Actor for StringErrorActor {
     type Args = Arc<Mutex<bool>>;
     type Error = String; // Using String as the error type
 
-    async fn on_start(args: Self::Args, actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         let on_start_called = args;
         *on_start_called.lock().await = true;
         debug!("StringErrorActor (id: {}) started.", actor_ref.identity());
@@ -490,7 +490,7 @@ struct SimpleMsg;
 
 impl Message<SimpleMsg> for StringErrorActor {
     type Reply = String;
-    async fn handle(&mut self, _msg: SimpleMsg, _actor_ref: &ActorRef) -> Self::Reply {
+    async fn handle(&mut self, _msg: SimpleMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
         "SimpleMsg processed".to_string()
     }
 }
@@ -503,7 +503,7 @@ async fn test_actor_panic_in_message_handler() {
 
     // Sending a message that causes a panic in the handler.
     // The ask call itself will likely fail because the actor task panics and closes the reply channel.
-    let ask_result = actor_ref.ask::<PanicMsg, ()>(PanicMsg).await;
+    let ask_result = actor_ref.ask(PanicMsg).await;
     assert!(ask_result.is_err(), "Ask should fail when handler panics");
     if let Err(e) = ask_result {
         // Error could be "reply channel closed" or similar, as the actor task terminates.
@@ -558,7 +558,7 @@ impl Actor for DummyActor {
     type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(DummyActor)
     }
 }
@@ -643,7 +643,7 @@ async fn test_actor_ref_ask_blocking() {
     let thread_handle = std::thread::spawn(move || {
         // Explicitly specify the message type M=PingMsg and reply type R=String
         // PingMsg is defined to reply with String.
-        assert!(actor_ref_clone.ask_blocking::<PingMsg, String>(PingMsg("hello_blocking".to_string()), None).is_err());
+        assert!(actor_ref_clone.ask_blocking(PingMsg("hello_blocking".to_string()), None).is_err());
         assert!(actor_ref_clone.tell_blocking(PingMsg("hello_blocking".to_string()), None).is_err());
     });
 
@@ -785,7 +785,7 @@ async fn test_actor_ref_kill_multiple_times() {
 
     // Interactions after kill should still fail
     assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to killed actor should fail");
-    assert!(actor_ref.ask::<PingMsg, String>(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
+    assert!(actor_ref.ask(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
 }
 
 #[tokio::test]
@@ -892,7 +892,7 @@ fn test_runtime_error_outside_tokio() {
     drop(runtime);
 
     // Attempt to use ask_blocking outside tokio runtime context
-    let result = actor_ref.ask_blocking::<PingMsg, String>(
+    let result = actor_ref.ask_blocking(
         PingMsg("hello".to_string()),
         Some(std::time::Duration::from_millis(100))
     );
@@ -1012,7 +1012,7 @@ mod generic_actor {
         type Args = T;
         type Error = anyhow::Error;
 
-        async fn on_start(args: Self::Args, _actor_ref: &ActorRef) -> Result<Self, Self::Error> {
+        async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
             Ok(GenericActor::new(args))
         }
     }
@@ -1022,7 +1022,7 @@ mod generic_actor {
 
     impl<T: Send + Clone + 'static> Message<GetValueMsg> for GenericActor<T> {
         type Reply = T;
-        async fn handle(&mut self, _msg: GetValueMsg, _: &ActorRef) -> Self::Reply {
+        async fn handle(&mut self, _msg: GetValueMsg, _: ActorRef<Self>) -> Self::Reply {
             self.value.lock().await.clone()
         }
     }

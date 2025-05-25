@@ -1,11 +1,11 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{ActorRef, Result};
-use crate::{ActorResult, MailboxMessage, ControlSignal, FailurePhase}; // Added
+use crate::actor_ref::ActorRef;
+use crate::{Result, ActorResult, MailboxMessage, ControlSignal, FailurePhase};
 use std::{any::Any, fmt::Debug, future::Future, time::Duration};
-use tokio::sync::mpsc; // Added
-use log::{info, error, debug, trace}; // Added
+use tokio::sync::mpsc;
+use log::{info, error, debug, trace};
 
 /// Defines the behavior of an actor.
 ///
@@ -25,9 +25,9 @@ pub trait Actor: Sized + Send + 'static {
     /// The `args` parameter, of type `Self::Args`, contains the initialization data
     /// provided when the actor is spawned. This method is responsible for using
     /// these arguments to create and return the actual actor instance (`Self`).
-    /// The `actor_ref` parameter is a reference to the actor\'s own `ActorRef`.
+    /// The `actor_ref` parameter is a reference to the actor\'s own `AnyActorRef`.
     /// This method should return the initialized actor instance or an error.
-    fn on_start(_args: Self::Args, _actor_ref: &ActorRef) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
+    fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
 
     /// The primary task execution logic for the actor, designed for iterative execution.
     ///
@@ -92,12 +92,12 @@ pub trait Actor: Sized + Send + 'static {
     ///    # impl Actor for MyActor {
     ///    # type Args = Duration; // Example: pass interval duration via Args
     ///    # type Error = anyhow::Error;
-    ///    # async fn on_start(duration: Self::Args, _actor_ref: &ActorRef) -> std::result::Result<Self, Self::Error> {
+    ///    # async fn on_start(duration: Self::Args, _actor_ref: ActorRef<MyActor>) -> std::result::Result<Self, Self::Error> {
     ///    #     let mut interval = tokio::time::interval(duration);
     ///    #     interval.set_missed_tick_behavior(MissedTickBehavior::Delay); // Or Skip, Burst
     ///    #     Ok(MyActor { interval, ticks_done: 0 })
     ///    # }
-    ///    async fn on_run(&mut self, actor_ref: &ActorRef) -> std::result::Result<(), Self::Error> { // Note: Return type is Result<(), Self::Error>
+    ///    async fn on_run(&mut self, actor_ref: ActorRef<MyActor>) -> std::result::Result<(), Self::Error> { // Note: Return type is Result<(), Self::Error>
     ///        // self.interval is stored in the MyActor struct.
     ///        self.interval.tick().await; // This await point allows message processing.
     ///
@@ -154,7 +154,7 @@ pub trait Actor: Sized + Send + 'static {
     /// The default implementation of `on_run` is a simple async block that sleeps for 1 second
     /// and then returns `Ok(())`, causing it to be called repeatedly until the actor is
     /// explicitly stopped or killed.
-    fn on_run(&mut self, _actor_ref: &ActorRef) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+    fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // This sleep is critical - it creates an await point that allows
         // the Tokio runtime to switch tasks and process incoming messages.
         // Without at least one await point in a loop, message processing would starve.
@@ -164,7 +164,7 @@ pub trait Actor: Sized + Send + 'static {
         }
     }
 
-    fn on_stop(&mut self, _actor_ref: &ActorRef, _killed: bool) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+    fn on_stop(&mut self, _actor_ref: ActorRef<Self>, _killed: bool) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // Default implementation does nothing on stop.
         // Override this method in your actor if you need to perform cleanup.
         async { Ok(()) }
@@ -174,7 +174,7 @@ pub trait Actor: Sized + Send + 'static {
 /// A trait for messages that an actor can handle, defining the reply type.
 ///
 /// An actor struct implements this trait for each specific message type it can process.
-pub trait Message<T: Send + 'static>: Actor {
+pub trait Message<T: Send + 'static> {
     /// The type of the reply that will be sent back to the caller.
     type Reply: Send + 'static;
 
@@ -183,7 +183,9 @@ pub trait Message<T: Send + 'static>: Actor {
     /// The `actor_ref` parameter is a reference to the actor\'s own `ActorRef`.
     /// This is an asynchronous method where the actor\'s business logic for
     /// processing the message `T` resides.
-    fn handle(&mut self, msg: T, actor_ref: &ActorRef) -> impl Future<Output = Self::Reply> + Send;
+    fn handle(&mut self, msg: T, actor_ref: ActorRef<Self>) -> impl Future<Output = Self::Reply> + Send
+    where
+        Self: Actor;
 }
 
 /// A trait for type-erased message handling within the actor\'s `Runtime`.
@@ -192,7 +194,7 @@ pub trait Message<T: Send + 'static>: Actor {
 /// It allows the `Runtime` to handle messages of different types by downcasting
 /// them to their concrete types before passing them to the actor\'s specific `Message::handle`
 /// implementation.
-pub trait MessageHandler: Send + 'static {
+pub trait MessageHandler: Actor + Send + 'static {
     /// Handles a type-erased message.
     ///
     /// The implementation should attempt to downcast `msg_any` to one of the
@@ -201,7 +203,7 @@ pub trait MessageHandler: Send + 'static {
     fn handle(
         &mut self,
         msg_any: Box<dyn Any + Send>,
-        actor_ref: &ActorRef,
+        actor_ref: ActorRef<Self>,
     ) -> impl Future<Output = Result<Box<dyn Any + Send>>> + Send;
 }
 
@@ -210,13 +212,13 @@ pub trait MessageHandler: Send + 'static {
 // Consumes self to return the actor.
 pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
     args: T::Args,
-    actor_ref: ActorRef,
+    actor_ref: ActorRef<T>,
     mut receiver: mpsc::Receiver<MailboxMessage>,
     mut terminate_receiver: mpsc::Receiver<ControlSignal>,
 ) -> ActorResult<T> {
     let actor_id = actor_ref.identity();
 
-    let mut actor = match T::on_start(args, &actor_ref).await {
+    let mut actor = match T::on_start(args, actor_ref.clone()).await {
         Ok(actor) => {
             debug!("Actor {} on_start completed successfully.", actor_id);
             actor
@@ -248,7 +250,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                     was_killed = true;
 
                     // Call on_stop for kill scenario
-                    if let Err(e) = actor.on_stop(&actor_ref, true).await {
+                    if let Err(e) = actor.on_stop(actor_ref.clone(), true).await {
                         error!("Actor {} on_stop failed during kill: {:?}", actor_id, e);
                         return ActorResult::Failed {
                             actor: Some(actor),
@@ -270,7 +272,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                 match maybe_message {
                     Some(MailboxMessage::Envelope { payload, reply_channel }) => {
                         trace!("Actor {} received message: {:?}", actor_id, payload);
-                        match actor.handle(payload, &actor_ref).await {
+                        match actor.handle(payload, actor_ref.clone()).await {
                             Ok(reply) => {
                                 if let Some(tx) = reply_channel {
                                     if tx.send(Ok(reply)).is_err() {
@@ -305,7 +307,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                         info!("Actor {} received StopGracefully. Will stop after processing current messages.", actor_id);
 
                         // Call on_stop for graceful stop scenario
-                        if let Err(e) = actor.on_stop(&actor_ref, false).await {
+                        if let Err(e) = actor.on_stop(actor_ref.clone(), false).await {
                             error!("Actor {} on_stop failed during graceful stop: {:?}", actor_id, e);
                             return ActorResult::Failed {
                                 actor: Some(actor),
@@ -325,7 +327,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                 }
             }
 
-            maybe_result = actor.on_run(&actor_ref) => {
+            maybe_result = actor.on_run(actor_ref.clone()) => {
                 match maybe_result {
                     Ok(_) => {
                         // on_run completed successfully, continue processing messages.

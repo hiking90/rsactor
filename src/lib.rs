@@ -74,7 +74,7 @@
 //!     type Error = anyhow::Error; // Define an error type
 //!
 //!     // Required: Implement on_start for actor creation and initialization
-//!     async fn on_start(args: Self::Args, _actor_ref: &ActorRef) -> std::result::Result<Self, Self::Error> {
+//!     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
 //!         println!("MyActor (data: '{}') started!", args);
 //!         Ok(MyActor {
 //!             data: args,
@@ -87,7 +87,7 @@
 //!     // This method is called after on_start. If it returns Ok(false), the actor stops normally.
 //!     // If it returns Err(_), the actor stops due to an error.
 //!     // If it returns Ok(true), the actor continues running.
-//!     async fn on_run(&mut self, _actor_ref: &ActorRef) -> Result<(), Self::Error> {
+//!     async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
 //!         tokio::select! {
 //!             _ = self.tick_300ms.tick() => {
 //!                 println!("Tick: 300ms");
@@ -108,7 +108,7 @@
 //! impl Message<GetData> for MyActor {
 //!     type Reply = String; // This message will return a String
 //!
-//!     async fn handle(&mut self, _msg: GetData, _actor_ref: &ActorRef) -> Self::Reply {
+//!     async fn handle(&mut self, _msg: GetData, _actor_ref: ActorRef<Self>) -> Self::Reply {
 //!         self.data.clone()
 //!     }
 //! }
@@ -116,7 +116,7 @@
 //! impl Message<UpdateData> for MyActor {
 //!     type Reply = (); // This message does not return a value
 //!
-//!     async fn handle(&mut self, msg: UpdateData, _actor_ref: &ActorRef) -> Self::Reply {
+//!     async fn handle(&mut self, msg: UpdateData, _actor_ref: ActorRef<Self>) -> Self::Reply {
 //!         self.data = msg.0;
 //!         println!("MyActor data updated!");
 //!     }
@@ -160,7 +160,7 @@ mod error;
 pub use error::{Error, Result};
 
 mod actor_ref;
-pub use actor_ref::ActorRef;
+pub use actor_ref::{ActorRef, UntypedActorRef};
 
 mod actor_result;
 pub use actor_result::{ActorResult, FailurePhase};
@@ -248,7 +248,7 @@ macro_rules! impl_message_handler {
             async fn handle(
                 &mut self,
                 _msg_any: Box<dyn std::any::Any + Send>, // This Box is consumed by the first successful downcast
-                actor_ref: &$crate::ActorRef,
+                actor_ref: $crate::ActorRef<$actor_type>,
             ) -> $crate::Result<Box<dyn std::any::Any + Send>> {
                 let mut _msg_any = _msg_any; // Mutable to allow reassignment in the loop
                 $(
@@ -256,7 +256,7 @@ macro_rules! impl_message_handler {
                         Ok(concrete_msg_box) => {
                             // Successfully downcasted. concrete_msg_box is a Box<$msg_type>.
                             // The original _msg_any has been consumed by the downcast.
-                            let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, actor_ref).await;
+                            let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, actor_ref.clone()).await;
                             return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
                         }
                         Err(original_box_back) => {
@@ -336,19 +336,19 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 }
 
 
-/// Spawns a new actor and returns an `ActorRef` to it, along with a `JoinHandle`.
+/// Spawns a new actor and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
 ///
 /// Takes initialization arguments that will be passed to the actor's `on_start` method.
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result.
 pub fn spawn<T: Actor + MessageHandler + 'static>(
     args: T::Args,
-) -> (ActorRef, tokio::task::JoinHandle<ActorResult<T>>) {
+) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().copied().unwrap_or(DEFAULT_MAILBOX_CAPACITY);
     spawn_with_mailbox_capacity(args, capacity)
 }
 
-/// Spawns a new actor with a specified mailbox capacity and returns an `ActorRef` to it, along with a `JoinHandle`.
+/// Spawns a new actor with a specified mailbox capacity and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
 ///
 /// Takes initialization arguments that will be passed to the actor's `on_start` method.
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
@@ -356,7 +356,7 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
 pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     args: T::Args, // Actor initialization arguments
     mailbox_capacity: usize,
-) -> (ActorRef, tokio::task::JoinHandle<ActorResult<T>>) {
+) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     if mailbox_capacity == 0 {
         panic!("Mailbox capacity must be greater than 0");
     }
@@ -367,10 +367,12 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     // This ensures that a kill signal can be sent even if the main mailbox is full.
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
-    let actor_ref = ActorRef::new(
+    let any_actor_ref = UntypedActorRef::new(
         Identity::new(id, std::any::type_name::<T>()), // Use type name of the actor
         mailbox_tx,
         terminate_tx); // Pass terminate_tx
+
+    let actor_ref = ActorRef::new(any_actor_ref.clone());
 
     let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
         args,
