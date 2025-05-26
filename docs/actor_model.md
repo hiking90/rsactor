@@ -87,7 +87,7 @@ While the actor model is well-known for its applicability in distributed systems
 *   The actor's private state is simply the data owned by the task.
 *   Message handling logic is implemented within the task's main loop, processing messages received on its channel.
 
-Libraries like `rsactor` (see `https://github.com/hiking90/rsactor`) aim to provide higher-level abstractions for working with the actor model in Rust. They can help simplify the definition of actors, their state, message types, and message handling logic, allowing developers to focus on the application\'s business logic rather than the boilerplate of actor machinery. For example, you might define an actor that manages a specific resource or performs a particular computation, and other parts of your application would interact with it solely by sending it messages and, where appropriate, receiving responses via messages.
+Libraries like `rsactor` (see `https://github.com/hiking90/rsactor`) provide simple and efficient in-process actor model implementations for Rust. They simplify the definition of actors, their state, message types, and message handling logic, allowing developers to focus on the application's business logic rather than the boilerplate of actor machinery. For example, you might define an actor that manages a specific resource or performs a particular computation, and other parts of your application would interact with it solely by sending it messages and, where appropriate, receiving responses via messages.
 
 Here's a conceptual example using `rsactor`, demonstrating an actor with an internal `on_run` handling multiple tick sources:
 
@@ -118,7 +118,7 @@ impl Actor for CounterActor {
         })
     }
 
-    // The main execution method for the actor, managed by the rsactor framework.
+    // The primary processing loop for the actor within the lifecycle.
     // This demonstrates handling two independent, periodic events using tokio::select!.
     async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
@@ -242,7 +242,7 @@ In this example:
     - Gracefully stops the actor using `actor_ref.stop()`.
     - Awaits the actor's `join_handle` to ensure clean termination and logs the outcome.
 
-This revised example aligns with the `rsactor` patterns shown in its `README.md` and `lib.rs` documentation, particularly showcasing the `on_run` for concurrent internal operations within the actor.
+This revised example aligns with the `rsactor` patterns shown in its `README.md` and `lib.rs` documentation, particularly showcasing how the `on_run` method implements the actor's primary processing loop while concurrently handling incoming messages, a key feature of the in-process actor model.
 
 ## The Premier Choice for Mutex-Light Concurrency in Rust
 
@@ -252,6 +252,7 @@ This approach doesn't just reduce the risk of deadlocks; it can also lead to sys
 *   **Easier to reason about:** The state of an actor is local, and its interactions are explicit (messages).
 *   **More modular:** Actors are self-contained units.
 *   **More testable:** Individual actors can often be tested in isolation by sending them messages and observing their responses or side effects (like messages sent to other (mocked) actors).
+*   **Type-safe:** Libraries like `rsactor` provide both compile-time type safety through `ActorRef<T>` and runtime type safety through `UntypedActorRef`, ensuring message handling consistency while supporting flexible actor management patterns.
 
 While `Mutex`es and other locking primitives still have their place for very fine-grained synchronization or specific low-level data structures, adopting an actor-based approach for the broader application architecture can significantly improve robustness and maintainability.
 
@@ -259,5 +260,5 @@ While `Mutex`es and other locking primitives still have their place for very fin
 
 The landscape of software development is increasingly concurrent. While Rust provides groundbreaking safety features, the logical challenge of deadlocks in complex systems persists when relying heavily on traditional shared-state and locking mechanisms.
 
-The actor model, with its emphasis on isolated state and message-passing communication ("share memory by communicating"), offers a compelling alternative. It provides a structured way to design concurrent applications that are inherently less prone to deadlocks and often easier to understand and maintain. Coupled with Rust's powerful `async` capabilities and a growing ecosystem of actor libraries like `rsactor`, developers have the tools they need to build sophisticated, highly concurrent, and robust applications. By embracing the actor model, we can better navigate the complexities of concurrency and build more resilient software for the multi-core era.
+The actor model, with its emphasis on isolated state and message-passing communication ("share memory by communicating"), offers a compelling alternative. It provides a structured way to design concurrent applications that are inherently less prone to deadlocks and often easier to understand and maintain. With Rust's powerful `async` capabilities and simple, efficient in-process actor model implementations like `rsactor`, developers have the tools they need to build sophisticated, highly concurrent, and robust applications. By embracing the actor model, we can better navigate the complexities of concurrency and build more resilient software for the multi-core era.
 

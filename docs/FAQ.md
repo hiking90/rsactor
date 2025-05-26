@@ -1,3 +1,4 @@
+<!-- filepath: /Volumes/Workspace/rust/rsactor/docs/FAQ.md -->
 # rsActor FAQ
 
 This FAQ provides answers to common questions about the `rsActor` framework.
@@ -29,193 +30,673 @@ A4: To define an actor, you need to:
 2.  Define a struct or tuple for your actor's initialization arguments (this will be `Actor::Args`).
 3.  Implement the `Actor` trait for your state struct. This involves:
     *   Defining an associated type `Args` (the type of arguments your `on_start` method will take).
-    *   Defining an associated type `Error` for errors that can occur during the actor's lifecycle.
-    *   Implementing `async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>`: This method is called when the actor is spawned. It receives the initialization arguments and an `ActorRef` to itself. It's responsible for creating and returning the actor instance (`Ok(Self)`) or an error if initialization fails.
-    *   Implementing `async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error>`: This method contains the main execution logic of the actor and runs for its lifetime after `on_start` succeeds. If it returns `Ok(())`, the actor continues running. If it returns `Err(_)`, the actor stops due to an error.
-4.  For each specific message type (e.g., `PingRequest`) your actor will handle, you need to implement the `Message<PingRequest>` trait *for your actor struct*. This trait implementation involves defining an associated `Reply` type (e.g., `PongResponse`) and the `async fn handle(&mut self, message: PingRequest, ...)` method that dictates how the actor processes this specific message type.
-5.  Use the `impl_message_handler!(YourActorType, [MessageType1, MessageType2]);` macro to generate the necessary boilerplate for routing messages to their respective handlers.
+    *   Defining an associated type `Error` (the error type your actor's lifecycle methods can return).
+    *   Implementing an `on_start` method which initializes your actor from the arguments.
+    *   Implementing `on_run` and `on_stop` methods, which are optional and have default implementations.
+4.  Define the message types your actor will handle.
+5.  For each message type, implement the `Message<MessageType>` trait for your actor struct.
+6.  Use the `impl_message_handler!` macro to implement the `MessageHandler` trait, making your actor able to process messages.
 
-**Q5: How do I create and start an actor?**
+**Q5: Is there a simple example of an actor?**
 
-A5: You use the `rsactor::spawn(args)` function. This function takes the arguments needed for your actor\'s `on_start` method, spawns a new Tokio task for it, and returns an `ActorRef` (to send messages to the actor) and a `tokio::task::JoinHandle<ActorResult<YourActorType>>` (to await the actor\'s termination and get the `ActorResult`).
+A5: Here's a minimalist actor example:
 
-**Q5a: Why is the `Actor` instance created inside `on_start` instead of being passed to `spawn` directly?**
+```rust
+use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
+use anyhow::Result;
 
-A5a: Delaying the creation of the `Actor` instance until the `on_start` method offers a significant advantage in terms of struct design and ergonomics.
+// Define actor struct
+struct SimpleActor {
+    counter: u32,
+}
 
-*   **Problem with Pre-Creation:** If you were to create the `Actor` instance *before* calling `spawn`, any member fields that can only be initialized *during* the actor\'s startup phase (e.g., resources allocated, connections established, or data derived from `ActorRef` which isn\'t available pre-spawn) would need to be declared as `Option<T>`. This is because their values wouldn\'t be known at the moment of the initial struct instantiation. This can lead to a proliferation of `Option<T>` fields and require frequent unwrapping or matching throughout the actor\'s logic, making the code more verbose and error-prone.
+// Implement Actor trait
+impl Actor for SimpleActor {
+    type Args = u32; // Starting counter value
+    type Error = anyhow::Error;
 
-*   **Benefit of `on_start` Creation:** By creating the actual `Actor` instance *inside* `on_start`, you have access to the `ActorRef<Self>` (if needed for initialization) and can perform all necessary setup logic *before* the struct is fully constructed. This means that member fields can be initialized with their concrete values directly, reducing the need for `Option<T>` for state that is determined at startup. The `on_start` method effectively becomes the true constructor of the actor, ensuring that by the time the actor instance exists, it is in a fully initialized and valid state. This leads to cleaner, more straightforward actor struct definitions and more convenient development.
+    async fn on_start(initial_counter: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(SimpleActor { counter: initial_counter })
+    }
+}
 
-**Q6: What is an `ActorRef`?**
+// Define message type
+struct Increment(u32);
 
-A6: An `ActorRef` is a handle to an actor. It allows you to send messages to the actor (`ask`, `tell`, `ask_blocking`, `tell_blocking`), stop it (`stop`), or kill it (`kill`) without having direct access to the actor's instance or its state. `ActorRef`s are cloneable and can be shared across tasks.
+// Implement message handler
+impl Message<Increment> for SimpleActor {
+    type Reply = u32; // Return new counter value
 
-**Q7: Is cloning an `ActorRef` expensive?**
+    async fn handle(&mut self, msg: Increment, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.counter += msg.0;
+        self.counter
+    }
+}
 
-A7: No, cloning an `ActorRef` is cheap. It involves cloning internal `mpsc::Sender` channels, which are designed for this purpose.
+// Use macro to implement MessageHandler trait
+impl_message_handler!(SimpleActor, [Increment]);
 
-## Message Passing
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Spawn actor with initial counter value of 0
+    let (actor_ref, _join_handle) = spawn::<SimpleActor>(0);
 
-**Q8: How do I send messages to an actor?**
+    // Send Increment message and await reply
+    let new_value = actor_ref.ask(Increment(5)).await?;
+    println!("New counter value: {}", new_value);
 
-A8: You use the methods on `ActorRef`:
-*   `tell(message)`: Sends a message asynchronously without waiting for a reply (fire-and-forget).
-*   `ask(message)`: Sends a message asynchronously and waits for a reply.
-*   `tell_blocking(message, timeout)`: Sends a message synchronously from a blocking context (e.g., `tokio::task::spawn_blocking`).
-*   `ask_blocking(message, timeout)`: Sends a message synchronously from a blocking context and waits for a reply.
+    Ok(())
+}
+```
 
-**Q9: What's the difference between `ask`/`tell` and `ask_blocking`/`tell_blocking`? When should I use which?**
+**Q6: How do I spawn an actor?**
 
-A9:
-*   `ask` and `tell` are asynchronous methods. They should be used in `async` functions and tasks.
-*   `ask_blocking` and `tell_blocking` are synchronous (blocking) methods. They are specifically designed for use within code running in a `tokio::task::spawn_blocking` task. This is useful when you need to interact with actors from CPU-bound code or synchronous code that is itself running within Tokio's blocking thread pool.
+A6: To spawn an actor, you use the `spawn` function provided by `rsActor`:
 
-**Q10: How does message handling work? What is the role of `impl_message_handler!`?**
+```rust
+let (actor_ref, join_handle) = spawn::<MyActor>(args);
+```
 
-A10: When you send a message, it goes into the actor's mailbox. The actor's internal `Runtime` processes messages one by one. The `impl_message_handler!` macro generates code that implements the `MessageHandler` trait for your actor. This trait has a method that takes a type-erased message (`Box<dyn Any + Send>`), attempts to downcast it to one of the concrete message types your actor understands, and then calls the appropriate `Message::handle` method you defined.
+This function returns a tuple containing:
+*   An `ActorRef<MyActor>` which you can use to send messages to the actor.
+*   A `JoinHandle<ActorResult<MyActor>>` which you can use to await the actor's completion and get its final state or error information.
 
-**Q11: Are messages processed in order?**
+The `args` parameter is of type `MyActor::Args` and will be passed to the actor's `on_start` method.
 
-A11: Yes, for a given actor instance, messages sent to its mailbox are processed sequentially in the order they are received.
+**Q7: How do I send messages to an actor?**
 
-**Q12: What happens if I send a message to a stopped or killed actor?**
+A7: `rsActor` provides several methods for sending messages to actors:
 
-A12: Sending a message to an actor whose mailbox channel is closed (which happens when it's stopped or killed) will result in an error. For example, `tell` would return `Err(rsactor::Error::MailboxClosed)` and `ask` would also return an `Err` (e.g., `rsactor::Error::MailboxClosed` or `rsactor::Error::AskTimeout` if a timeout occurs) indicating the failure to send or receive a reply.
+1.  **`ask`**: Send a message and await a reply.
+    ```rust
+    let result = actor_ref.ask(MyMessage).await?;
+    ```
 
-## Actor Lifecycle and Termination
+2.  **`ask_with_timeout`**: Send a message, await a reply with a specified timeout.
+    ```rust
+    let result = actor_ref.ask_with_timeout(MyMessage, Duration::from_secs(1)).await?;
+    ```
 
-**Q13: How do I manage an actor's lifecycle?**
+3.  **`tell`**: Send a message without waiting for a reply (fire-and-forget).
+    ```rust
+    actor_ref.tell(MyMessage).await?;
+    ```
 
-A13: The `Actor` trait provides two main lifecycle hooks:
-*   `on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>`: Called when the actor is spawned. It receives initialization arguments (`Self::Args`) and is responsible for creating and returning the actor instance (`Self`). If it returns an `Err`, the actor fails to start, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnStart`.
+4.  **`tell_with_timeout`**: Send a message without waiting for a reply, with a timeout.
+    ```rust
+    actor_ref.tell_with_timeout(MyMessage, Duration::from_secs(1)).await?;
+    ```
+
+5.  **`ask_blocking`**: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
+    ```rust
+    let result = actor_ref.ask_blocking::<MyMessage, ResponseType>(MyMessage, Some(timeout));
+    ```
+
+6.  **`tell_blocking`**: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
+    ```rust
+    actor_ref.tell_blocking(MyMessage, Some(timeout));
+    ```
+
+**Q8: How do I stop an actor?**
+
+A8: To stop an actor, you can use:
+
+1.  **Graceful Stop**:
+    ```rust
+    actor_ref.stop().await?;
+    ```
+    This sends a stop signal to the actor and waits for it to shut down cleanly. The actor will continue processing its current message, finish its current `on_run` execution, and then call `on_stop` before terminating.
+
+2.  **Immediate Kill**:
+    ```rust
+    actor_ref.kill();
+    ```
+    This abruptly stops the actor. The actor will not finish processing its current message, but will call `on_stop(killed=true)` before terminating.
+
+3.  **From within the actor**:
+    An actor can stop itself by calling `actor_ref.stop()` or `actor_ref.kill()` within its own methods.
+
+**Q9: How do I define message types?**
+
+A9: Message types in `rsActor` are just regular Rust types (structs or enums) that can carry the data needed for the actor to process the request. Message types should be `Send + 'static` to be safely sent across threads.
+
+```rust
+// Simple message with no data
+struct Ping;
+
+// Message with data
+struct AddUser {
+    id: u64,
+    name: String,
+    email: Option<String>,
+}
+
+// Enum message type
+enum DatabaseCommand {
+    Insert(Record),
+    Delete(u64),
+    Query(QueryParams),
+}
+```
+
+**Q10: How do I handle messages in an actor?**
+
+A10: To handle messages, you implement the `Message<T>` trait for your actor struct, where `T` is the message type:
+
+```rust
+impl Message<AddUser> for UserManagerActor {
+    // Define what this message handler returns
+    type Reply = Result<UserId, UserError>;
+
+    // Implement the message handler
+    async fn handle(&mut self, msg: AddUser, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        let user = User {
+            id: self.next_id,
+            name: msg.name,
+            email: msg.email,
+        };
+
+        self.next_id += 1;
+        self.users.insert(user.id, user.clone());
+
+        Ok(user.id)
+    }
+}
+```
+
+Then you must also use the `impl_message_handler!` macro to register all the message types your actor can handle:
+
+```rust
+impl_message_handler!(UserManagerActor, [Ping, AddUser, RemoveUser, GetUser]);
+```
+
+This macro implements the `MessageHandler` trait, which is what allows the actor runtime to dispatch messages to the appropriate handler methods.
+
+## Actor Lifecycle
+
+**Q11: What is the lifecycle of an actor?**
+
+A11: The lifecycle of an actor in `rsActor` follows these stages:
+
+1.  **Creation and Initialization**:
+    *   Actor is spawned with arguments via `spawn::<Actor>(args)`.
+    *   The framework calls `on_start(args, actor_ref)` to create the actor instance.
+    *   If `on_start` returns `Ok(actor_instance)`, the actor enters the running state.
+    *   If `on_start` returns `Err(e)`, the actor fails to start, and the `JoinHandle` resolves with an error.
+
+2.  **Running**:
+    *   The framework repeatedly calls the actor's `on_run` method, which defines the actor's main execution logic.
+    *   Concurrently, the actor processes messages from its mailbox.
+    *   This continues until the actor is stopped or encounters an error.
+
+3.  **Termination**:
+    *   When the actor is stopping (either due to `stop()`, `kill()`, or an error), the framework calls `on_stop(actor_ref, killed)`.
+    *   After `on_stop` completes, the actor is destroyed, and the `JoinHandle` is resolved with an `ActorResult`.
+
+The actor's lifecycle methods are:
+
+*   `on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>`: Called when the actor is starting. Creates and returns the actor instance.
 *   `on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error>`: Called after `on_start` succeeds. This method contains the main execution logic of the actor and runs concurrently with message handling.
     *   If `on_run` returns `Ok(())`, the actor continues running and `on_run` will be called again.
     *   If `on_run` returns `Err(e)`, the actor terminates due to a runtime error, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnRun`.
     *   To stop the actor normally from within `on_run`, call `actor_ref.stop().await` or `actor_ref.kill()`.
+*   `on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error>`: Called when the actor is stopping. The `killed` parameter is `true` if the actor was killed, and `false` if it was stopped gracefully.
 
-There is also an `on_stop` hook: `on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error>` which is called before the actor terminates, with the `killed` parameter indicating whether the actor was killed (true) or stopped gracefully (false).
+**Q12: What is the `ActorResult` enum?**
 
-**Q14: How do I stop an actor? What's the difference between `stop()` and `kill()`?**
+A12: The `ActorResult` enum represents the outcome of an actor's lifecycle when awaiting its `JoinHandle`. It has two variants:
 
-A14:
-*   `actor_ref.stop().await`: Sends a `StopGracefully` signal. The actor will process all messages currently in its mailbox, and then `on_stop` will be called with `killed: false`, after which the actor terminates. The `JoinHandle` will then resolve to `ActorResult::Completed { actor, killed: false }`.
-*   `actor_ref.kill()`: Sends an immediate `Terminate` signal via a prioritized channel. The actor will attempt to stop as soon as possible. `on_stop` will be called with `killed: true`, after which the actor terminates. Any unprocessed messages in the main mailbox may be discarded. The `JoinHandle` will resolve to `ActorResult::Completed { actor, killed: true }`.
+1.  **`ActorResult::Completed`**:
+    *   Indicates that the actor completed successfully.
+    *   Contains the final actor state (`actor: A`) and a boolean `killed` indicating whether the actor was killed or stopped gracefully.
+    *   Returned when an actor is successfully stopped or killed.
 
-**Q15: What is `ActorResult`?**
+2.  **`ActorResult::Failed`**:
+    *   Indicates that the actor failed during its lifecycle.
+    *   Contains the optional actor state (`actor: Option<A>`), the error that caused the failure (`error: E`), the phase in which the failure occurred (`phase: FailurePhase`), and a boolean `killed` indicating whether the actor was killed.
+    *   The `FailurePhase` can be `OnStart`, `OnRun`, or `OnStop`.
 
-A15: `ActorResult<T: Actor>` is an enum that indicates how an actor's lifecycle concluded. Its variants are:
-*   `Completed { actor: T, killed: bool }`: The actor finished its execution. `actor` contains the final state of the actor. `killed` is `true` if termination was due to `actor_ref.kill()`, `false` otherwise (e.g. graceful stop or all `ActorRef`s dropped).
-*   `Failed { actor: Option<T>, error: T::Error, phase: FailurePhase, killed: bool }`: The actor failed during one of its lifecycle phases. `actor` may contain the actor's state at the time of failure (if it's retrievable) - it will be `None` if failure occurred during `on_start` since the actor wasn't created yet. `error` contains the error, `phase` indicates which lifecycle phase failed (OnStart, OnRun, or OnStop), and `killed` indicates if the actor was being killed when the failure occurred.
+**Q13: How do I handle errors in actors?**
 
-**Q16: What is the purpose of the `JoinHandle<ActorResult<T>>` returned by `spawn`?**
+A13: Error handling in `rsActor` happens at several levels:
 
-A16: The `JoinHandle` allows you to await the termination of the actor's task. When the actor stops, the `JoinHandle` resolves to an `ActorResult<T>` (where `T` is your actor type). This `ActorResult` provides the final state of the actor (if applicable) and information about how and why it stopped. This is useful for cleanup, retrieving final state, or ensuring actors have shut down properly.
-
-## Error Handling
-
-**Q17: How are errors handled in actors?**
-
-A17:
-*   **Message Handling:** The `Message<M>::handle` method returns a value of type `Self::Reply`. If this reply type is a `Result`, errors can be propagated back to the caller of `ask`. If the `MessageHandler::handle` implementation (generated by the `impl_message_handler!` macro) encounters an error (e.g., trying to handle an unhandled message type), this error will be propagated back to the caller of `ask`. For `tell`, errors from message handling are typically logged by the actor itself if necessary, as `tell` doesn't wait for a reply.
-*   **Lifecycle - `on_start`:** If `on_start` returns `Err(e)`, the actor will not start, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`.
+*   **Lifecycle - `on_start`:** If `on_start` returns `Err(e)`, the actor never starts, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`. Since the actor wasn't created, the `actor` field is `None`.
 *   **Lifecycle - `on_run`:** If `on_run` returns `Err(e)`, the actor will terminate, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: Some(actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`. The `actor` field may contain the actor's state.
 *   **Panics:** If a message handler or `on_run` panics, the Tokio task hosting the actor will terminate. Awaiting the `JoinHandle` will then result in an `Err` (typically a `tokio::task::JoinError` indicating a panic). It's generally recommended to handle errors gracefully within your actor logic and return `Result` types from `on_start` and `on_run`, and use `Result` as reply types for messages where appropriate, rather than relying on panics.
+*   **Message Handling:** For message handling, the `Message<T>::handle` method can return any type as its `Reply`, including a `Result` type. If your message handler might fail, it's a good practice to use a `Result` type as the `Reply` type.
+*   **Sending Messages:** The methods for sending messages (`ask`, `tell`, etc.) return `Result<R, rsactor::Error>`, where `R` is the reply type of the message. These methods can fail if the actor has stopped, the mailbox is full, or a timeout occurs.
 
-## Configuration and Advanced Topics
+## Advanced Usage
 
-**Q18: What is the actor mailbox capacity and can I configure it?**
+**Q14: Can I use rsActor with blocking code?**
 
-A18: The mailbox is an MPSC channel that holds incoming messages for an actor.
-*   There's a default capacity (`DEFAULT_MAILBOX_CAPACITY`, which is 32).
-*   You can set a global default mailbox capacity once using `set_default_mailbox_capacity(size)`.
-*   You can also specify a custom mailbox capacity for an individual actor when spawning it using `spawn_with_mailbox_capacity(actor, capacity)`.
+A14: Yes, `rsActor` provides mechanisms for working with blocking code:
 
-**Q19: Does rsActor support actor supervision or linking?**
+1.  **Within Message Handlers:**
+    If a message handler needs to perform blocking operations, you can use `tokio::task::spawn_blocking`:
 
-A19: No, `rsActor` currently does not have built-in support for actor supervision hierarchies or direct linking of actors in the way some other actor systems (like Erlang/OTP or Akka) do. You would need to implement such patterns manually if required, for example, by having one actor monitor the `JoinHandle` of another.
+    ```rust
+    impl Message<ProcessFile> for FileProcessorActor {
+        type Reply = Result<Stats, FileError>;
 
-**Q20: Can actors communicate with each other?**
+        async fn handle(&mut self, msg: ProcessFile, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+            let file_path = msg.path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                // Perform blocking file operations
+                process_file_synchronously(&file_path)
+            }).await??; // Unwrap both the JoinError and the inner Result
 
-A20: Yes. Actors can hold `ActorRef`s to other actors and send messages to them just like any other part of your application can.
+            Ok(result)
+        }
+    }
+    ```
 
-**Q21: Is rsActor suitable for distributed systems?**
+2.  **Sending Messages from Blocking Contexts:**
+    If you need to send messages to actors from within a blocking context, use the `ask_blocking` and `tell_blocking` methods:
 
-A21: No, `rsActor` is designed for local, in-process actor systems only. It does not provide features for network transparency or communication between actors in different processes or on different machines.
+    ```rust
+    tokio::task::spawn_blocking(move || {
+        // Some blocking work...
 
-**Q22: Can I use generic types with actors?**
+        // Send message and get response, blocking until response is received
+        let result = actor_ref.ask_blocking::<Query, QueryResult>(
+            Query { id: 123 },
+            Some(Duration::from_secs(5))
+        );
 
-A22: Yes, `rsActor` supports generic actors. You can define an actor with generic type parameters:
+        // Process result...
+    });
+    ```
+
+**Q15: How do I test actors?**
+
+A15: Testing actors can be done in several ways:
+
+1.  **Integration-style tests**:
+    Spawn the actor and interact with it directly:
+
+    ```rust
+    #[tokio::test]
+    async fn test_counter_actor() {
+        let (actor_ref, _handle) = spawn::<CounterActor>(0);
+
+        // Test increment
+        let result = actor_ref.ask(Increment(5)).await.unwrap();
+        assert_eq!(result, 5);
+
+        // Test get count
+        let count = actor_ref.ask(GetCount).await.unwrap();
+        assert_eq!(count, 5);
+    }
+    ```
+
+2.  **Test message handlers directly**:
+    You can instantiate your actor struct and call message handlers directly:
+
+    ```rust
+    #[tokio::test]
+    async fn test_message_handlers() {
+        let mut actor = CounterActor { count: 0 };
+        let actor_ref = ActorRef::for_test(); // Create a dummy ActorRef for testing
+
+        // Test increment handler
+        let result = actor.handle(Increment(5), &actor_ref).await;
+        assert_eq!(result, 5);
+        assert_eq!(actor.count, 5);
+    }
+    ```
+
+3.  **Test lifecycle methods**:
+    You can test `on_start`, `on_run`, and `on_stop` directly:
+
+    ```rust
+    #[tokio::test]
+    async fn test_lifecycle() {
+        let actor_ref = ActorRef::for_test();
+
+        // Test on_start
+        let actor = CounterActor::on_start(10, &actor_ref).await.unwrap();
+        assert_eq!(actor.count, 10);
+
+        // Test on_run
+        let mut actor = CounterActor { count: 0 };
+        let result = actor.on_run(&actor_ref).await;
+        assert!(result.is_ok());
+    }
+    ```
+
+**Q16: Can I use custom error types?**
+
+A16: Yes, you can use any error type that implements `Send + Debug + 'static` as the `Actor::Error` type:
 
 ```rust
-use rsactor::{Actor, ActorRef, Message, ActorResult, spawn}; // Added ActorResult and spawn
-use std::fmt::Debug; // For deriving Debug on actor state if needed for ActorResult
+#[derive(Debug, thiserror::Error)]
+enum MyActorError {
+    #[error("Database error: {0}")]
+    DbError(#[from] sqlx::Error),
 
-#[derive(Debug)] // Example: derive Debug if T is Debug and you want to see it in ActorResult
-struct GenericActor<T: Send + Debug + 'static> {
-    value: T,
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+
+    #[error("Network timeout")]
+    NetworkTimeout,
 }
 
-// Define Args for the generic actor
-struct GenericActorArgs<T> {
-    initial_value: T,
+struct MyActor {
+    // ...
 }
 
-impl<T: Send + Debug + 'static> Actor for GenericActor<T> {
-    type Args = GenericActorArgs<T>; // Use the new Args struct
-    type Error = anyhow::Error;
+impl Actor for MyActor {
+    type Args = Config;
+    type Error = MyActorError;
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(GenericActor { value: args.initial_value })
+        // ...
+    }
+}
+```
+
+**Q17: How do I handle actor supervision?**
+
+A17: `rsActor` does not have a built-in supervision system like some other actor frameworks (e.g., Akka). However, you can implement a simple supervision pattern by:
+
+1.  Monitoring the `JoinHandle` of child actors:
+    ```rust
+    // Spawn child actor
+    let (child_ref, child_handle) = spawn::<ChildActor>(child_args);
+
+    // Monitor the child's JoinHandle in another task
+    tokio::spawn(async move {
+        match child_handle.await {
+            Ok(ActorResult::Completed { .. }) => {
+                // Child completed normally
+            }
+            Ok(ActorResult::Failed { error, .. }) => {
+                // Child failed, take some action (e.g., restart)
+                let (new_child_ref, new_child_handle) = spawn::<ChildActor>(child_args);
+                // ...
+            }
+            Err(join_error) => {
+                // Child panicked
+            }
+        }
+    });
+    ```
+
+2.  Creating a supervisor actor that manages child actors:
+    ```rust
+    struct SupervisorActor {
+        children: HashMap<ActorId, ChildInfo>,
+    }
+
+    impl SupervisorActor {
+        async fn spawn_child(&mut self, args: ChildArgs) -> Result<ActorRef<ChildActor>> {
+            let (child_ref, child_handle) = spawn::<ChildActor>(args.clone());
+            let child_id = child_ref.identity();
+
+            // Monitor child in background task
+            let supervisor_ref = self.self_ref.clone();
+            tokio::spawn(async move {
+                let result = child_handle.await;
+                // Notify supervisor about child termination
+                supervisor_ref.tell(ChildTerminated {
+                    id: child_id,
+                    result,
+                    args, // Keep args for possible restart
+                }).await;
+            });
+
+            self.children.insert(child_id, ChildInfo { ref: child_ref.clone() });
+            Ok(child_ref)
+        }
+    }
+    ```
+
+**Q18: How do I implement periodic tasks?**
+
+A18: Periodic tasks are best implemented using the `on_run` method with Tokio's time utilities:
+
+```rust
+use tokio::time::{self, Duration, Interval};
+
+struct MyActor {
+    interval: Interval,
+    other_data: Vec<String>,
+}
+
+impl Actor for MyActor {
+    type Args = Duration;
+    type Error = anyhow::Error;
+
+    async fn on_start(interval_duration: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        let mut interval = time::interval(interval_duration);
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+        Ok(Self {
+            interval,
+            other_data: Vec::new(),
+        })
     }
 
     async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
-        // Basic on_run, keeps actor alive until stopped
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // Wait for the next interval tick
+        self.interval.tick().await;
+
+        // Perform periodic task
+        self.perform_work();
+
         Ok(())
     }
 }
-
-// Define a sample message
-struct GetValueMsg;
-
-impl<T: Send + Clone + Debug + 'static> Message<GetValueMsg> for GenericActor<T> {
-    type Reply = Result<T, anyhow::Error>; // Reply is often a Result
-    async fn handle(&mut self, _msg: GetValueMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
-        Ok(self.value.clone())
-    }
-}
 ```
 
-To use generic actors:
-1. Define your actor struct with appropriate type parameters.
-2. Define an `Args` struct for its initialization, possibly also generic.
-3. Implement the `Actor` trait generically, including `on_start` and `on_run`.
-4. Implement message handling for the generic actor.
-5. Call `impl_message_handler!` specifically for each concrete type instantiation you need.
-6. When creating and spawning actors, provide the concrete `Args` type.
+**Q19: How to communicate between actors?**
+
+A19: Actors communicate by sending messages to each other:
 
 ```rust
-// Example usage:
-// Assuming GetValueMsg and impl_message_handler!(GenericActor<u32>, [GetValueMsg]); are defined
-async fn run_generic_actor() {
-    let actor_args = GenericActorArgs { initial_value: 123u32 };
-    let actor_ref_join_handle = spawn(actor_args).await;
+impl Message<ProcessOrder> for OrderProcessorActor {
+    type Reply = Result<OrderStatus, OrderError>;
 
-    if let Ok(actor_ref) = actor_ref_join_handle {
-        let reply_result = actor_ref.ask(GetValueMsg).await;
-        match reply_result {
-            Ok(Ok(value)) => println!("GenericActor<u32> replied with: {}", value),
-            Ok(Err(e)) => println!("GenericActor<u32> handler error: {}", e),
-            Err(e) => println!("Failed to ask GenericActor<u32>: {}", e),
+    async fn handle(&mut self, msg: ProcessOrder, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        // Process order locally
+        let order = self.validate_order(&msg.order)?;
+
+        // Send message to another actor for inventory check
+        let inventory_status = self.inventory_actor.ask(CheckInventory {
+            items: order.items.clone(),
+        }).await?;
+
+        if !inventory_status.all_available {
+            return Err(OrderError::ItemsOutOfStock(inventory_status.missing_items));
         }
-        // Stop the actor
-        let _ = actor_ref.stop().await;
-    } else {
-        println!("Failed to spawn GenericActor<u32>");
+
+        // Send message to payment actor
+        let payment_result = self.payment_actor.ask(ProcessPayment {
+            amount: order.total_amount,
+            payment_method: msg.payment_method,
+        }).await?;
+
+        if let Err(e) = payment_result {
+            return Err(OrderError::PaymentFailed(e));
+        }
+
+        // Update order status
+        self.orders.insert(order.id, order.clone());
+
+        Ok(OrderStatus::Completed(order))
     }
 }
 ```
+
+**Q20: How do I implement request-response patterns?**
+
+A20: The request-response pattern is built into `rsActor` through the `ask` method and `Message<T>::Reply` type:
+
+```rust
+// Request message
+struct GetUserDetails {
+    user_id: UserId,
+}
+
+// Response is defined as the Reply type
+impl Message<GetUserDetails> for UserManagerActor {
+    type Reply = Result<UserDetails, UserError>;
+
+    async fn handle(&mut self, msg: GetUserDetails, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        match self.users.get(&msg.user_id) {
+            Some(user) => Ok(UserDetails::from(user)),
+            None => Err(UserError::UserNotFound(msg.user_id)),
+        }
+    }
+}
+
+// Client code:
+async fn get_user_profile(
+    user_manager: &ActorRef<UserManagerActor>,
+    user_id: UserId,
+) -> Result<UserDetails, Error> {
+    let user_details = user_manager.ask(GetUserDetails { user_id }).await??;
+    Ok(user_details)
+}
+```
+
+**Q21: How do I share actor references between actors?**
+
+A21: Actor references can be shared by passing them during actor creation or via messages:
+
+1.  **Via constructor arguments**:
+    ```rust
+    struct CoordinatorActor {
+        worker_actors: Vec<ActorRef<WorkerActor>>,
+    }
+
+    impl Actor for CoordinatorActor {
+        type Args = Vec<ActorRef<WorkerActor>>;
+        type Error = anyhow::Error;
+
+        async fn on_start(workers: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(CoordinatorActor {
+                worker_actors: workers,
+            })
+        }
+    }
+
+    // Spawn workers first, then coordinator:
+    let worker_refs: Vec<_> = (0..5)
+        .map(|i| spawn::<WorkerActor>(WorkerArgs { id: i }).0)
+        .collect();
+
+    let (coordinator_ref, _) = spawn::<CoordinatorActor>(worker_refs);
+    ```
+
+2.  **Via messages**:
+    ```rust
+    struct RegisterWorker {
+        worker: ActorRef<WorkerActor>,
+    }
+
+    impl Message<RegisterWorker> for CoordinatorActor {
+        type Reply = ();
+
+        async fn handle(&mut self, msg: RegisterWorker, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+            self.worker_actors.push(msg.worker);
+        }
+    }
+
+    // Later, register a worker:
+    let (worker_ref, _) = spawn::<WorkerActor>(worker_args);
+    coordinator_ref.tell(RegisterWorker { worker: worker_ref }).await?;
+    ```
+
+**Q22: Can I use generics with actors?**
+
+A22: Yes, you can define generic actors. Here's an example of a generic actor that can store an optional value of any type `T` that meets the necessary trait bounds.
+
+```rust
+use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
+use anyhow::Result;
+use std::fmt::Debug;
+
+// Define a generic actor struct
+#[derive(Debug)]
+struct GenericActor<T: Send + Debug + Clone + 'static> {
+    data: Option<T>,
+}
+
+// Implement the Actor trait for the generic actor
+impl<T: Send + Debug + Clone + 'static> Actor for GenericActor<T> {
+    type Args = Option<T>; // Initial value for data
+    type Error = anyhow::Error;
+
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(GenericActor { data: args })
+    }
+}
+
+// Define message types
+// A generic message to set the value
+#[derive(Debug)]
+struct SetValue<T: Send + Debug + 'static>(pub T);
+
+// A non-generic message to get the value
+#[derive(Debug, Clone, Copy)]
+struct GetValue;
+
+// Implement Message trait for SetValue<T>
+impl<T: Send + Debug + Clone + 'static> Message<SetValue<T>> for GenericActor<T> {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: SetValue<T>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data = Some(msg.0);
+    }
+}
+
+// Implement Message trait for GetValue
+impl<T: Send + Debug + Clone + 'static> Message<GetValue> for GenericActor<T> {
+    type Reply = Option<T>;
+
+    async fn handle(&mut self, _msg: GetValue, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data.clone()
+    }
+}
+
+// ---- Crucial Part: impl_message_handler Macro ----
+// You must invoke the macro for each concrete type you intend to use with GenericActor.
+// The macro does not support generic type parameters directly in its invocation.
+
+// Example for GenericActor<String>
+impl_message_handler!(GenericActor<String>, [SetValue<String>, GetValue]);
+
+// Example for GenericActor<i32>
+impl_message_handler!(GenericActor<i32>, [SetValue<i32>, GetValue]);
+
+// If you have a custom struct, like MyTestData:
+// #[derive(Debug, Clone, PartialEq)]
+// struct MyTestData { id: i32, name: String }
+// impl_message_handler!(GenericActor<MyTestData>, [SetValue<MyTestData>, GetValue]);
+
+/*
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Usage with String
+    let (string_actor_ref, _s_handle) = spawn::<GenericActor<String>>(Some("hello".to_string()));
+    string_actor_ref.tell(SetValue("world".to_string())).await?;
+    let val_s: Option<String> = string_actor_ref.ask(GetValue).await?;
+    println!("String actor value: {:?}", val_s); // Should be Some("world")
+
+    // Usage with i32
+    let (int_actor_ref, _i_handle) = spawn::<GenericActor<i32>>(Some(42));
+    int_actor_ref.tell(SetValue(100)).await?;
+    let val_i: Option<i32> = int_actor_ref.ask(GetValue).await?;
+    println!("Integer actor value: {:?}", val_i); // Should be Some(100)
+
+    Ok(())
+}
+*/
+```
+
+The key takeaway for generic actors is that the `impl_message_handler!` macro generates specific implementations. Therefore, you need to call it for each concrete instantiation of your generic actor (e.g., `GenericActor<String>`, `GenericActor<i32>`, `GenericActor<MyCustomType>`) along with the corresponding concrete message types it will handle.
 
 **Q23: How can I effectively use the `on_run` method in my actors?**
 
@@ -249,93 +730,202 @@ A23: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
                 self.process_high_frequency_work();
             }
             _ = self.slow_interval.tick() => {
-                // Handle low-frequency tasks (every 5 seconds)
-                self.process_low_frequency_work().await?;
+                // Handle low-frequency tasks (every 5s)
+                self.process_low_frequency_work();
             }
-            // You can add more branches as needed, including channels, futures, etc.
         }
         Ok(())
     }
     ```
 
-*   **Graceful Termination:** When you want the actor to stop normally, you can call `actor_ref.stop().await` from within the `on_run` method. This will trigger the normal shutdown sequence, and the `JoinHandle` will resolve to `ActorResult::Completed { killed: false, .. }`. The `on_run` method returns `Ok(())` to continue running.
+*   **Consuming Events:** The `on_run` method is ideal for processing events from channels or streams:
 
-*   **Error Handling:** If the `on_run` returns an error (`Err(e)`), the actor will stop, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: Some(actor), error: e, phase: FailurePhase::OnRun, killed: false }`.
+    ```rust
+    struct EventProcessorActor {
+        events_rx: mpsc::Receiver<Event>,
+    }
 
-*   **Integration with Message Handling:** The `on_run` runs concurrently with message processing. The actor will continue to handle messages from its mailbox while the `on_run` is executing. This allows for a nice separation of concerns where long-running tasks are in the `on_run` and message-specific logic is in the message handlers.
+    impl Actor for EventProcessorActor {
+        // ...
 
-**Important Considerations:**
-
-*   **Responsiveness:** The `on_run` and message handlers share the same execution context. This means that if your `on_run` doesn't yield control by using `.await` points, it can block message processing. The framework will call `on_run` repeatedly, so ensure each call includes sufficient `.await` points.
-
-*   **State Sharing:** Both the `on_run` and message handlers have access to the actor's state (`self`), allowing them to share data without additional synchronization mechanisms.
-
-*   **CPU-Bound or Blocking Work:**
-    *   For CPU-bound or blocking I/O operations that would otherwise block the Tokio runtime, you **must** use `tokio::task::spawn_blocking` even within the `on_run`.
-    *   Directly performing blocking operations in the `on_run` will block the Tokio worker thread that the actor is running on, making the actor unresponsive to messages and potentially affecting other tasks.
-    *   When using `spawn_blocking` from the `on_run`, you can `.await` its result directly:
-
-        ```rust
-        async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
-            // Offload CPU-intensive or blocking I/O work
-            let result = tokio::task::spawn_blocking(|| {
-                // Perform CPU-bound or blocking I/O work
-                // Return the result
-            }).await?;
-
-            // Process the result
-            // Return Ok(()) to continue running - the framework will call on_run again
+        async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+            tokio::select! {
+                Some(event) = self.events_rx.recv() => {
+                    self.process_event(event)?;
+                }
+                else => {
+                    // Channel closed, stop the actor
+                    return Err(anyhow::anyhow!("Event channel closed"));
+                }
+            }
             Ok(())
         }
-        ```
+    }
+    ```
 
-*   **Coordination with Actor Termination:** If your `on_run` spawns tasks or acquires resources, ensure they are properly managed when the actor stops. The `on_run` method should be designed to exit cleanly when it detects that the actor is shutting down (e.g., its mailbox closes, or it receives a specific signal if you implement one). There is no `on_stop` hook; all cleanup must happen within `on_run` before it returns, or by the code that awaits the `JoinHandle` and processes the `ActorResult`.
+*   **Background Processing:** Use `on_run` for continuous background processing tasks:
 
-In summary, the `on_run` method provides an elegant way to implement continuous or periodic tasks within an actor without spawning separate Tokio tasks. It runs as part of the actor's main execution flow, has access to the actor's state, and can use the full range of async features available in the Tokio ecosystem. By using the `on_run`, you often eliminate the need to spawn separate tasks from an actor's methods, resulting in cleaner and more manageable actor implementations.
+    ```rust
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+        // Process one batch of work items
+        if let Some(work_item) = self.queue.pop() {
+            self.process_work_item(work_item)?;
+        } else {
+            // No work to do right now, add a small delay to avoid busy waiting
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok(())
+    }
+    ```
 
-## Type Safety
+*   **Combine multiple sources with `tokio::select!`:** You can wait on multiple event sources concurrently:
 
-**Q26: What's the difference between `ActorRef<T>` and `UntypedActorRef`?**
+    ```rust
+    async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+        tokio::select! {
+            Some(msg) = self.command_rx.recv() => {
+                self.handle_command(msg)?;
+            }
+            _ = self.health_check_interval.tick() => {
+                self.perform_health_check()?;
+            }
+            Ok(()) = self.check_resource_limits() => {
+                // Resources are within limits, continue
+            }
+            else => {
+                // All channels are closed
+                actor_ref.stop().await?;
+            }
+        }
+        Ok(())
+    }
+    ```
 
-A26: rsActor provides two types of actor references with different levels of type safety:
+**Q24: How do I handle backpressure in actors?**
 
-- **`ActorRef<T>`**: Provides compile-time type safety. The compiler ensures that only valid message types can be sent, and reply types are automatically inferred. This is the recommended default for most use cases.
-- **`UntypedActorRef`**: Provides runtime type handling through type erasure. This allows storing different actor types in collections but requires developer responsibility for ensuring type safety at runtime.
+A24: Backpressure is important to prevent overwhelming actors with more messages than they can process. `rsActor` provides several techniques:
 
-**Q27: When should I use `UntypedActorRef`?**
+1.  **Mailbox Capacity**:
+    When spawning an actor, you can specify the mailbox size:
 
-A27: Use `UntypedActorRef` only when you specifically need type erasure:
-- **Collections**: Storing different actor types in the same `Vec`, `HashMap`, etc.
-- **Plugin Systems**: Managing actors loaded dynamically at runtime
-- **Heterogeneous Actor Groups**: When you need to manage actors of different types uniformly
+    ```rust
+    let mailbox_size = 100;
+    let (actor_ref, handle) = spawn_with_mailbox::<MyActor>(args, mailbox_size);
+    ```
 
-For normal actor communication, always prefer `ActorRef<T>` for its compile-time safety guarantees.
+    When the mailbox is full, `ask` and `tell` operations will return an error, allowing the sender to implement backpressure strategies.
 
-**Q28: What are the risks of using `UntypedActorRef`?**
+2.  **Rate Limiting**:
+    Implement rate limiting within the actor:
 
-A28: When using `UntypedActorRef`, you lose compile-time type safety:
-- **Runtime Errors**: Sending wrong message types will result in runtime errors instead of compile-time errors
-- **Developer Responsibility**: You must ensure message types match the target actor
-- **Less IDE Support**: You lose autocomplete and type checking benefits
+    ```rust
+    struct RateLimitedActor {
+        limiter: RateLimiter,
+        // ...
+    }
 
-**Q29: How do I convert between `ActorRef<T>` and `UntypedActorRef`?**
+    impl Actor for RateLimitedActor {
+        // ...
 
-A29: You can easily get an `UntypedActorRef` from an `ActorRef<T>`:
+        async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self {
+                limiter: RateLimiter::new(args.rate),
+                // ...
+            })
+        }
+    }
 
-```rust
-let (typed_ref, _) = spawn::<MyActor>(());
-let untyped_ref: &UntypedActorRef = typed_ref.untyped_actor_ref();
-```
+    impl Message<ProcessRequest> for RateLimitedActor {
+        type Reply = Result<Response, Error>;
 
-**Note**: You cannot safely convert `UntypedActorRef` back to `ActorRef<T>` without additional type information and validation.
+        async fn handle(&mut self, msg: ProcessRequest, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+            // Wait for rate limiter to allow processing
+            self.limiter.acquire_one().await;
 
-**Q30: What happens if I send the wrong message type to an `UntypedActorRef`?**
+            // Process the request
+            self.process(msg)
+        }
+    }
+    ```
 
-A30: Sending an incorrect message type will result in a runtime error. The actor's message handler will attempt to downcast the message to one of its supported types, and if no match is found, it will return an `Error::UnhandledMessageType` error. This error includes:
-- The actor's identity
-- List of expected message types
-- The actual type that was sent
+3.  **Flow Control with Acknowledgments**:
+    Use explicit acknowledgments to implement flow control:
 
----
+    ```rust
+    // Sender side
+    for item in items {
+        actor_ref.ask(ProcessItem { item }).await?;
+        // Wait for acknowledgment before sending next item
+    }
+
+    // Actor side
+    impl Message<ProcessItem> for ProcessingActor {
+        type Reply = (); // Acknowledgment
+
+        async fn handle(&mut self, msg: ProcessItem, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+            self.process(msg.item);
+            // Return empty acknowledgment
+        }
+    }
+    ```
+
+4.  **Batching**:
+    Process items in batches to reduce message overhead:
+
+    ```rust
+    // Instead of sending individual items:
+    actor_ref.ask(ProcessBatch { items: batch_of_items }).await?;
+
+    // Actor handles batches more efficiently:
+    impl Message<ProcessBatch> for BatchProcessorActor {
+        type Reply = BatchResult;
+
+        async fn handle(&mut self, msg: ProcessBatch, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+            // Process entire batch at once
+            self.process_batch(msg.items)
+        }
+    }
+    ```
+
+**Q25: How does rsActor handle type safety for messages and actors?**
+
+A25: rsActor provides a comprehensive type safety system for actor messaging through two complementary approaches:
+
+1. **Compile-time Type Safety with `ActorRef<T>`**:
+   - The primary actor reference type you'll use in most cases
+   - Fully leverages Rust's type system for static verification
+   - Only allows sending messages that the actor has explicitly implemented handlers for
+   - Automatically infers and enforces correct return types based on message handler implementations
+   - Compiler errors occur if you attempt to send an unhandled message type
+   - Zero runtime overhead for type checking
+   - Example:
+     ```rust
+     // This will compile only if CounterActor implements Message<IncrementMsg>
+     let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;
+
+     // This would be a compile-time error if CounterActor doesn't handle ResetMsg
+     actor_ref.tell(ResetMsg).await?;
+     ```
+
+2. **Runtime Type Safety with `UntypedActorRef`**:
+   - Provides type erasure when you need to store different actor types together
+   - Useful for dynamic actor management, plugin systems, or heterogeneous actor collections
+   - Type checking happens at runtime when sending messages
+   - Returns error if the message type doesn't match what the actor can handle
+   - Slightly higher overhead due to runtime checks
+   - Developer is responsible for ensuring correct message types
+   - Example:
+     ```rust
+     // Convert to an untyped reference
+     let untyped_ref = actor_ref.untyped_actor_ref();
+
+     // Store different actor types in the same collection
+     let actors: Vec<UntypedActorRef> = vec![actor1.untyped_actor_ref(), actor2.untyped_actor_ref()];
+
+     // Runtime checked - will return error if actor doesn't handle this message type
+     untyped_ref.ask::<ResetMsg, ()>(ResetMsg).await?;
+     ```
+
+The dual approach ensures you get the benefits of Rust's strong type system in normal usage, while still enabling flexibility when needed for more dynamic patterns. This balance of static and dynamic typing provides both safety and versatility, making it suitable for a wide range of actor system designs.
 
 *This FAQ is based on the state of the `rsActor` project as of its `README.md` and `src/lib.rs` on May 25, 2025. Features and behaviors may change in future versions.*
