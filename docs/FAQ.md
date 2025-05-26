@@ -219,9 +219,9 @@ async fn run_generic_actor() {
 
 **Q23: How can I effectively use the `on_run` method in my actors?**
 
-A23: The `on_run` method is a powerful feature of the `rsActor` framework that provides a clean way to implement continuous or periodic tasks within an actor. It is called after `on_start` and runs for the entire lifetime of the actor. Here's how to use it effectively:
+A23: The `on_run` method is a key part of the actor lifecycle in the `rsActor` framework that enables an actor to perform its primary processing work. It is called after `on_start` completes and continues running throughout the actor's lifetime. Here's how to use it effectively:
 
-*   **Continuous Processing:** The `on_run` method is ideal for implementing continuous processing logic that should run throughout the actor's lifetime. Unlike spawning separate tasks, work in the `on_run` is part of the actor's main execution flow.
+*   **Actor Behavior Implementation:** The `on_run` method is where you implement the actor's primary behavior and processing logic. Following the actor model principles, this processing happens concurrently with message handling, allowing the actor to maintain its core responsibilities while remaining responsive to messages.
 
 *   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `on_run`. `tokio::select!` makes it easy to handle multiple timers concurrently. For example, first define your actor struct with interval fields:
 

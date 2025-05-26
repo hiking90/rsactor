@@ -31,26 +31,22 @@ pub trait Actor: Sized + Send + 'static {
 
     /// The primary task execution logic for the actor, designed for iterative execution.
     ///
-    /// The `rsactor` runtime calls `on_run` to obtain a `Future` representing a segment of work.
-    /// If this `Future` successfully completes by returning `Ok(())`, the runtime will invoke
-    /// `on_run` again to acquire a new `Future` for the next segment of work. This pattern
-    /// of repeated invocation allows the actor to manage ongoing or periodic tasks throughout
-    /// its lifecycle. The actor continues running as long as `on_run` returns `Ok(())`.
-    /// If `on_run` returns an `Err(_)`, the actor stops due to an error.
-    /// To stop the actor normally from within `on_run`, it should call `actor_ref.stop()` or `actor_ref.kill()`.
+    /// The main processing loop for the actor. This method is called repeatedly after `on_start` completes.
+    /// If this method returns `Ok(())`, it will be called again, allowing the actor to process
+    /// ongoing or periodic tasks. The actor continues running as long as `on_run` returns `Ok(())`.
+    /// If `on_run` returns an `Err(_)`, the actor stops with an error.
+    /// To stop the actor normally from within `on_run`, call `actor_ref.stop()` or `actor_ref.kill()`.
     ///
     /// `on_run`\'s execution is concurrent with the actor\'s message handling capabilities,
-    /// enabling the actor to perform background or main-loop tasks while continuing to
-    /// process incoming messages from its mailbox.
+    /// enabling the actor to perform its primary processing while continuing to
+    /// respond to incoming messages in its mailbox - a key aspect of the actor model.
     ///
     /// # Key characteristics:
     ///
-    /// - **Iterative Execution**: The `rsactor` runtime invokes `on_run` to obtain a `Future`.
-    ///   If this `Future` completes with `Ok(())`, `on_run` will be called again by the
-    ///   runtime to obtain a new `Future`. This allows for continuous or step-by-step
-    ///   task processing throughout the actor\'s active lifecycle. The actor continues as long
-    ///   as `Err(_)` is not returned. For normal termination from within `on_run`,
-    ///   use `actor_ref.stop()` or `actor_ref.kill()`.
+    /// - **Lifecycle Management**: The actor continues its lifecycle by repeatedly executing the
+    ///   `on_run` method. If `on_run` returns `Ok(())`, it will be called again, enabling
+    ///   continuous processing. This supports the actor model's concept of independent,
+    ///   long-lived entities. For normal termination, use `actor_ref.stop()` or `actor_ref.kill()`.
     ///
     /// - **State Persistence Across Invocations**: Because `on_run` can be invoked multiple
     ///   times by the runtime (each time generating a new `Future`), any state intended
