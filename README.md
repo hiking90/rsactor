@@ -22,6 +22,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 *   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
+*   **Strong Type Safety**: Provides both compile-time (`ActorRef<T>`) and runtime (`UntypedActorRef`) type safety options, ensuring message handling consistency while supporting flexible actor management patterns.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `impl_message_handler!` macro) are also required, but they don't add any additional constraints on the actor's fields.
 
 ## Getting Started
@@ -271,24 +272,6 @@ async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
 ```
 
 **Important**: These functions require an active Tokio runtime.
-
-## Type Safety Features
-
-rsActor provides two actor reference types:
-
-### `ActorRef<T>` - Compile-Time Type Safety
-- **Recommended for most use cases**
-- Only accepts messages the actor can handle (compile-time validation)
-- Return types automatically inferred from trait implementations
-- Zero runtime overhead
-
-### `UntypedActorRef` - Runtime Type Handling
-- **Use only when type erasure is needed**
-- Enables storing different actor types in collections
-- Supports dynamic actor management and plugin systems
-- Developer responsible for ensuring type safety at runtime
-
-**Conversion**: You can get an `UntypedActorRef` from `ActorRef<T>` using `typed_ref.untyped_actor_ref()`
 
 ## Further Information
 

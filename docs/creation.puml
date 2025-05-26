@@ -34,7 +34,7 @@ deactivate on_start_method
 note right of run_lifecycle
   If on_start is Ok, actor instance is created.
   The runtime then repeatedly calls actor.on_run()
-  to get Futures for execution.
+  which implements the actor's primary processing loop.
   Message processing happens concurrently.
 end note
 run_lifecycle -> on_run_method: Calls actor.on_run(actor_ref)

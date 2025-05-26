@@ -182,7 +182,59 @@ impl std::fmt::Display for Identity {
     }
 }
 
-/// Implements the `MessageHandler` trait for a given actor type.
+/// Internal helper macro that generates the common message handling logic
+/// shared between generic and non-generic `impl_message_handler!` implementations.
+///
+/// This macro eliminates code duplication by providing the core message handling
+/// logic that downcasts incoming messages and dispatches them to the appropriate
+/// `Message::handle` implementation.
+///
+/// # Parameters
+/// * `$actor_type:ty`: The actor type for which to generate the handler
+/// * `[$($msg_type:ty),* $(,)?]`: List of message types to handle
+///
+/// # Generated Code
+/// Creates an `async fn handle` method that:
+/// 1. Attempts to downcast the incoming `Box<dyn Any + Send>` to each message type
+/// 2. Calls the appropriate `Message::handle` implementation when a match is found
+/// 3. Returns an error if no message type matches
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __impl_message_handler_body {
+    ($actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
+        async fn handle(
+            &mut self,
+            _msg_any: Box<dyn std::any::Any + Send>, // This Box is consumed by the first successful downcast
+            actor_ref: &$crate::ActorRef<$actor_type>,
+        ) -> $crate::Result<Box<dyn std::any::Any + Send>> {
+            let mut _msg_any = _msg_any; // Mutable to allow reassignment in the loop
+            $(
+                match _msg_any.downcast::<$msg_type>() {
+                    Ok(concrete_msg_box) => {
+                        // Successfully downcasted. concrete_msg_box is a Box<$msg_type>.
+                        // The original _msg_any has been consumed by the downcast.
+                        let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, &actor_ref).await;
+                        return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
+                    }
+                    Err(original_box_back) => {
+                        // Downcast failed. original_box_back is the original Box<dyn Any + Send>.
+                        // We reassign it to _msg_any so it can be used in the next iteration of the $(...)* loop.
+                        _msg_any = original_box_back;
+                    }
+                }
+            )*
+            // If the message type was not found in the list of handled types:
+            let expected_msg_types: Vec<&'static str> = vec![$(stringify!($msg_type)),*];
+            return Err($crate::Error::UnhandledMessageType {
+                identity: actor_ref.identity(),
+                expected_types: expected_msg_types,
+                actual_type_id: _msg_any.type_id()
+            });
+        }
+    };
+}
+
+/// Implements the `MessageHandler` trait for both generic and non-generic actor types.
 ///
 /// This macro simplifies the process of handling multiple message types within an actor.
 /// It generates the necessary boilerplate code to downcast a `Box<dyn Any + Send>`
@@ -191,6 +243,7 @@ impl std::fmt::Display for Identity {
 ///
 /// # Usage
 ///
+/// ## For non-generic actors:
 /// ```rust,ignore
 /// struct MyActor;
 ///
@@ -201,59 +254,74 @@ impl std::fmt::Display for Identity {
 ///
 /// impl Message<Msg1> for MyActor {
 ///     type Reply = ();
-///     async fn handle(&mut self, msg: Msg1) -> Self::Reply { /* ... */ }
+///     async fn handle(&mut self, msg: Msg1, _actor_ref: &ActorRef<Self>) -> Self::Reply { /* ... */ }
 /// }
 ///
 /// impl Message<Msg2> for MyActor {
 ///     type Reply = String;
-///     async fn handle(&mut self, msg: Msg2) -> Self::Reply { /* ... */ "response".to_string() }
+///     async fn handle(&mut self, msg: Msg2, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+///         /* ... */ "response".to_string()
+///     }
 /// }
 ///
 /// // This will implement `MessageHandler` for `MyActor`, allowing it to handle `Msg1` and `Msg2`.
 /// impl_message_handler!(MyActor, [Msg1, Msg2]);
 /// ```
 ///
+/// ## For generic actors:
+/// ```rust,ignore
+/// struct GenericActor<T: Send + Debug + Clone + 'static> {
+///     data: Option<T>,
+/// }
+///
+/// impl<T: Send + Debug + Clone + 'static> Actor for GenericActor<T> { /* ... */ }
+///
+/// struct SetValue<T: Send + Debug + 'static>(T);
+/// struct GetValue;
+///
+/// impl<T: Send + Debug + Clone + 'static> Message<SetValue<T>> for GenericActor<T> {
+///     type Reply = ();
+///     async fn handle(&mut self, msg: SetValue<T>, _actor_ref: &ActorRef<Self>) -> Self::Reply { /* ... */ }
+/// }
+///
+/// impl<T: Send + Debug + Clone + 'static> Message<GetValue> for GenericActor<T> {
+///     type Reply = Option<T>;
+///     async fn handle(&mut self, msg: GetValue, _actor_ref: &ActorRef<Self>) -> Self::Reply { /* ... */ }
+/// }
+///
+/// // This will implement `MessageHandler` for the generic `GenericActor<T>`.
+/// impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue]);
+/// ```
+///
 /// # Arguments
 ///
-/// * `$actor_type`: The type of the actor for which to implement `MessageHandler`.
-/// * `[$($msg_type:ty),+]`: A list of message types that the actor can handle.
+/// ## Non-generic form:
+/// * `$actor_type:ty`: The type of the actor for which to implement `MessageHandler`.
+/// * `[$($msg_type:ty),* $(,)?]`: A list of message types that the actor can handle.
+///
+/// ## Generic form:
+/// * `[$($generics:tt)*]`: Generic type parameters with their trait bounds (as token tree to handle complex bounds)
+/// * `for $actor_type:ty`: The generic actor type for which to implement `MessageHandler`
+/// * `[$($msg_type:ty),* $(,)?]`: A list of message types that the actor can handle
 ///
 /// # Internals
 /// This macro facilitates dynamic message dispatch by downcasting `Box<dyn std::any::Any + Send>`
-/// message payloads to their concrete types at runtime.
+/// message payloads to their concrete types at runtime. The actual message handling logic
+/// is generated by the internal `__impl_message_handler_body!` helper macro to avoid code
+/// duplication between different implementation patterns.
 #[macro_export]
 macro_rules! impl_message_handler {
+    // Generic actor pattern: [generics] for ActorType<T>, [messages]
+    ([$($generics:tt)*] for $actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
+        impl<$($generics)*> $crate::MessageHandler for $actor_type {
+            $crate::__impl_message_handler_body!($actor_type, [$($msg_type),*]);
+        }
+    };
+
+    // Non-generic actor pattern: ActorType, [messages]
     ($actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
         impl $crate::MessageHandler for $actor_type {
-            async fn handle(
-                &mut self,
-                _msg_any: Box<dyn std::any::Any + Send>, // This Box is consumed by the first successful downcast
-                actor_ref: &$crate::ActorRef<$actor_type>,
-            ) -> $crate::Result<Box<dyn std::any::Any + Send>> {
-                let mut _msg_any = _msg_any; // Mutable to allow reassignment in the loop
-                $(
-                    match _msg_any.downcast::<$msg_type>() {
-                        Ok(concrete_msg_box) => {
-                            // Successfully downcasted. concrete_msg_box is a Box<$msg_type>.
-                            // The original _msg_any has been consumed by the downcast.
-                            let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, &actor_ref).await;
-                            return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
-                        }
-                        Err(original_box_back) => {
-                            // Downcast failed. original_box_back is the original Box<dyn Any + Send>.
-                            // We reassign it to _msg_any so it can be used in the next iteration of the $(...)* loop.
-                            _msg_any = original_box_back;
-                        }
-                    }
-                )*
-                // If the message type was not found in the list of handled types:
-                let expected_msg_types: Vec<&'static str> = vec![$(stringify!($msg_type)),*];
-                return Err($crate::Error::UnhandledMessageType {
-                    identity: actor_ref.identity(),
-                    expected_types: expected_msg_types,
-                    actual_type_id: _msg_any.type_id()
-                });
-            }
+            $crate::__impl_message_handler_body!($actor_type, [$($msg_type),*]);
         }
     };
 }

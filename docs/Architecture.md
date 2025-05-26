@@ -1,6 +1,6 @@
 # rsActor Architecture
 
-This document outlines the architecture of the `rsActor` framework, detailing key processes such as actor creation, message passing, and termination. PlantUML sequence diagrams are used to illustrate these processes.
+This document outlines the architecture of `rsActor`, a simple and efficient in-process actor model implementation for Rust. It details key processes such as actor creation, message passing, and termination, with PlantUML sequence diagrams illustrating these processes.
 
 ## 1. Actor Creation and Spawning Process
 
@@ -30,8 +30,8 @@ This section describes the sequence of events when a user defines an actor and s
     f.  Returns the `ActorRef` and a `tokio::task::JoinHandle<ActorResult<A>>` to the user. The `JoinHandle` can be used to await the actor's termination and retrieve the `ActorResult`.
 4.  Inside the spawned Tokio task, `Runtime::run_actor_lifecycle(args)` begins execution:
     a.  It first calls the actor's `A::on_start(args, actor_ref.clone())` lifecycle hook, passing the user-provided `args` and a clone of the `ActorRef`. This method is responsible for creating and returning the actor instance (`Ok(Self)`).
-    b.  If `on_start()` returns `Ok(actor_instance)`, this instance is stored in the `Runtime`. The runtime then calls the actor's `on_run()` lifecycle hook which contains the actor's main execution logic and runs for its lifetime.
-    c.  Concurrently with `on_run()`, the runtime also processes messages from the mailbox using `tokio::select!`. This enables the actor to handle incoming messages while executing its `on_run()` logic.
+    b.  If `on_start()` returns `Ok(actor_instance)`, this instance is stored in the `Runtime`. The runtime then calls the actor's `on_run()` lifecycle hook, which implements the primary processing loop for the actor throughout its lifetime.
+    c.  Concurrently with `on_run()`, the runtime also processes messages from the mailbox using `tokio::select!`. This enables the actor to handle incoming messages while executing its main processing logic, a key feature of the actor model.
     d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` method will then ensure the `JoinHandle` resolves to `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`.
     e.  When `on_run()` completes (returns `Err(_)`), or if the actor is stopped/killed, the actor's lifecycle ends. The `JoinHandle` will resolve to an appropriate `ActorResult` (e.g., `ActorResult::Completed` or `ActorResult::Failed`).
 
@@ -117,3 +117,33 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
     d.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: false }`.
 
 In all scenarios, the `ActorResult` provides the final state of the actor if it completed or failed at runtime, allowing for potential recovery or inspection. The `on_stop` hook is called before the actor terminates to allow for cleanup.
+
+## 4. Type Safety System
+
+rsActor implements a comprehensive type safety system through two complementary approaches, providing both compile-time safety guarantees and runtime flexibility.
+
+**Key Components:**
+*   **`ActorRef<T>`:** The primary reference type providing compile-time type safety.
+*   **`UntypedActorRef`:** A type-erased reference allowing for runtime type checking and heterogeneous collections.
+*   **`MessageHandler` trait:** Implemented by the `impl_message_handler!` macro, enables efficient message dispatch.
+*   **`Message<M>` trait:** Defines the handler method for a specific message type along with its reply type.
+
+**Description:**
+1.  **Compile-time Type Safety with `ActorRef<T>`:**
+    a.  An `ActorRef<T>` can only send messages that the actor type `T` explicitly implements handlers for.
+    b.  The Rust compiler enforces that message types match what the actor can handle.
+    c.  Reply types from messages are also statically checked, ensuring type consistency across the entire message-passing chain.
+    d.  This approach prevents message-related errors at compile time with zero runtime overhead.
+
+2.  **Runtime Type Safety with `UntypedActorRef`:**
+    a.  The `ActorRef<T>::untyped_actor_ref()` method converts a typed reference to an untyped one.
+    b.  `UntypedActorRef` performs runtime checks when sending messages via `ask::<M, R>()` or `tell::<M>()`.
+    c.  This allows for storing different actor types in collections or implementing dynamic actor management.
+    d.  Type errors are caught at runtime and returned as `Err` values rather than causing undefined behavior.
+
+3.  **Interaction between the two approaches:**
+    a.  A system can use `ActorRef<T>` for most interactions where actor types are known at compile time.
+    b.  `UntypedActorRef` can be used in specific scenarios where heterogeneous actors need to be treated uniformly.
+    c.  `UntypedActorRef` can be downcast back to `ActorRef<T>` when necessary, with runtime validation.
+
+This dual approach to type safety offers the best of both worlds: the security of compile-time checking for most code, with the flexibility of runtime checking when needed for more dynamic scenarios.
