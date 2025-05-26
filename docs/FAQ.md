@@ -611,7 +611,7 @@ A21: Actor references can be shared by passing them during actor creation or via
 
 **Q22: Can I use generics with actors?**
 
-A22: Yes, you can define generic actors. Here's an example of a generic actor that can store an optional value of any type `T` that meets the necessary trait bounds.
+A22: Yes, you can define generic actors. The `impl_message_handler!` macro now supports a unified syntax that can handle all generic instantiations with a single macro call. Here's an example of a generic actor that can store an optional value of any type `T` that meets the necessary trait bounds.
 
 ```rust
 use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
@@ -643,6 +643,10 @@ struct SetValue<T: Send + Debug + 'static>(pub T);
 #[derive(Debug, Clone, Copy)]
 struct GetValue;
 
+// A message to clear the value
+#[derive(Debug, Clone, Copy)]
+struct ClearValue;
+
 // Implement Message trait for SetValue<T>
 impl<T: Send + Debug + Clone + 'static> Message<SetValue<T>> for GenericActor<T> {
     type Reply = ();
@@ -661,42 +665,50 @@ impl<T: Send + Debug + Clone + 'static> Message<GetValue> for GenericActor<T> {
     }
 }
 
-// ---- Crucial Part: impl_message_handler Macro ----
-// You must invoke the macro for each concrete type you intend to use with GenericActor.
-// The macro does not support generic type parameters directly in its invocation.
+// Implement Message trait for ClearValue
+impl<T: Send + Debug + Clone + 'static> Message<ClearValue> for GenericActor<T> {
+    type Reply = ();
 
-// Example for GenericActor<String>
-impl_message_handler!(GenericActor<String>, [SetValue<String>, GetValue]);
+    async fn handle(&mut self, _msg: ClearValue, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data = None;
+    }
+}
 
-// Example for GenericActor<i32>
-impl_message_handler!(GenericActor<i32>, [SetValue<i32>, GetValue]);
-
-// If you have a custom struct, like MyTestData:
-// #[derive(Debug, Clone, PartialEq)]
-// struct MyTestData { id: i32, name: String }
-// impl_message_handler!(GenericActor<MyTestData>, [SetValue<MyTestData>, GetValue]);
+// ---- Unified Macro Usage for Generic Actors ----
+// Use the unified syntax with generic constraints in square brackets
+// This single macro call handles ALL generic instantiations of GenericActor<T>
+impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue, ClearValue]);
 
 /*
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Usage with String
+    // Usage with String - no additional macro calls needed!
     let (string_actor_ref, _s_handle) = spawn::<GenericActor<String>>(Some("hello".to_string()));
     string_actor_ref.tell(SetValue("world".to_string())).await?;
     let val_s: Option<String> = string_actor_ref.ask(GetValue).await?;
     println!("String actor value: {:?}", val_s); // Should be Some("world")
 
-    // Usage with i32
+    // Usage with i32 - works automatically!
     let (int_actor_ref, _i_handle) = spawn::<GenericActor<i32>>(Some(42));
     int_actor_ref.tell(SetValue(100)).await?;
     let val_i: Option<i32> = int_actor_ref.ask(GetValue).await?;
     println!("Integer actor value: {:?}", val_i); // Should be Some(100)
+
+    // Clear the value
+    int_actor_ref.tell(ClearValue).await?;
+    let val_cleared: Option<i32> = int_actor_ref.ask(GetValue).await?;
+    println!("Cleared value: {:?}", val_cleared); // Should be None
 
     Ok(())
 }
 */
 ```
 
-The key takeaway for generic actors is that the `impl_message_handler!` macro generates specific implementations. Therefore, you need to call it for each concrete instantiation of your generic actor (e.g., `GenericActor<String>`, `GenericActor<i32>`, `GenericActor<MyCustomType>`) along with the corresponding concrete message types it will handle.
+The unified `impl_message_handler!` macro supports two syntax patterns:
+- **Generic actors**: `impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue, ClearValue]);`
+- **Non-generic actors**: `impl_message_handler!(MyActor, [MessageType1, MessageType2]);`
+
+With the generic syntax, you specify the generic constraints in square brackets, followed by `for` and the generic actor type, then the list of message types. This single macro call generates message handling for all possible instantiations of the generic actor, eliminating the need for separate macro calls for each concrete type.
 
 **Q23: How can I effectively use the `on_run` method in my actors?**
 
