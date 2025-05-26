@@ -248,7 +248,7 @@ macro_rules! impl_message_handler {
                     }
                 )*
                 // If the message type was not found in the list of handled types:
-                let expected_msg_types: Vec<String> = vec![$(stringify!($msg_type).to_string()),*];
+                let expected_msg_types: Vec<&'static str> = vec![$(stringify!($msg_type)),*];
                 return Err($crate::Error::UnhandledMessageType {
                     identity: actor_ref.identity(),
                     expected_types: expected_msg_types,
@@ -348,12 +348,12 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     // This ensures that a kill signal can be sent even if the main mailbox is full.
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
-    let any_actor_ref = UntypedActorRef::new(
+    let untyped_actor_ref = UntypedActorRef::new(
         Identity::new(id, std::any::type_name::<T>()), // Use type name of the actor
         mailbox_tx,
         terminate_tx); // Pass terminate_tx
 
-    let actor_ref = ActorRef::new(any_actor_ref.clone());
+    let actor_ref = ActorRef::new(untyped_actor_ref);
 
     let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
         args,

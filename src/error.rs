@@ -35,7 +35,7 @@ pub enum Error {
         /// ID of the actor that timed out
         identity: Identity,
         /// Expected message types
-        expected_types: Vec<String>,
+        expected_types: Vec<&'static str>,
         /// Actual message type ID
         actual_type_id: std::any::TypeId,
     },

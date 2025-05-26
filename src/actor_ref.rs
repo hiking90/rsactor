@@ -404,6 +404,7 @@ pub struct ActorRef<T: Actor> {
 
 impl<T: Actor> ActorRef<T> {
     /// Creates a new type-safe ActorRef from an UntypedActorRef.
+    #[inline]
     pub(crate) fn new(untyped_ref: UntypedActorRef) -> Self {
         ActorRef {
             untyped_ref,
@@ -412,16 +413,19 @@ impl<T: Actor> ActorRef<T> {
     }
 
     /// Returns a reference to the underlying UntypedActorRef for cloning or other operations.
+    #[inline]
     pub fn untyped_actor_ref(&self) -> &UntypedActorRef {
         &self.untyped_ref
     }
 
     /// Returns the unique ID of the actor.
+    #[inline]
     pub fn identity(&self) -> Identity {
         self.untyped_ref.identity()
     }
 
     /// Checks if the actor is still alive by verifying if its channels are open.
+    #[inline]
     pub fn is_alive(&self) -> bool {
         self.untyped_ref.is_alive()
     }
@@ -432,6 +436,7 @@ impl<T: Actor> ActorRef<T> {
     /// This method returns immediately.
     ///
     /// Type safety: Only messages that the actor `T` can handle via `Message<M>` trait are accepted.
+    #[inline]
     pub async fn tell<M>(&self, msg: M) -> Result<()>
     where
         T: Message<M>,
@@ -446,6 +451,7 @@ impl<T: Actor> ActorRef<T> {
     /// The message is sent to the actor's mailbox, and this method will return once
     /// the message is sent or timeout if the send operation doesn't complete
     /// within the specified duration.
+    #[inline]
     pub async fn tell_with_timeout<M>(&self, msg: M, timeout: Duration) -> Result<()>
     where
         T: Message<M>,
@@ -461,6 +467,7 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// Type safety: The return type `R` is automatically inferred from the `Message<M>` trait
     /// implementation, ensuring compile-time type safety for replies.
+    #[inline]
     pub async fn ask<M>(&self, msg: M) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -476,6 +483,7 @@ impl<T: Actor> ActorRef<T> {
     /// The message is sent to the actor's mailbox, and this method will wait for
     /// the actor to process the message and send a reply, or timeout if the reply
     /// doesn't arrive within the specified duration.
+    #[inline]
     pub async fn ask_with_timeout<M>(&self, msg: M, timeout: Duration) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -489,6 +497,7 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// The actor will stop processing messages and shut down as soon as possible.
     /// The actor's final result will indicate it was killed.
+    #[inline]
     pub fn kill(&self) -> Result<()> {
         self.untyped_ref.kill()
     }
@@ -498,6 +507,7 @@ impl<T: Actor> ActorRef<T> {
     /// The actor will process all messages currently in its mailbox and then stop.
     /// New messages sent after this call might be ignored or fail.
     /// The actor's final result will indicate normal completion.
+    #[inline]
     pub async fn stop(&self) -> Result<()> {
         self.untyped_ref.stop().await
     }
@@ -505,6 +515,7 @@ impl<T: Actor> ActorRef<T> {
     /// Synchronous version of `tell` that blocks until the message is sent.
     ///
     /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
+    #[inline]
     pub fn tell_blocking<M>(&self, msg: M, timeout: Option<Duration>) -> Result<()>
     where
         T: Message<M>,
@@ -516,6 +527,7 @@ impl<T: Actor> ActorRef<T> {
     /// Synchronous version of `ask` that blocks until the reply is received.
     ///
     /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
+    #[inline]
     pub fn ask_blocking<M>(&self, msg: M, timeout: Option<Duration>) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -527,6 +539,7 @@ impl<T: Actor> ActorRef<T> {
 }
 
 impl <T: Actor> Clone for ActorRef<T> {
+    #[inline]
     fn clone(&self) -> Self {
         ActorRef {
             untyped_ref: self.untyped_ref.clone(),
