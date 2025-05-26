@@ -60,7 +60,7 @@ impl Actor for SyncDataProcessorActor {
     type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(_args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("SyncDataProcessorActor (id: {}) starting...", actor_ref.identity());
 
         // Create a tokio channel for actor -> task communication
@@ -152,7 +152,7 @@ impl Actor for SyncDataProcessorActor {
 impl Message<GetState> for SyncDataProcessorActor {
     type Reply = (f64, Option<f64>, Option<std::time::Instant>);
 
-    async fn handle(&mut self, _msg: GetState, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetState, _: &ActorRef<Self>) -> Self::Reply {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
 }
@@ -160,7 +160,7 @@ impl Message<GetState> for SyncDataProcessorActor {
 impl Message<SetFactor> for SyncDataProcessorActor {
     type Reply = f64; // Return the new factor
 
-    async fn handle(&mut self, msg: SetFactor, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> Self::Reply {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!("Changed factor from {:.2} to {:.2}", old_factor, self.factor);
@@ -171,7 +171,7 @@ impl Message<SetFactor> for SyncDataProcessorActor {
 impl Message<ProcessedData> for SyncDataProcessorActor {
     type Reply = (); // No reply needed for data coming from the task
 
-    async fn handle(&mut self, msg: ProcessedData, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef<Self>) -> Self::Reply {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -192,7 +192,7 @@ impl Message<ProcessedData> for SyncDataProcessorActor {
 impl Message<TaskCommand> for SyncDataProcessorActor {
     type Reply = bool;
 
-    async fn handle(&mut self, msg: TaskCommand, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: TaskCommand, _: &ActorRef<Self>) -> Self::Reply {
         // With tokio channels, send is asynchronous
         match self.task_sender.send(msg).await {
             Ok(_) => {

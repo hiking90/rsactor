@@ -22,7 +22,7 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 *   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
-*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead.
+*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `impl_message_handler!` macro) are also required, but they don't add any additional constraints on the actor's fields.
 
 ## Getting Started
 
@@ -58,7 +58,7 @@ impl Actor for CounterActor {
     // on_start is required and must be implemented.
     // on_run and on_stop are optional and have default implementations.
 
-    async fn on_start(initial_count: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(initial_count: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.identity(), initial_count);
         Ok(CounterActor {
             count: initial_count,
@@ -70,7 +70,7 @@ impl Actor for CounterActor {
     // The main execution loop for the actor.
     // This method is called after on_start. If it returns Ok(()), the actor continues running.
     // If it returns Err(_), the actor stops due to an error.
-    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         // Use tokio::select! to handle multiple interval ticks concurrently
         tokio::select! {
             _ = self.tick_300ms.tick() => {
@@ -86,7 +86,9 @@ impl Actor for CounterActor {
 
     // Called when the actor is stopping, either gracefully or due to being killed.
     // This provides an opportunity for cleanup before the actor terminates.
-    async fn on_stop(&mut self, _actor_ref: ActorRef<Self>, killed: bool) -> Result<(), Self::Error> {
+    // The 'killed' parameter is true if the actor was terminated via the 'kill' method,
+    // and false if it was stopped gracefully via the 'stop' method.
+    async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error> {
         info!("CounterActor stopping. Final count: {}. Killed: {}",
               self.count, killed);
         Ok(())
@@ -101,7 +103,7 @@ struct GetCountMsg;
 impl Message<IncrementMsg> for CounterActor {
     type Reply = u32; // New count
 
-    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         self.count += msg.0;
         self.count
     }
@@ -111,7 +113,7 @@ impl Message<IncrementMsg> for CounterActor {
 impl Message<GetCountMsg> for CounterActor {
     type Reply = u32; // Current count
 
-    async fn handle(&mut self, _msg: GetCountMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetCountMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         self.count
     }
 }
@@ -152,7 +154,11 @@ async fn main() -> Result<()> {
             info!("Actor completed. Final count: {}. Killed: {}", actor.count, killed);
         }
         ActorResult::Failed { actor, error, phase, killed } => {
-            info!("Actor failed during phase {:?}: {:?}. Actor state at failure: {:?}. Killed: {}", phase, error, actor, killed);
+            if let Some(actor_state) = actor {
+                info!("Actor failed during phase {:?}: {:?}. Actor state at failure: {:?}. Killed: {}", phase, error, actor_state, killed);
+            } else {
+                info!("Actor failed during phase {:?}: {:?}. No actor state available. Killed: {}", phase, error, killed);
+            }
         }
     }
 
@@ -193,7 +199,7 @@ struct MyActor;
 impl Actor for MyActor {
     type Args = (); // Added Args
     type Error = anyhow::Error;
-    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> { // Updated on_start
+    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> { // Updated on_start
         Ok(MyActor)
     }
     // on_run is optional
@@ -201,12 +207,12 @@ impl Actor for MyActor {
 
 impl Message<MyMessage> for MyActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: MyMessage, _actor_ref: ActorRef<Self>) -> Self::Reply {}
+    async fn handle(&mut self, _msg: MyMessage, _actor_ref: &ActorRef<Self>) -> Self::Reply {}
 }
 
 impl Message<MyQuery> for MyActor {
     type Reply = String;
-    async fn handle(&mut self, _msg: MyQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: MyQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         "response".to_string()
     }
 }

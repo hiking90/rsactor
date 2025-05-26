@@ -32,7 +32,7 @@ This section describes the sequence of events when a user defines an actor and s
     a.  It first calls the actor's `A::on_start(args, actor_ref.clone())` lifecycle hook, passing the user-provided `args` and a clone of the `ActorRef`. This method is responsible for creating and returning the actor instance (`Ok(Self)`).
     b.  If `on_start()` returns `Ok(actor_instance)`, this instance is stored in the `Runtime`. The runtime then calls the actor's `on_run()` lifecycle hook which contains the actor's main execution logic and runs for its lifetime.
     c.  Concurrently with `on_run()`, the runtime also processes messages from the mailbox using `tokio::select!`. This enables the actor to handle incoming messages while executing its `on_run()` logic.
-    d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` method will then ensure the `JoinHandle` resolves to `ActorResult::Failed { cause: e, phase: FailurePhase::OnStart, .. }`.
+    d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` method will then ensure the `JoinHandle` resolves to `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`.
     e.  When `on_run()` completes (returns `Err(_)`), or if the actor is stopped/killed, the actor's lifecycle ends. The `JoinHandle` will resolve to an appropriate `ActorResult` (e.g., `ActorResult::Completed` or `ActorResult::Failed`).
 
 ## 2. Message Passing (tell/ask)

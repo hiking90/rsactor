@@ -24,7 +24,7 @@ impl Actor for MyActor {
     type Error = anyhow::Error; // Define the error type for actor operations
 
     // Called when the actor is started
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!(
             "MyActor (id: {}) started. Initial count: {}.",
             actor_ref.identity(),
@@ -38,7 +38,7 @@ impl Actor for MyActor {
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
         tokio::select! {
             // Executes when the 300ms interval timer ticks.
@@ -62,7 +62,7 @@ impl Message<Increment> for MyActor {
     type Reply = u32; // Define the reply type for Increment messages
 
     // Handle the Increment message
-    async fn handle(&mut self, _msg: Increment, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: Increment, _: &ActorRef<Self>) -> Self::Reply {
         self.count += 1;
         debug!("MyActor handled Increment. Count is now {}.", self.count); // Changed to debug!
         self.count // Return the new count
@@ -74,7 +74,7 @@ impl Message<Decrement> for MyActor {
     type Reply = u32; // Define the reply type for Decrement messages
 
     // Handle the Decrement message
-    async fn handle(&mut self, _msg: Decrement, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: Decrement, _: &ActorRef<Self>) -> Self::Reply {
         self.count -= 1;
         debug!("MyActor handled Decrement. Count is now {}.", self.count); // Changed to debug!
         self.count // Return the new count
@@ -86,7 +86,7 @@ struct DummyMessage;
 impl Message<DummyMessage> for MyActor {
     type Reply = u32;
 
-    async fn handle(&mut self, _msg: DummyMessage, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: DummyMessage, _: &ActorRef<Self>) -> Self::Reply {
         debug!("MyActor handled DummyMessage. Count is now {}.", self.count);
         self.count
     }
