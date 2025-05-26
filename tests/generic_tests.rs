@@ -73,10 +73,8 @@ impl<T: Send + Debug + Clone + 'static> Message<ClearValue> for GenericActor<T> 
 }
 
 // ---- impl_message_handler Macro ----
-// Specific implementations for concrete types used in tests
-impl_message_handler!(GenericActor<String>, [SetValue<String>, GetValue, ClearValue]);
-impl_message_handler!(GenericActor<i32>, [SetValue<i32>, GetValue, ClearValue]);
-impl_message_handler!(GenericActor<MyTestData>, [SetValue<MyTestData>, GetValue, ClearValue]);
+// Generic implementation using the new macro
+impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue, ClearValue]);
 
 // ---- Test Cases ----
 #[cfg(test)]
