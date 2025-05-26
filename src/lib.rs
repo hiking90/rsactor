@@ -64,7 +64,7 @@
 //!     type Args = String;
 //!     type Error = anyhow::Error;
 //!
-//!     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+//!     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
 //!         println!("MyActor (data: '{}') started!", args);
 //!         Ok(MyActor {
 //!             data: args,
@@ -73,7 +73,7 @@
 //!         })
 //!     }
 //!
-//!     async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+//!     async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
 //!         tokio::select! {
 //!             _ = self.tick_300ms.tick() => {
 //!                 println!("Tick: 300ms");
@@ -94,7 +94,7 @@
 //! impl Message<GetData> for MyActor {
 //!     type Reply = String;
 //!
-//!     async fn handle(&mut self, _msg: GetData, _actor_ref: ActorRef<Self>) -> Self::Reply {
+//!     async fn handle(&mut self, _msg: GetData, _actor_ref: &ActorRef<Self>) -> Self::Reply {
 //!         self.data.clone()
 //!     }
 //! }
@@ -102,7 +102,7 @@
 //! impl Message<UpdateData> for MyActor {
 //!     type Reply = ();
 //!
-//!     async fn handle(&mut self, msg: UpdateData, _actor_ref: ActorRef<Self>) -> Self::Reply {
+//!     async fn handle(&mut self, msg: UpdateData, _actor_ref: &ActorRef<Self>) -> Self::Reply {
 //!         self.data = msg.0;
 //!         println!("MyActor data updated!");
 //!     }
@@ -229,7 +229,7 @@ macro_rules! impl_message_handler {
             async fn handle(
                 &mut self,
                 _msg_any: Box<dyn std::any::Any + Send>, // This Box is consumed by the first successful downcast
-                actor_ref: $crate::ActorRef<$actor_type>,
+                actor_ref: &$crate::ActorRef<$actor_type>,
             ) -> $crate::Result<Box<dyn std::any::Any + Send>> {
                 let mut _msg_any = _msg_any; // Mutable to allow reassignment in the loop
                 $(
@@ -237,7 +237,7 @@ macro_rules! impl_message_handler {
                         Ok(concrete_msg_box) => {
                             // Successfully downcasted. concrete_msg_box is a Box<$msg_type>.
                             // The original _msg_any has been consumed by the downcast.
-                            let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, actor_ref.clone()).await;
+                            let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, &actor_ref).await;
                             return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
                         }
                         Err(original_box_back) => {

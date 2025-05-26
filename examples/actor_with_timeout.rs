@@ -19,7 +19,7 @@ impl Actor for TimeoutDemoActor {
     type Args = String;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("{} actor (id: {}) started", args, actor_ref.identity());
         Ok(Self {
             name: args,
@@ -39,7 +39,7 @@ struct ConfigurableQuery {
 impl Message<FastQuery> for TimeoutDemoActor {
     type Reply = String;
 
-    async fn handle(&mut self, msg: FastQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: FastQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         // This is a fast handler that completes quickly
         debug!("{} handling a FastQuery: {}", self.name, msg.0);
         format!("Fast response to: {}", msg.0)
@@ -49,7 +49,7 @@ impl Message<FastQuery> for TimeoutDemoActor {
 impl Message<SlowQuery> for TimeoutDemoActor {
     type Reply = String;
 
-    async fn handle(&mut self, msg: SlowQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: SlowQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         // This is a slow handler that takes time to complete
         debug!("{} handling a SlowQuery: {}. Will take 500ms", self.name, msg.0);
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -60,7 +60,7 @@ impl Message<SlowQuery> for TimeoutDemoActor {
 impl Message<ConfigurableQuery> for TimeoutDemoActor {
     type Reply = String;
 
-    async fn handle(&mut self, msg: ConfigurableQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: ConfigurableQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         debug!("{} handling ConfigurableQuery with delay {}ms: {}",
                self.name, msg.delay_ms, msg.question);
         tokio::time::sleep(Duration::from_millis(msg.delay_ms)).await;

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use rsactor::{Actor, ActorRef, ActorResult, FailurePhase, spawn, Message, impl_message_handler};
-use tokio;
 
 // Dummy message for test actors
 #[derive(Debug)]
@@ -19,12 +18,12 @@ impl Actor for TestActor {
     type Args = (String, i32);
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let (id, value) = args;
         Ok(TestActor { id, value })
     }
 
-    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         // Simple run loop that sleeps
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -34,7 +33,7 @@ impl Actor for TestActor {
 
 impl Message<NoOpMsg> for TestActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: NoOpMsg, _: ActorRef<Self>) -> Self::Reply {}
+    async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef<Self>) -> Self::Reply {}
 }
 
 impl_message_handler!(TestActor, [NoOpMsg]);
@@ -57,7 +56,7 @@ impl Actor for FailureTestActor {
     type Args = FailureTestArgs;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         if args.fail_on_start {
             return Err(anyhow::anyhow!("Test failure in on_start"));
         }
@@ -67,7 +66,7 @@ impl Actor for FailureTestActor {
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         if self.id.contains("fail_on_run") {
             return Err(anyhow::anyhow!("Test failure in on_run"));
         }
@@ -77,7 +76,7 @@ impl Actor for FailureTestActor {
         }
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
         if self.id.contains("fail_on_stop") {
             return Err(anyhow::anyhow!("Test failure in on_stop"));
         }
@@ -87,7 +86,7 @@ impl Actor for FailureTestActor {
 
 impl Message<NoOpMsg> for FailureTestActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: NoOpMsg, _: ActorRef<Self>) -> Self::Reply {}
+    async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef<Self>) -> Self::Reply {}
 }
 
 impl_message_handler!(FailureTestActor, [NoOpMsg]);
@@ -606,7 +605,7 @@ async fn test_error_runtime_display_format() {
     // Create a sample Error::Runtime for testing Display implementation
     let identity = rsactor::Identity::new(123, "TestActor");
     let error = rsactor::Error::Runtime {
-        identity: identity.clone(),
+        identity,
         details: "Test runtime error details".to_string(),
     };
 

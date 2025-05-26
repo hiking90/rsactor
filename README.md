@@ -58,7 +58,7 @@ impl Actor for CounterActor {
     // on_start is required and must be implemented.
     // on_run and on_stop are optional and have default implementations.
 
-    async fn on_start(initial_count: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(initial_count: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.identity(), initial_count);
         Ok(CounterActor {
             count: initial_count,
@@ -70,7 +70,7 @@ impl Actor for CounterActor {
     // The main execution loop for the actor.
     // This method is called after on_start. If it returns Ok(()), the actor continues running.
     // If it returns Err(_), the actor stops due to an error.
-    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         // Use tokio::select! to handle multiple interval ticks concurrently
         tokio::select! {
             _ = self.tick_300ms.tick() => {
@@ -86,7 +86,7 @@ impl Actor for CounterActor {
 
     // Called when the actor is stopping, either gracefully or due to being killed.
     // This provides an opportunity for cleanup before the actor terminates.
-    async fn on_stop(&mut self, _actor_ref: ActorRef<Self>, killed: bool) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error> {
         info!("CounterActor stopping. Final count: {}. Killed: {}",
               self.count, killed);
         Ok(())
@@ -101,7 +101,7 @@ struct GetCountMsg;
 impl Message<IncrementMsg> for CounterActor {
     type Reply = u32; // New count
 
-    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         self.count += msg.0;
         self.count
     }
@@ -111,7 +111,7 @@ impl Message<IncrementMsg> for CounterActor {
 impl Message<GetCountMsg> for CounterActor {
     type Reply = u32; // Current count
 
-    async fn handle(&mut self, _msg: GetCountMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetCountMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         self.count
     }
 }
@@ -193,7 +193,7 @@ struct MyActor;
 impl Actor for MyActor {
     type Args = (); // Added Args
     type Error = anyhow::Error;
-    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> { // Updated on_start
+    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> { // Updated on_start
         Ok(MyActor)
     }
     // on_run is optional
@@ -201,12 +201,12 @@ impl Actor for MyActor {
 
 impl Message<MyMessage> for MyActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: MyMessage, _actor_ref: ActorRef<Self>) -> Self::Reply {}
+    async fn handle(&mut self, _msg: MyMessage, _actor_ref: &ActorRef<Self>) -> Self::Reply {}
 }
 
 impl Message<MyQuery> for MyActor {
     type Reply = String;
-    async fn handle(&mut self, _msg: MyQuery, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: MyQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         "response".to_string()
     }
 }

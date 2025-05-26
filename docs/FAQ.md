@@ -30,8 +30,8 @@ A4: To define an actor, you need to:
 3.  Implement the `Actor` trait for your state struct. This involves:
     *   Defining an associated type `Args` (the type of arguments your `on_start` method will take).
     *   Defining an associated type `Error` for errors that can occur during the actor's lifecycle.
-    *   Implementing `async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error>`: This method is called when the actor is spawned. It receives the initialization arguments and an `ActorRef` to itself. It's responsible for creating and returning the actor instance (`Ok(Self)`) or an error if initialization fails.
-    *   Implementing `async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error>`: This method contains the main execution logic of the actor and runs for its lifetime after `on_start` succeeds. If it returns `Ok(())`, the actor continues running. If it returns `Err(_)`, the actor stops due to an error.
+    *   Implementing `async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>`: This method is called when the actor is spawned. It receives the initialization arguments and an `ActorRef` to itself. It's responsible for creating and returning the actor instance (`Ok(Self)`) or an error if initialization fails.
+    *   Implementing `async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error>`: This method contains the main execution logic of the actor and runs for its lifetime after `on_start` succeeds. If it returns `Ok(())`, the actor continues running. If it returns `Err(_)`, the actor stops due to an error.
 4.  For each specific message type (e.g., `PingRequest`) your actor will handle, you need to implement the `Message<PingRequest>` trait *for your actor struct*. This trait implementation involves defining an associated `Reply` type (e.g., `PongResponse`) and the `async fn handle(&mut self, message: PingRequest, ...)` method that dictates how the actor processes this specific message type.
 5.  Use the `impl_message_handler!(YourActorType, [MessageType1, MessageType2]);` macro to generate the necessary boilerplate for routing messages to their respective handlers.
 
@@ -88,13 +88,13 @@ A12: Sending a message to an actor whose mailbox channel is closed (which happen
 **Q13: How do I manage an actor's lifecycle?**
 
 A13: The `Actor` trait provides two main lifecycle hooks:
-*   `on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error>`: Called when the actor is spawned. It receives initialization arguments (`Self::Args`) and is responsible for creating and returning the actor instance (`Self`). If it returns an `Err`, the actor fails to start, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnStart`.
-*   `on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error>`: Called after `on_start` succeeds. This method contains the main execution logic of the actor and runs concurrently with message handling.
+*   `on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>`: Called when the actor is spawned. It receives initialization arguments (`Self::Args`) and is responsible for creating and returning the actor instance (`Self`). If it returns an `Err`, the actor fails to start, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnStart`.
+*   `on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error>`: Called after `on_start` succeeds. This method contains the main execution logic of the actor and runs concurrently with message handling.
     *   If `on_run` returns `Ok(())`, the actor continues running and `on_run` will be called again.
     *   If `on_run` returns `Err(e)`, the actor terminates due to a runtime error, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnRun`.
     *   To stop the actor normally from within `on_run`, call `actor_ref.stop().await` or `actor_ref.kill()`.
 
-There is also an `on_stop` hook: `on_stop(&mut self, actor_ref: ActorRef<Self>, killed: bool) -> Result<(), Self::Error>` which is called before the actor terminates, with the `killed` parameter indicating whether the actor was killed (true) or stopped gracefully (false).
+There is also an `on_stop` hook: `on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error>` which is called before the actor terminates, with the `killed` parameter indicating whether the actor was killed (true) or stopped gracefully (false).
 
 **Q14: How do I stop an actor? What's the difference between `stop()` and `kill()`?**
 
@@ -165,11 +165,11 @@ impl<T: Send + Debug + 'static> Actor for GenericActor<T> {
     type Args = GenericActorArgs<T>; // Use the new Args struct
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(GenericActor { value: args.initial_value })
     }
 
-    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         // Basic on_run, keeps actor alive until stopped
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         Ok(())
@@ -181,7 +181,7 @@ struct GetValueMsg;
 
 impl<T: Send + Clone + Debug + 'static> Message<GetValueMsg> for GenericActor<T> {
     type Reply = Result<T, anyhow::Error>; // Reply is often a Result
-    async fn handle(&mut self, _msg: GetValueMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetValueMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         Ok(self.value.clone())
     }
 }
@@ -233,7 +233,7 @@ A23: The `on_run` method is a powerful feature of the `rsActor` framework that p
     }
 
     // Initialize intervals in on_start
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(MyActor {
             // ... initialize other fields ...
             fast_interval: tokio::time::interval(std::time::Duration::from_millis(500)),
@@ -242,7 +242,7 @@ A23: The `on_run` method is a powerful feature of the `rsActor` framework that p
     }
 
     // Use the intervals in on_run without loop
-    async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         tokio::select! {
             _ = self.fast_interval.tick() => {
                 // Handle high-frequency tasks (every 500ms)
@@ -276,7 +276,7 @@ A23: The `on_run` method is a powerful feature of the `rsActor` framework that p
     *   When using `spawn_blocking` from the `on_run`, you can `.await` its result directly:
 
         ```rust
-        async fn on_run(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+        async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
             // Offload CPU-intensive or blocking I/O work
             let result = tokio::task::spawn_blocking(|| {
                 // Perform CPU-bound or blocking I/O work

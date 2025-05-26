@@ -255,14 +255,14 @@ impl UntypedActorRef {
     /// # impl Actor for MyActor {
     /// #     type Args = ();
     /// #     type Error = anyhow::Error;
-    /// #     async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+    /// #     async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
     /// #         Ok(MyActor)
     /// #     }
     /// # }
     /// # struct MyMessage(&'static str);
     /// # impl Message<MyMessage> for MyActor {
     /// #     type Reply = ();
-    /// #     async fn handle(&mut self, _msg: MyMessage, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    /// #     async fn handle(&mut self, _msg: MyMessage, _actor_ref: &ActorRef<Self>) -> Self::Reply {
     /// #         ()
     /// #     }
     /// # }
@@ -321,7 +321,7 @@ impl UntypedActorRef {
     /// # impl Actor for QueryActor {
     /// #     type Args = ();
     /// #     type Error = anyhow::Error;
-    /// #     async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+    /// #     async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
     /// #         Ok(QueryActor)
     /// #     }
     /// # }
@@ -329,7 +329,7 @@ impl UntypedActorRef {
     /// # struct QueryReply(String);
     /// # impl Message<QueryMessage> for QueryActor {
     /// #     type Reply = QueryReply;
-    /// #     async fn handle(&mut self, _msg: QueryMessage, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    /// #     async fn handle(&mut self, _msg: QueryMessage, _actor_ref: &ActorRef<Self>) -> Self::Reply {
     /// #         QueryReply("response".to_string())
     /// #     }
     /// # }
@@ -399,7 +399,7 @@ impl UntypedActorRef {
 #[derive(Debug)]
 pub struct ActorRef<T: Actor> {
     untyped_ref: UntypedActorRef,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T: Actor> ActorRef<T> {

@@ -27,7 +27,7 @@ impl Actor for TestActor {
     type Args = TestArgs;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         debug!("TestActor (id: {}) started.", actor_ref.identity());
         Ok(Self {
             id: actor_ref.identity(),
@@ -49,7 +49,7 @@ struct SlowMsg; // Added for timeout tests
 
 impl Message<PingMsg> for TestActor {
     type Reply = String;
-    async fn handle(&mut self, msg: PingMsg, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: PingMsg, _: &ActorRef<Self>) -> Self::Reply {
         let mut lpmt = self.last_processed_message_type.lock().await;
         *lpmt = Some("PingMsg".to_string());
         format!("pong: {}", msg.0)
@@ -58,7 +58,7 @@ impl Message<PingMsg> for TestActor {
 
 impl Message<UpdateCounterMsg> for TestActor {
     type Reply = (); // tell type messages often use this.
-    async fn handle(&mut self, msg: UpdateCounterMsg, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: UpdateCounterMsg, _: &ActorRef<Self>) -> Self::Reply {
         let mut counter = self.counter.lock().await;
         *counter += msg.0;
         let mut lpmt = self.last_processed_message_type.lock().await;
@@ -68,7 +68,7 @@ impl Message<UpdateCounterMsg> for TestActor {
 
 impl Message<GetCounterMsg> for TestActor {
     type Reply = i32;
-    async fn handle(&mut self, _msg: GetCounterMsg, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: GetCounterMsg, _: &ActorRef<Self>) -> Self::Reply {
         let mut lpmt = self.last_processed_message_type.lock().await;
         *lpmt = Some("GetCounterMsg".to_string());
         *self.counter.lock().await
@@ -78,7 +78,7 @@ impl Message<GetCounterMsg> for TestActor {
 // Added for timeout tests
 impl Message<SlowMsg> for TestActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: SlowMsg, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: SlowMsg, _: &ActorRef<Self>) -> Self::Reply {
         let mut lpmt = self.last_processed_message_type.lock().await;
         *lpmt = Some("SlowMsg".to_string());
         tokio::time::sleep(std::time::Duration::from_millis(100)).await // Sleep for 100ms
@@ -312,7 +312,7 @@ impl Actor for LifecycleErrorActor {
     type Args = LifecycleErrorArgs;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let _id = actor_ref.identity();
         *args.on_start_attempted.lock().await = true;
         if args.fail_on_start {
@@ -329,7 +329,7 @@ impl Actor for LifecycleErrorActor {
         }
     }
 
-    async fn on_run(&mut self, _actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         *self.on_run_attempted.lock().await = true;
         if self.fail_on_run {
             Err(anyhow::anyhow!("simulated on_run failure"))
@@ -341,7 +341,7 @@ impl Actor for LifecycleErrorActor {
         }
     }
 
-    async fn on_stop(&mut self, _actor_ref: ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
+    async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
         *self.on_stop_attempted.lock().await = true;
         if self.fail_on_stop {
             Err(anyhow::anyhow!("simulated on_stop failure"))
@@ -354,7 +354,7 @@ impl Actor for LifecycleErrorActor {
 struct NoOpMsg; // Dummy message for LifecycleErrorActor
 impl Message<NoOpMsg> for LifecycleErrorActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: NoOpMsg, _: ActorRef<Self>) -> Self::Reply {}
+    async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef<Self>) -> Self::Reply {}
 }
 impl_message_handler!(LifecycleErrorActor, [NoOpMsg]);
 
@@ -471,7 +471,7 @@ impl Actor for PanicActor {
     type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(PanicActor {
         })
     }
@@ -481,7 +481,7 @@ struct PanicMsg; // Define PanicMsg
 
 impl Message<PanicMsg> for PanicActor {
     type Reply = ();
-    async fn handle(&mut self, _msg: PanicMsg, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: PanicMsg, _: &ActorRef<Self>) -> Self::Reply {
         panic!("Simulated panic in message handler");
     }
 }
@@ -496,7 +496,7 @@ impl Actor for StringErrorActor {
     type Args = Arc<Mutex<bool>>;
     type Error = String; // Using String as the error type
 
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let on_start_called = args;
         *on_start_called.lock().await = true;
         debug!("StringErrorActor (id: {}) started.", actor_ref.identity());
@@ -513,7 +513,7 @@ struct SimpleMsg;
 
 impl Message<SimpleMsg> for StringErrorActor {
     type Reply = String;
-    async fn handle(&mut self, _msg: SimpleMsg, _actor_ref: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, _msg: SimpleMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
         "SimpleMsg processed".to_string()
     }
 }
@@ -581,7 +581,7 @@ impl Actor for DummyActor {
     type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(_args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(DummyActor)
     }
 }
@@ -914,7 +914,7 @@ impl Actor for IncompatibleMessageTestActor {
     type Args = Arc<Mutex<Vec<String>>>;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         debug!("IncompatibleMessageTestActor (id: {}) started.", actor_ref.identity());
         Ok(Self {
             messages_received: args,
@@ -928,7 +928,7 @@ struct CompatibleMsg(String);
 
 impl Message<CompatibleMsg> for IncompatibleMessageTestActor {
     type Reply = String;
-    async fn handle(&mut self, msg: CompatibleMsg, _: ActorRef<Self>) -> Self::Reply {
+    async fn handle(&mut self, msg: CompatibleMsg, _: &ActorRef<Self>) -> Self::Reply {
         let mut messages = self.messages_received.lock().await;
         messages.push(format!("CompatibleMsg: {}", msg.0));
         format!("Handled: {}", msg.0)
