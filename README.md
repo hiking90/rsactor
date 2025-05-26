@@ -4,9 +4,9 @@
 [![Docs.rs](https://docs.rs/rsactor/badge.svg)](https://docs.rs/rsactor)
 [![Rust Version](https://img.shields.io/badge/rustc-1.75+-blue.svg)](https://blog.rust-lang.org/)
 
-A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
+A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
-`rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing simple yet powerful task control. It prioritizes simplicity and efficiency for local, in-process actor systems while giving developers complete control over their actors' execution lifecycle — define your own `on_run`, control execution, control the lifecycle.
+`rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing a simple and efficient actor model for local, in-process systems. It emphasizes clean message-passing semantics and straightforward actor lifecycle management while maintaining high performance for Rust applications.
 
 **Note:** This project is actively evolving. While core APIs are stable, some features may be refined in future releases.
 
@@ -17,7 +17,7 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
     *   `ask`/`ask_with_timeout`: Send a message and asynchronously await a reply.
     *   `tell`/`tell_with_timeout`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Actor Lifecycle with Simple Yet Powerful Task Control**: `on_start`, `on_run`, and `on_stop` hooks form the actor's lifecycle. The distinctive `on_run` feature provides a dedicated task execution environment with simple yet powerful primitives, giving developers complete control over task logic while the framework manages execution.
+*   **Straightforward Actor Lifecycle**: `on_start`, `on_run`, and `on_stop` hooks provide a clean and intuitive actor lifecycle management system. The framework manages the execution flow while giving developers full control over actor behavior.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
@@ -67,9 +67,9 @@ impl Actor for CounterActor {
         })
     }
 
-    // The main execution loop for the actor.
-    // This method is called after on_start. If it returns Ok(()), the actor continues running.
-    // If it returns Err(_), the actor stops due to an error.
+    // The main processing loop for the actor.
+    // This method is called repeatedly after on_start completes. If it returns Ok(()), the actor continues running.
+    // If it returns Err(_), the actor stops with an error.
     async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         // Use tokio::select! to handle multiple interval ticks concurrently
         tokio::select! {

@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! # rsActor
-//! A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control
+//! A Simple and Efficient In-Process Actor Model Implementation for Rust
 //!
-//! `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing simple
-//! yet powerful task control. It prioritizes simplicity and efficiency for local, in-process
-//! actor systems while giving developers complete control over their actors' execution lifecycle —
-//! define your own `on_run`, control execution, control the lifecycle.
+//! `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing a simple
+//! and efficient actor model for local, in-process systems. It emphasizes clean message-passing
+//! semantics and straightforward actor lifecycle management while maintaining high performance for
+//! Rust applications.
 //!
 //! ## Features
 //!
@@ -19,10 +19,9 @@
 //!   - `ask_with_timeout`: Send a message and await a reply, with a specified timeout.
 //!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
 //!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
-//! - **Actor Lifecycle with Simple Yet Powerful Task Control**: Actors have `on_start`, `on_run`, and `on_stop` lifecycle hooks.
-//!   The distinctive `on_run` feature provides a dedicated task execution environment that users can control
-//!   with simple yet powerful primitives, unlike other actor frameworks. This gives developers complete control over
-//!   their actor's task logic while the framework manages the underlying execution.
+//! - **Straightforward Actor Lifecycle**: Actors have `on_start`, `on_run`, and `on_stop` lifecycle hooks
+//!   that provide a clean and intuitive actor lifecycle management system. The framework manages the execution flow
+//!   while giving developers full control over actor behavior.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
 //! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
