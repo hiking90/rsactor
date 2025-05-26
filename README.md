@@ -22,7 +22,7 @@ A Lightweight Rust Actor Framework with Simple Yet Powerful Task Control.
 *   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
-*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead.
+*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `impl_message_handler!` macro) are also required, but they don't add any additional constraints on the actor's fields.
 
 ## Getting Started
 
@@ -86,6 +86,8 @@ impl Actor for CounterActor {
 
     // Called when the actor is stopping, either gracefully or due to being killed.
     // This provides an opportunity for cleanup before the actor terminates.
+    // The 'killed' parameter is true if the actor was terminated via the 'kill' method,
+    // and false if it was stopped gracefully via the 'stop' method.
     async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error> {
         info!("CounterActor stopping. Final count: {}. Killed: {}",
               self.count, killed);
@@ -152,7 +154,11 @@ async fn main() -> Result<()> {
             info!("Actor completed. Final count: {}. Killed: {}", actor.count, killed);
         }
         ActorResult::Failed { actor, error, phase, killed } => {
-            info!("Actor failed during phase {:?}: {:?}. Actor state at failure: {:?}. Killed: {}", phase, error, actor, killed);
+            if let Some(actor_state) = actor {
+                info!("Actor failed during phase {:?}: {:?}. Actor state at failure: {:?}. Killed: {}", phase, error, actor_state, killed);
+            } else {
+                info!("Actor failed during phase {:?}: {:?}. No actor state available. Killed: {}", phase, error, killed);
+            }
         }
     }
 
