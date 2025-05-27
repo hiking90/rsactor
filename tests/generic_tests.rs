@@ -175,4 +175,424 @@ mod tests {
             panic!("Actor did not complete as expected");
         }
     }
+
+    #[tokio::test]
+    async fn test_bi_generic_actor() {
+        // Test BiGenericActor with String and i32
+        let (actor_ref, join_handle) = spawn::<BiGenericActor<String, i32>>((None, None));
+
+        // Set key-value pair
+        actor_ref.tell(SetKeyValue("hello".to_string(), 42)).await.unwrap();
+
+        // Get key
+        let key: Option<String> = actor_ref.ask(GetKey).await.unwrap();
+        assert_eq!(key, Some("hello".to_string()));
+
+        // Get value
+        let value: Option<i32> = actor_ref.ask(GetValueFromBi).await.unwrap();
+        assert_eq!(value, Some(42));
+
+        // Clear both
+        actor_ref.tell(ClearBoth).await.unwrap();
+        let key: Option<String> = actor_ref.ask(GetKey).await.unwrap();
+        let value: Option<i32> = actor_ref.ask(GetValueFromBi).await.unwrap();
+        assert_eq!(key, None);
+        assert_eq!(value, None);
+
+        // Stop actor
+        actor_ref.stop().await.unwrap();
+        let result = join_handle.await.unwrap();
+        assert!(result.is_completed());
+    }
+
+    #[tokio::test]
+    async fn test_tri_generic_actor() {
+        // Test TriGenericActor with Vec<u8>, bool, and String
+        let (actor_ref, join_handle) = spawn::<TriGenericActor<Vec<u8>, bool, String>>((true, "initial".to_string()));
+
+        // Test GetAll to get initial state
+        let (t_data, u_data, w_data): (Vec<u8>, bool, String) = actor_ref.ask(GetAll).await.unwrap();
+        assert_eq!(t_data, Vec::<u8>::default()); // T::default()
+        assert!(u_data);
+        assert_eq!(w_data, "initial".to_string());
+
+        // Set T data
+        actor_ref.tell(SetT(vec![1, 2, 3])).await.unwrap();
+
+        // Set U data
+        actor_ref.tell(SetU(false)).await.unwrap();
+
+        // Set W data
+        actor_ref.tell(SetW("updated".to_string())).await.unwrap();
+
+        // Get all updated data
+        let (t_data, u_data, w_data): (Vec<u8>, bool, String) = actor_ref.ask(GetAll).await.unwrap();
+        assert_eq!(t_data, vec![1, 2, 3]);
+        assert!(!u_data);
+        assert_eq!(w_data, "updated".to_string());
+
+        // Test CompareU
+        let is_equal: bool = actor_ref.ask(CompareU(false)).await.unwrap();
+        assert!(is_equal);
+
+        let is_equal: bool = actor_ref.ask(CompareU(true)).await.unwrap();
+        assert!(!is_equal);
+
+        // Test GetWAsString
+        let w_as_string: String = actor_ref.ask(GetWAsString).await.unwrap();
+        assert_eq!(w_as_string, "updated".to_string());
+
+        // Stop actor
+        actor_ref.stop().await.unwrap();
+        let result = join_handle.await.unwrap();
+        assert!(result.is_completed());
+    }
+
+    #[tokio::test]
+    async fn test_serializable_actor_json() {
+        // Test SerializableActor with JsonData
+        let (actor_ref, join_handle) = spawn::<SerializableActor<JsonData>>(());
+
+        // Set JsonData
+        let json_data = JsonData { value: "test".to_string() };
+        actor_ref.tell(SetSerializable(json_data.clone())).await.unwrap();
+
+        // Get original data
+        let original: Option<JsonData> = actor_ref.ask(GetOriginal).await.unwrap();
+        assert_eq!(original.unwrap().value, "test".to_string());
+
+        // Get serialized data
+        let serialized: Option<String> = actor_ref.ask(GetSerialized).await.unwrap();
+        assert_eq!(serialized.unwrap(), "{\"value\":\"test\"}".to_string());
+
+        // Stop actor
+        actor_ref.stop().await.unwrap();
+        let result = join_handle.await.unwrap();
+        assert!(result.is_completed());
+    }
+
+    #[tokio::test]
+    async fn test_serializable_actor_xml() {
+        // Test SerializableActor with XmlData
+        let (actor_ref, join_handle) = spawn::<SerializableActor<XmlData>>(());
+
+        // Set XmlData
+        let xml_data = XmlData { content: "example".to_string() };
+        actor_ref.tell(SetSerializable(xml_data.clone())).await.unwrap();
+
+        // Get original data
+        let original: Option<XmlData> = actor_ref.ask(GetOriginal).await.unwrap();
+        assert_eq!(original.unwrap().content, "example".to_string());
+
+        // Get serialized data
+        let serialized: Option<String> = actor_ref.ask(GetSerialized).await.unwrap();
+        assert_eq!(serialized.unwrap(), "<data>example</data>".to_string());
+
+        // Stop actor
+        actor_ref.stop().await.unwrap();
+        let result = join_handle.await.unwrap();
+        assert!(result.is_completed());
+    }
 }
+
+// ---- Multi-Generic Type Examples ----
+
+// Example 1: Actor with two generic types
+#[derive(Debug)]
+struct BiGenericActor<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> {
+    key: Option<K>,
+    value: Option<V>,
+}
+
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Actor for BiGenericActor<K, V> {
+    type Args = (Option<K>, Option<V>);
+    type Error = anyhow::Error;
+
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(BiGenericActor {
+            key: args.0,
+            value: args.1
+        })
+    }
+}
+
+// Messages for BiGenericActor
+#[derive(Debug)]
+pub struct SetKeyValue<K: Send + Debug + 'static, V: Send + Debug + 'static>(pub K, pub V);
+
+#[derive(Debug)]
+pub struct GetKey;
+
+#[derive(Debug)]
+pub struct GetValueFromBi;
+
+#[derive(Debug)]
+pub struct ClearBoth;
+
+// Message implementations for BiGenericActor
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
+Message<SetKeyValue<K, V>> for BiGenericActor<K, V> {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: SetKeyValue<K, V>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.key = Some(msg.0);
+        self.value = Some(msg.1);
+    }
+}
+
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
+Message<GetKey> for BiGenericActor<K, V> {
+    type Reply = Option<K>;
+
+    async fn handle(&mut self, _msg: GetKey, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.key.clone()
+    }
+}
+
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
+Message<GetValueFromBi> for BiGenericActor<K, V> {
+    type Reply = Option<V>;
+
+    async fn handle(&mut self, _msg: GetValueFromBi, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.value.clone()
+    }
+}
+
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
+Message<ClearBoth> for BiGenericActor<K, V> {
+    type Reply = ();
+
+    async fn handle(&mut self, _msg: ClearBoth, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.key = None;
+        self.value = None;
+    }
+}
+
+// impl_message_handler for BiGenericActor with multiple generic types
+impl_message_handler!(
+    [K: Send + Debug + Clone + 'static,
+     V: Send + Debug + Clone + 'static]
+    for BiGenericActor<K, V>,
+    [SetKeyValue<K, V>, GetKey, GetValueFromBi, ClearBoth]);
+
+// Example 2: Actor with three generic types and complex constraints
+#[derive(Debug)]
+struct TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    data_t: T,
+    data_u: U,
+    data_w: W,
+}
+
+impl<T, U, W> Actor for TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    type Args = (U, W);
+    type Error = anyhow::Error;
+
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(TriGenericActor {
+            data_t: T::default(),
+            data_u: args.0,
+            data_w: args.1,
+        })
+    }
+}
+
+// Messages for TriGenericActor
+#[derive(Debug)]
+pub struct SetT<T: Send + Debug + 'static>(pub T);
+
+#[derive(Debug)]
+pub struct SetU<U: Send + Debug + 'static>(pub U);
+
+#[derive(Debug)]
+pub struct SetW<W: Send + Debug + 'static>(pub W);
+
+#[derive(Debug)]
+pub struct GetAll;
+
+#[derive(Debug)]
+pub struct CompareU<U: Send + Debug + 'static>(pub U);
+
+#[derive(Debug)]
+pub struct GetWAsString;
+
+// Message implementations for TriGenericActor
+impl<T, U, W> Message<SetT<T>> for TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    type Reply = ();
+
+    async fn handle(&mut self, msg: SetT<T>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data_t = msg.0;
+    }
+}
+
+impl<T, U, W> Message<SetU<U>> for TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    type Reply = ();
+
+    async fn handle(&mut self, msg: SetU<U>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data_u = msg.0;
+    }
+}
+
+impl<T, U, W> Message<SetW<W>> for TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    type Reply = ();
+
+    async fn handle(&mut self, msg: SetW<W>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data_w = msg.0;
+    }
+}
+
+impl<T, U, W> Message<GetAll> for TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    type Reply = (T, U, W);
+
+    async fn handle(&mut self, _msg: GetAll, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        (self.data_t.clone(), self.data_u.clone(), self.data_w.clone())
+    }
+}
+
+impl<T, U, W> Message<CompareU<U>> for TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    type Reply = bool;
+
+    async fn handle(&mut self, msg: CompareU<U>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data_u == msg.0
+    }
+}
+
+impl<T, U, W> Message<GetWAsString> for TriGenericActor<T, U, W>
+where
+    T: Send + Debug + Clone + Default + 'static,
+    U: Send + Debug + Clone + PartialEq + 'static,
+    W: Send + Debug + Clone + ToString + 'static,
+{
+    type Reply = String;
+
+    async fn handle(&mut self, _msg: GetWAsString, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data_w.to_string()
+    }
+}
+
+// impl_message_handler for TriGenericActor with complex generic constraints
+impl_message_handler!([T: Send + Debug + Clone + Default + 'static,
+                       U: Send + Debug + Clone + PartialEq + 'static,
+                       W: Send + Debug + Clone + ToString + 'static]
+                     for TriGenericActor<T, U, W>,
+                     [SetT<T>, SetU<U>, SetW<W>, GetAll, CompareU<U>, GetWAsString]);
+
+// Example 3: Generic actor with associated types constraints
+pub trait Serializable: Send + Debug + Clone + 'static {
+    type Output: Send + Debug + Clone + 'static;
+    fn serialize(&self) -> Self::Output;
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonData {
+    pub value: String,
+}
+
+impl Serializable for JsonData {
+    type Output = String;
+
+    fn serialize(&self) -> Self::Output {
+        format!("{{\"value\":\"{}\"}}", self.value)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct XmlData {
+    pub content: String,
+}
+
+impl Serializable for XmlData {
+    type Output = String;
+
+    fn serialize(&self) -> Self::Output {
+        format!("<data>{}</data>", self.content)
+    }
+}
+
+#[derive(Debug)]
+struct SerializableActor<T: Serializable> {
+    data: Option<T>,
+}
+
+impl<T: Serializable> Actor for SerializableActor<T> {
+    type Args = ();
+    type Error = anyhow::Error;
+
+    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(SerializableActor { data: None })
+    }
+}
+
+// Messages for SerializableActor
+#[derive(Debug)]
+pub struct SetSerializable<T: Serializable>(pub T);
+
+#[derive(Debug)]
+pub struct GetSerialized;
+
+#[derive(Debug)]
+pub struct GetOriginal;
+
+// Message implementations for SerializableActor
+impl<T: Serializable> Message<SetSerializable<T>> for SerializableActor<T> {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: SetSerializable<T>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data = Some(msg.0);
+    }
+}
+
+impl<T: Serializable> Message<GetSerialized> for SerializableActor<T> {
+    type Reply = Option<T::Output>;
+
+    async fn handle(&mut self, _msg: GetSerialized, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data.as_ref().map(|d| d.serialize())
+    }
+}
+
+impl<T: Serializable> Message<GetOriginal> for SerializableActor<T> {
+    type Reply = Option<T>;
+
+    async fn handle(&mut self, _msg: GetOriginal, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+        self.data.clone()
+    }
+}
+
+// impl_message_handler for SerializableActor with trait constraints
+impl_message_handler!([T: Serializable]
+                     for SerializableActor<T>,
+                     [SetSerializable<T>, GetSerialized, GetOriginal]);
