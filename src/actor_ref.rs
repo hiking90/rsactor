@@ -36,7 +36,6 @@ use tokio::runtime::Handle;
 ///   - [`ask_with_timeout`](UntypedActorRef::ask_with_timeout): Send a message and await a reply with a timeout.
 ///   - [`tell`](UntypedActorRef::tell): Send a message without waiting for a reply.
 ///   - [`tell_with_timeout`](UntypedActorRef::tell_with_timeout): Send a message without waiting for a reply with a timeout.
-///   - [`try_tell`](UntypedActorRef::try_tell): Attempt to send a message without blocking.
 ///
 /// - **Blocking Methods for Tokio Blocking Contexts**:
 ///   - [`ask_blocking`](UntypedActorRef::ask_blocking): Send a message and block until a reply is received.
