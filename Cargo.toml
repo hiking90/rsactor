@@ -8,6 +8,7 @@ authors = ["Jeff Kim <hiking90@gmail.com>"]
 repository = "https://github.com/hiking90/rsactor"
 homepage = "https://github.com/hiking90/rsactor"
 license = "Apache-2.0"
+readme = "README.md"
 keywords = ["actor", "rust", "framework"]
 
 [dependencies]
