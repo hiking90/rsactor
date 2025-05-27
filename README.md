@@ -218,9 +218,9 @@ impl Message<MyQuery> for MyActor {
     }
 }
 
-rsactor::impl_message_handler!(MyActor, [MyMessage, MyQuery]);
+impl_message_handler!(MyActor, [MyMessage, MyQuery]);
 
-async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
+async fn demonstrate_blocking_calls(actor_ref: ActorRef<MyActor>) -> Result<()> {
     // --- tell_blocking example ---
     // Clone ActorRef for the first blocking task (tell_blocking)
     let actor_ref_clone_tell = actor_ref.clone();
@@ -238,10 +238,7 @@ async fn demonstrate_blocking_calls(actor_ref: ActorRef) -> Result<()> {
         // Send a query and wait for a reply, with a timeout.
         // This call will block the current thread (managed by `spawn_blocking`)
         // until a response is received from the actor or the timeout occurs.
-        // The type parameters for ask_blocking are:
-        // M: The message type (MyQuery). This is the type of the message being sent.
-        // R: The expected reply type (String). This is the type of the response we expect back.
-        actor_ref_clone_ask.ask_blocking::<MyQuery, String>(
+        actor_ref_clone_ask.ask_blocking(
             MyQuery, Some(Duration::from_secs(2))
         )
     });
