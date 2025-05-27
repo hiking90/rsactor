@@ -13,38 +13,36 @@
 //!
 //! - **Asynchronous Actors**: Actors run in their own asynchronous tasks.
 //! - **Message Passing**: Actors communicate by sending and receiving messages.
-//!   - `tell`: Send a message without waiting for a reply (fire-and-forget).
-//!   - `tell_with_timeout`: Send a message without waiting for a reply, with a specified timeout.
-//!   - `ask`: Send a message and await a reply.
-//!   - `ask_with_timeout`: Send a message and await a reply, with a specified timeout.
-//!   - `tell_blocking`: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
-//!   - `ask_blocking`: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
-//! - **Straightforward Actor Lifecycle**: Actors have `on_start`, `on_run`, and `on_stop` lifecycle hooks
-//!   that provide a clean and intuitive actor lifecycle management system. The framework manages the execution flow
-//!   while giving developers full control over actor behavior.
+//!   - [`tell`](actor_ref::ActorRef::tell): Send a message without waiting for a reply (fire-and-forget).
+//!   - [`tell_with_timeout`](actor_ref::ActorRef::tell_with_timeout): Send a message without waiting for a reply, with a specified timeout.
+//!   - [`ask`](actor_ref::ActorRef::ask): Send a message and await a reply.
+//!   - [`ask_with_timeout`](actor_ref::ActorRef::ask_with_timeout): Send a message and await a reply, with a specified timeout.
+//!   - [`tell_blocking`](actor_ref::ActorRef::tell_blocking): Blocking version of `tell` for use in [`tokio::task::spawn_blocking`] tasks.
+//!   - [`ask_blocking`](actor_ref::ActorRef::ask_blocking): Blocking version of `ask` for use in [`tokio::task::spawn_blocking`] tasks.
+//! - **Straightforward Actor Lifecycle**: Actors have [`on_start`](Actor::on_start), [`on_run`](Actor::on_run),
+//!   and [`on_stop`](Actor::on_stop) lifecycle hooks that provide a clean and intuitive actor lifecycle management system.
+//!   The framework manages the execution flow while giving developers full control over actor behavior.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
-//! - **Macro for Message Handling**: The `impl_message_handler!` macro simplifies
+//! - **Macro for Message Handling**: The [`impl_message_handler!`] macro simplifies
 //!   handling multiple message types.
 //! - **Type Safety Features**: Two actor reference types provide different levels of type safety:
-//!   - `ActorRef<T>`: Compile-time type safety with zero runtime overhead (recommended)
-//!   - `UntypedActorRef`: Runtime type handling for collections and dynamic scenarios
+//!   - [`ActorRef<T>`]: Compile-time type safety with zero runtime overhead (recommended)
+//!   - [`UntypedActorRef`]: Runtime type handling for collections and dynamic scenarios
 //!
 //! ## Core Concepts
 //!
-//! - **`Actor`**: Trait defining actor behavior and lifecycle hooks (`on_start` required, `on_run` optional).
-//! - **`Message<M>`**: Trait for handling a message type `M` and defining its reply type.
-//! - **`ActorRef`**: Handle for sending messages to an actor.
-//! - **`spawn`**: Function to create and start an actor, returning an `ActorRef` and a `JoinHandle`.
-//! - **`MessageHandler`**: Trait for type-erased message handling. This is typically implemented automatically by the `impl_message_handler!` macro.
-//! - **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
-//! - **`MailboxMessage(Internal)`**: Enum for messages in an actor's mailbox (user messages and control signals).
-//! - **`Runtime(Internal)`**: Manages an actor's internal lifecycle and message loop.
+//! - **[`Actor`]**: Trait defining actor behavior and lifecycle hooks ([`on_start`](Actor::on_start) required, [`on_run`](Actor::on_run) optional).
+//! - **[`Message<M>`](actor::Message)**: Trait for handling a message type `M` and defining its reply type.
+//! - **[`ActorRef`]**: Handle for sending messages to an actor.
+//! - **[`spawn`]**: Function to create and start an actor, returning an [`ActorRef`] and a `JoinHandle`.
+//! - **[`MessageHandler`]**: Trait for type-erased message handling. This is typically implemented automatically by the [`impl_message_handler!`] macro.
+//! - **[`ActorResult`]**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 //!
 //! ## Getting Started
 //!
-//! Define an actor struct, implement `Actor` and `Message<M>` for each message type,
-//! then use `impl_message_handler!` to wire up message handling.
+//! Define an actor struct, implement [`Actor`] and [`Message<M>`] for each message type,
+//! then use [`impl_message_handler!`] to wire up message handling.
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
@@ -132,7 +130,7 @@
 //! }
 //! ```
 //!
-//! This crate-level documentation provides an overview of `rsactor`.
+//! This crate-level documentation provides an overview of [`rsActor`](crate).
 //! For more details on specific components, please refer to their individual
 //! documentation.
 
@@ -312,7 +310,9 @@ macro_rules! __impl_message_handler_body {
 ///
 /// # Internals
 /// This macro facilitates dynamic message dispatch by downcasting `Box<dyn std::any::Any + Send>`
-/// message payloads to their concrete types at runtime. The actual message handling logic
+/// message payloads to their concrete types at runtime. It implements the [`MessageHandler`](crate::actor::MessageHandler)
+/// trait for your actor, enabling it to handle multiple message types through the
+/// [`handle`](crate::actor::Message::handle) method. The actual message handling logic
 /// is generated by the internal `__impl_message_handler_body!` helper macro to avoid code
 /// duplication between different implementation patterns.
 #[macro_export]
@@ -392,9 +392,9 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 
 /// Spawns a new actor and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
 ///
-/// Takes initialization arguments that will be passed to the actor's `on_start` method.
+/// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
-/// the actor result.
+/// the actor result as an [`ActorResult<T>`](crate::ActorResult).
 pub fn spawn<T: Actor + MessageHandler + 'static>(
     args: T::Args,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
@@ -404,9 +404,10 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
 
 /// Spawns a new actor with a specified mailbox capacity and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
 ///
-/// Takes initialization arguments that will be passed to the actor's `on_start` method.
+/// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
-/// the actor result.
+/// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
+/// to control the actor's mailbox capacity.
 pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     args: T::Args, // Actor initialization arguments
     mailbox_capacity: usize,
