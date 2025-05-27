@@ -298,11 +298,17 @@ macro_rules! __impl_message_handler_body {
 /// ## Non-generic form:
 /// * `$actor_type:ty`: The type of the actor for which to implement `MessageHandler`.
 /// * `[$($msg_type:ty),* $(,)?]`: A list of message types that the actor can handle.
+/// ```ignore
+/// impl_message_handler!(MyActor, [Msg1, Msg2]);
+/// ```
 ///
 /// ## Generic form:
 /// * `[$($generics:tt)*]`: Generic type parameters with their trait bounds (as token tree to handle complex bounds)
 /// * `for $actor_type:ty`: The generic actor type for which to implement `MessageHandler`
 /// * `[$($msg_type:ty),* $(,)?]`: A list of message types that the actor can handle
+/// ```ignore
+/// impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue]);
+/// ```
 ///
 /// # Internals
 /// This macro facilitates dynamic message dispatch by downcasting `Box<dyn std::any::Any + Send>`

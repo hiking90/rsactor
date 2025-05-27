@@ -17,7 +17,19 @@ use tokio::runtime::Handle;
 /// to the actor instance itself. It holds a sender channel to the actor's mailbox.
 /// This is the internal implementation that handles the actual message passing.
 ///
-/// ## ⚠️ Type Safety Warning
+/// ## Creating UntypedActorRef
+///
+/// `UntypedActorRef` instances are typically not created directly, but obtained from a typed `ActorRef<T>`:
+///
+/// ```ignore
+/// // Get a reference to the untyped actor ref
+/// let untyped_ref = actor_ref.untyped_actor_ref();
+///
+/// // Make a clone if needed
+/// let cloned_untyped_ref = untyped_ref.clone();
+/// ```
+///
+/// ## Type Safety Warning
 ///
 /// **Developer Responsibility**: When using `UntypedActorRef`, you are responsible for ensuring
 /// that message types match the target actor at runtime. Incorrect message types will result
@@ -377,24 +389,56 @@ impl UntypedActorRef {
 ///
 /// `ActorRef<T>` provides type-safe message passing to actors, ensuring that only
 /// messages that the actor can handle are sent, and that reply types are correctly typed.
+/// It wraps an `UntypedActorRef` and provides compile-time type safety through Rust's
+/// type system and trait bounds.
 ///
-/// ## ✅ Type Safety Benefits
+/// ## Type Safety Benefits
 ///
 /// - **Compile-Time Message Validation**: Only messages implementing `Message<M>` for actor `T` are accepted
 /// - **Automatic Reply Type Inference**: Return types are inferred from trait implementations
 /// - **Zero Runtime Overhead**: Type safety is enforced at compile time with no performance cost
 /// - **IDE Support**: Full autocomplete and type checking support
+/// - **Prevention of Runtime Type Errors**: Eliminates downcasting failures and type mismatches
+///
+/// ## Message Passing Methods
+///
+/// - **Asynchronous Methods**:
+///   - [`ask`](ActorRef::ask): Send a message and await a typed reply.
+///   - [`ask_with_timeout`](ActorRef::ask_with_timeout): Send a message and await a typed reply with a timeout.
+///   - [`tell`](ActorRef::tell): Send a message without waiting for a reply.
+///   - [`tell_with_timeout`](ActorRef::tell_with_timeout): Send a message without waiting for a reply with a timeout.
+///
+/// - **Blocking Methods for Tokio Blocking Contexts**:
+///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a typed reply is received.
+///   - [`tell_blocking`](ActorRef::tell_blocking): Send a message and block until it is sent.
+///
+///   These methods are for use within `tokio::task::spawn_blocking` contexts.
+///
+/// - **Control Methods**:
+///   - [`stop`](ActorRef::stop): Gracefully stop the actor.
+///   - [`kill`](ActorRef::kill): Immediately terminate the actor.
+///
+/// - **Utility Methods**:
+///   - [`identity`](ActorRef::identity): Get the unique ID of the actor.
+///   - [`is_alive`](ActorRef::is_alive): Check if the actor is still running.
+///   - [`untyped_actor_ref`](ActorRef::untyped_actor_ref): Access the underlying `UntypedActorRef`.
 ///
 /// ## Recommended Usage
 ///
 /// Use `ActorRef<T>` by default for all actor communication. It provides the same functionality
 /// as `UntypedActorRef` but with compile-time guarantees that prevent type-related runtime errors.
 ///
-/// Only use `UntypedActorRef` when you specifically need type erasure for collections or
-/// dynamic actor management.
+/// **When to use `ActorRef<T>`**:
+/// - Default choice for actor communication
+/// - When you know the actor type at compile time
+/// - When you want compile-time message validation
+/// - When working with strongly-typed actor systems
 ///
-/// This wrapper around `UntypedActorRef` provides compile-time type safety while delegating
-/// the actual message passing to the underlying `UntypedActorRef`.
+/// **When to use `UntypedActorRef`**:
+/// - Collections of heterogeneous actors (`Vec<UntypedActorRef>`, `HashMap<String, UntypedActorRef>`)
+/// - Plugin systems with dynamically loaded actors
+/// - Generic actor management interfaces
+/// - When you need type erasure for dynamic scenarios
 #[derive(Debug)]
 pub struct ActorRef<T: Actor> {
     untyped_ref: UntypedActorRef,

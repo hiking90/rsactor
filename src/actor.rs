@@ -12,30 +12,131 @@ use log::{info, error, debug, trace};
 /// Actors are fundamental units of computation that communicate by exchanging messages.
 /// Each actor has its own state and processes messages sequentially.
 ///
+/// # Error Handling
+///
+/// Actor lifecycle methods (`on_start`, `on_run`, `on_stop`) can return errors. How these errors
+/// are handled depends on when they occur:
+///
+/// 1. Errors in `on_start`: The actor fails to initialize. The error is captured in
+///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
+///    [`FailurePhase::OnStart`](crate::FailurePhase::OnStart) and `actor` set to `None`.
+///
+/// 2. Errors in `on_run`: The actor terminates during runtime. The error is captured in
+///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
+///    [`FailurePhase::OnRun`](crate::FailurePhase::OnRun) and `actor` contains the actor instance.
+///
+/// 3. Errors in `on_stop`: The actor fails during cleanup. The error is captured in
+///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
+///    [`FailurePhase::OnStop`](crate::FailurePhase::OnStop) and `actor` contains the actor instance.
+///
+/// When awaiting the completion of an actor, check the [`ActorResult`](crate::ActorResult) to determine
+/// the outcome and access any errors:
+///
+/// - Use methods like [`is_failed`](crate::ActorResult::is_failed),
+///   [`is_runtime_failed`](crate::ActorResult::is_runtime_failed), etc. to identify the error type
+/// - Access the error via [`error`](crate::ActorResult::error) or
+///   [`into_error`](crate::ActorResult::into_error) to retrieve error details
+/// - If the actor instance is available ([`has_actor`](crate::ActorResult::has_actor) returns true),
+///   you can recover it using [`actor`](crate::ActorResult::actor) or
+///   [`into_actor`](crate::ActorResult::into_actor) for further processing
+///
 /// Implementors of this trait must also be `Send + 'static`.
 pub trait Actor: Sized + Send + 'static {
     /// Type for arguments passed to `on_start` for actor initialization.
     /// This type provides the necessary data to create an instance of the actor.
     type Args: Send;
     /// The error type that can be returned by the actor\'s lifecycle methods.
-    type Error: Send + Debug + 'static;
+    type Error: Send + Debug;
 
     /// Called when the actor is started. This is required for actor creation.
     ///
-    /// The `args` parameter, of type `Self::Args`, contains the initialization data
-    /// provided when the actor is spawned. This method is responsible for using
-    /// these arguments to create and return the actual actor instance (`Self`).
-    /// The `actor_ref` parameter is a reference to the actor\'s own `AnyActorRef`.
-    /// This method should return the initialized actor instance or an error.
-    fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
+    /// This method is the initialization point for an actor and a fundamental part of the actor model design.
+    /// Unlike traditional object construction, the actor's instance is created within this asynchronous method,
+    /// allowing for complex initialization that may require awaiting resources.
+    ///
+    /// # Actor State Initialization
+    ///
+    /// In the actor model, each actor encapsulates its own state. Creating the actor inside `on_start`
+    /// ensures that:
+    ///
+    /// - The actor's state is always valid before it begins processing messages
+    /// - The need for `Option<T>` fields is minimized, as state can be fully initialized
+    /// - Asynchronous resources (like database connections) can be acquired during initialization
+    /// - Initialization failures can be cleanly handled before the actor enters the message processing phase
+    ///
+    /// # Parameters
+    ///
+    /// - `args`: Initialization data (of type `Self::Args`) provided when the actor is spawned
+    /// - `actor_ref`: A reference to the actor's own [`ActorRef`](crate::actor_ref::ActorRef), which can
+    ///   be stored in the actor for self-reference or for initializing child actors
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Self)`: A fully initialized actor instance
+    /// - `Err(Self::Error)`: If initialization fails
+    ///
+    /// If this method returns an error, the actor will not be created, and the error
+    /// will be captured in the [`ActorResult`](crate::ActorResult) with
+    /// [`FailurePhase::OnStart`](crate::FailurePhase::OnStart).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
+    /// use std::time::Duration;
+    /// use anyhow::Result;
+    ///
+    /// // Simple actor that holds a name
+    /// #[derive(Debug)]
+    /// struct SimpleActor {
+    ///     name: String,
+    /// }
+    ///
+    /// // Implement Actor trait with focus on on_start
+    /// impl Actor for SimpleActor {
+    ///     type Args = String; // Name parameter
+    ///     type Error = anyhow::Error;
+    ///
+    ///     async fn on_start(name: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+    ///         // Create and return the actor instance
+    ///         Ok(Self { name })
+    ///     }
+    /// }
+    ///
+    /// // Register message handlers
+    /// impl_message_handler!(SimpleActor, []);
+    ///
+    /// // Main function showing the basic lifecycle
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     // Spawn the actor with a name argument
+    ///     let (actor_ref, join_handle) = spawn::<SimpleActor>("MyActor".to_string());
+    ///
+    ///     // Gracefully stop the actor
+    ///     actor_ref.stop().await?;
+    ///
+    ///     // Wait for the actor to complete and get its final state
+    ///     match join_handle.await? {
+    ///         ActorResult::Completed { actor, killed } => {
+    ///             println!("Actor '{}' completed. Killed: {}", actor.name, killed);
+    ///         }
+    ///         ActorResult::Failed { error, phase, .. } => {
+    ///             println!("Actor failed in phase {:?}: {}", phase, error);
+    ///         }
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
 
     /// The primary task execution logic for the actor, designed for iterative execution.
     ///
     /// The main processing loop for the actor. This method is called repeatedly after `on_start` completes.
     /// If this method returns `Ok(())`, it will be called again, allowing the actor to process
     /// ongoing or periodic tasks. The actor continues running as long as `on_run` returns `Ok(())`.
-    /// If `on_run` returns an `Err(_)`, the actor stops with an error.
-    /// To stop the actor normally from within `on_run`, call `actor_ref.stop()` or `actor_ref.kill()`.
+    /// To stop the actor normally from within `on_run`, call [`actor_ref.stop()`](crate::actor_ref::ActorRef::stop)
+    /// or [`actor_ref.kill()`](crate::actor_ref::ActorRef::kill).
     ///
     /// `on_run`\'s execution is concurrent with the actor\'s message handling capabilities,
     /// enabling the actor to perform its primary processing while continuing to
@@ -129,9 +230,11 @@ pub trait Actor: Sized + Send + 'static {
     ///
     /// # Termination:
     ///
-    /// - If the `Future` returned by `on_run` completes with `Err(_)`, the actor terminates due to an error.
-    /// - If the `Future` completes with `Ok(())`, the actor continues running, and the runtime
-    ///   will invoke `on_run` again to get the next `Future` for execution.
+    /// - If the `Future` returned by `on_run` completes with `Ok(())`, the actor continues running,
+    ///   and the runtime will invoke `on_run` again to get the next `Future` for execution.
+    /// - If the `Future` completes with `Err(_)`, the actor terminates due to an error. See the
+    ///   [`Error Handling`](#error-handling) section in the `Actor` trait documentation for details
+    ///   on how errors are handled.
     ///
     /// To stop the actor normally from within `on_run` (e.g., graceful shutdown),
     /// the actor should explicitly call `actor_ref.stop().await?` or `actor_ref.kill()`.
@@ -142,16 +245,11 @@ pub trait Actor: Sized + Send + 'static {
     /// It can be used, for example, to call `actor_ref.stop()` or `actor_ref.kill()`
     /// to initiate actor termination from within `on_run`.
     ///
-    /// - Returning `Ok(())` signifies that the current segment of work completed successfully,
-    ///   and the actor should continue running (i.e., `on_run` will be called again).
-    /// - Returning `Err(_)` signifies termination due to an error.
-    ///
-    /// The specific outcome is captured in the `ActorResult`.
-    ///
     /// The default implementation of `on_run` is a simple async block that sleeps for 1 second
     /// and then returns `Ok(())`, causing it to be called repeatedly until the actor is
     /// explicitly stopped or killed.
-    fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+    #[allow(unused_variables)]
+    fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // This sleep is critical - it creates an await point that allows
         // the Tokio runtime to switch tasks and process incoming messages.
         // Without at least one await point in a loop, message processing would starve.
@@ -161,7 +259,45 @@ pub trait Actor: Sized + Send + 'static {
         }
     }
 
-    fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, _killed: bool) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+    /// Called when the actor is about to stop. This allows the actor to perform cleanup tasks.
+    ///
+    /// This method is called only when the actor is being explicitly stopped, either through a call
+    /// to [`ActorRef::stop`](crate::actor_ref::ActorRef::stop) (graceful termination) or
+    /// [`ActorRef::kill`](crate::actor_ref::ActorRef::kill) (immediate termination). It is not called
+    /// if the actor stops due to other errors that occurred during message processing or in [`on_run`](Actor::on_run).
+    ///
+    /// The `killed` parameter indicates how the actor is being stopped:
+    /// - `killed = false`: The actor is stopping gracefully (via `stop()` call)
+    /// - `killed = true`: The actor is being forcefully terminated (via `kill()` call)
+    ///
+    /// Cleanup operations that should be performed regardless of how the actor terminates
+    /// should be implemented as a `Drop` implementation on the actor struct instead.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rsactor::{Actor, ActorRef, Result};
+    /// # use std::time::Duration;
+    /// # struct MyActor { /* ... */ }
+    /// # impl Actor for MyActor {
+    /// #     type Args = ();
+    /// #     type Error = anyhow::Error;
+    /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+    /// #         Ok(MyActor { /* ... */ })
+    /// #     }
+    /// async fn on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> std::result::Result<(), Self::Error> {
+    ///     if killed {
+    ///         println!("Actor {} is being forcefully terminated, performing minimal cleanup", actor_ref.identity());
+    ///         // Perform minimal, fast cleanup
+    ///     } else {
+    ///         println!("Actor {} is gracefully shutting down, performing full cleanup", actor_ref.identity());
+    ///         // Perform thorough cleanup
+    ///     }
+    ///     Ok(())
+    /// }
+    /// # }
+    /// ```
+    #[allow(unused_variables)]
+    fn on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // Default implementation does nothing on stop.
         // Override this method in your actor if you need to perform cleanup.
         async { Ok(()) }
