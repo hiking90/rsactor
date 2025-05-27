@@ -7,11 +7,11 @@ use std::fmt::Debug;
 /// Represents the phase during which an actor failure occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePhase {
-    /// Actor failed during the `on_start` lifecycle hook.
+    /// Actor failed during the [`on_start`](crate::Actor::on_start) lifecycle hook.
     OnStart,
-    /// Actor failed during execution.
+    /// Actor failed during execution in the [`on_run`](crate::Actor::on_run) lifecycle hook.
     OnRun,
-    /// Actor failed during the `on_stop` lifecycle hook.
+    /// Actor failed during the [`on_stop`](crate::Actor::on_stop) lifecycle hook.
     OnStop,
 }
 
@@ -28,8 +28,9 @@ impl std::fmt::Display for FailurePhase {
 /// Result type returned when an actor's lifecycle completes.
 ///
 /// `ActorResult` encapsulates the final state of an actor after its lifecycle has ended,
-/// whether it completed successfully or failed. It provides detailed information about
-/// the actor's termination state, including:
+/// whether it completed successfully or failed. This is typically obtained when awaiting the
+/// `JoinHandle` returned by [`spawn`](crate::spawn) or [`spawn_with_mailbox_capacity`](crate::spawn_with_mailbox_capacity).
+/// It provides detailed information about the actor's termination state, including:
 ///
 /// - Whether the actor completed successfully or failed
 /// - Whether the actor was killed forcefully or stopped gracefully
@@ -55,7 +56,7 @@ pub enum ActorResult<T: Actor> {
     /// This variant indicates that the actor encountered an error during execution.
     Failed {
         /// The actor instance (if recoverable), or None if not recoverable.
-        /// This will be `None` specifically when the failure occurred during the `on_start` phase,
+        /// This will be `None` specifically when the failure occurred during the [`on_start`](Actor::on_start) phase,
         /// as the actor wasn't fully initialized.
         actor: Option<T>,
         /// The error that caused the failure
@@ -67,7 +68,7 @@ pub enum ActorResult<T: Actor> {
     },
 }
 
-/// Conversion from ActorResult to a tuple of (Option<Actor>, Option<Error>)
+/// Conversion from ActorResult to a tuple of (`Option<Actor>`, `Option<Error>`)
 ///
 /// This allows extracting both the actor instance and error (if any) in a single operation.
 /// Useful for pattern matching and destructuring in supervision contexts.
@@ -103,7 +104,7 @@ impl<T: Actor> ActorResult<T> {
 
     /// Returns `true` if the actor was killed.
     ///
-    /// An actor is considered killed if it was terminated forcefully via the `kill()` method,
+    /// An actor is considered killed if it was terminated forcefully via the [`kill()`](crate::ActorRef::kill()) method,
     /// regardless of whether it completed successfully or failed. Both `ActorResult::Completed`
     /// and `ActorResult::Failed` can have `killed: true`.
     pub fn was_killed(&self) -> bool {
@@ -120,7 +121,7 @@ impl<T: Actor> ActorResult<T> {
 
     /// Returns `true` if the actor failed to start.
     ///
-    /// This indicates that the actor failed during the `on_start` lifecycle phase,
+    /// This indicates that the actor failed during the [`on_start`](crate::Actor::on_start) lifecycle phase,
     /// which means it couldn't initialize properly.
     pub fn is_startup_failed(&self) -> bool {
         matches!(self, ActorResult::Failed { phase: FailurePhase::OnStart, .. })
@@ -129,7 +130,7 @@ impl<T: Actor> ActorResult<T> {
     /// Returns `true` if the actor failed during runtime.
     ///
     /// This indicates that the actor started successfully but encountered an error
-    /// during its normal operation in the `on_run` lifecycle phase.
+    /// during its normal operation in the [`on_run`](crate::Actor::on_run) lifecycle phase.
     pub fn is_runtime_failed(&self) -> bool {
         matches!(self, ActorResult::Failed { phase: FailurePhase::OnRun, .. })
     }
@@ -137,7 +138,7 @@ impl<T: Actor> ActorResult<T> {
     /// Returns `true` if the actor failed during the stop phase.
     ///
     /// This indicates that the actor encountered an error while trying to shut down
-    /// in the `on_stop` lifecycle phase.
+    /// in the [`on_stop`](crate::Actor::on_stop) lifecycle phase.
     pub fn is_stop_failed(&self) -> bool {
         matches!(self, ActorResult::Failed { phase: FailurePhase::OnStop, .. })
     }
@@ -148,7 +149,7 @@ impl<T: Actor> ActorResult<T> {
     /// If the actor failed, it may return `Some(actor)` or `None` depending on
     /// when the failure occurred and if the actor instance could be recovered.
     ///
-    /// If the failure occurred during the `on_start` phase, this will return `None`
+    /// If the failure occurred during the [`on_start`](crate::Actor::on_start) phase, this will return `None`
     /// since the actor was not successfully initialized.
     pub fn actor(&self) -> Option<&T> {
         match self {
@@ -159,7 +160,7 @@ impl<T: Actor> ActorResult<T> {
 
     /// Consumes the result and returns the actor instance if available.
     ///
-    /// This method is similar to `actor()` but it consumes the `ActorResult`,
+    /// This method is similar to [`actor()`](ActorResult::actor()) but it consumes the `ActorResult`,
     /// giving ownership of the actor to the caller if available.
     pub fn into_actor(self) -> Option<T> {
         match self {
@@ -181,7 +182,7 @@ impl<T: Actor> ActorResult<T> {
 
     /// Consumes the result and returns the error if it represents a failure.
     ///
-    /// This method is similar to `error()` but it consumes the `ActorResult`,
+    /// This method is similar to [`error()`](ActorResult::error()) but it consumes the `ActorResult`,
     /// giving ownership of the error to the caller if available.
     pub fn into_error(self) -> Option<T::Error> {
         match self {
@@ -192,7 +193,7 @@ impl<T: Actor> ActorResult<T> {
 
     /// Returns true if the result represents any kind of failure.
     ///
-    /// This is the logical opposite of `is_completed()`.
+    /// This is the logical opposite of [`is_completed()`](ActorResult::is_completed()).
     pub fn is_failed(&self) -> bool {
         !self.is_completed()
     }

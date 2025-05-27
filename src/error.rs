@@ -6,6 +6,10 @@ use std::time::Duration;
 
 #[derive(Debug)]
 /// Represents errors that can occur in the rsactor framework.
+///
+/// These errors may be encountered during various actor operations, such as sending messages
+/// with [`tell`](crate::actor_ref::ActorRef::tell) or [`ask`](crate::actor_ref::ActorRef::ask),
+/// or during actor lifecycle operations like [`spawn`](crate::spawn).
 pub enum Error {
     /// Error when sending a message to an actor
     Send {
@@ -98,4 +102,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// A Result type specialized for rsactor operations.
+///
+/// This type is returned by most actor operations like [`tell`](crate::actor_ref::ActorRef::tell),
+/// [`ask`](crate::actor_ref::ActorRef::ask), [`stop`](crate::actor_ref::ActorRef::stop), etc.
 pub type Result<T> = std::result::Result<T, Error>;

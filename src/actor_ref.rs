@@ -19,7 +19,7 @@ use tokio::runtime::Handle;
 ///
 /// ## Creating UntypedActorRef
 ///
-/// `UntypedActorRef` instances are typically not created directly, but obtained from a typed `ActorRef<T>`:
+/// `UntypedActorRef` instances are typically not created directly, but obtained from a typed [`ActorRef<T>`]:
 ///
 /// ```ignore
 /// // Get a reference to the untyped actor ref
@@ -35,7 +35,7 @@ use tokio::runtime::Handle;
 /// that message types match the target actor at runtime. Incorrect message types will result
 /// in runtime errors instead of compile-time errors.
 ///
-/// **Recommended Usage**: Use `ActorRef<T>` by default for compile-time type safety.
+/// **Recommended Usage**: Use [`ActorRef<T>`] by default for compile-time type safety.
 /// Only use `UntypedActorRef` when you specifically need type erasure for:
 /// - Collections of heterogeneous actors (`Vec<UntypedActorRef>`, `HashMap<String, UntypedActorRef>`)
 /// - Plugin systems with dynamically loaded actors
@@ -94,7 +94,8 @@ impl UntypedActorRef {
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget).
     ///
-    /// The message is sent to the actor's mailbox for processing.
+    /// The message is sent to the actor's mailbox for processing via the actor's
+    /// [`handle`](crate::actor::Message::handle) method implementation.
     /// This method returns immediately.
     pub async fn tell<M>(&self, msg: M) -> Result<()>
     where
@@ -120,7 +121,7 @@ impl UntypedActorRef {
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget) with a timeout.
     ///
-    /// Similar to `tell`, but allows specifying a timeout for the send operation.
+    /// Similar to [`UntypedActorRef::tell`], but allows specifying a timeout for the send operation.
     /// The message is sent to the actor's mailbox, and this method will return once
     /// the message is sent or timeout if the send operation doesn't complete
     /// within the specified duration.
@@ -140,7 +141,8 @@ impl UntypedActorRef {
     /// Sends a message to the actor and awaits a reply.
     ///
     /// The message is sent to the actor\'s mailbox, and this method will wait for
-    /// the actor to process the message and send a reply.
+    /// the actor to process the message via its [`handle`](crate::actor::Message::handle) method
+    /// and send a reply back.
     pub async fn ask<M, R>(&self, msg: M) -> Result<R>
     where
         M: Send + 'static,
@@ -179,7 +181,7 @@ impl UntypedActorRef {
 
     /// Sends a message to the actor and awaits a reply with a timeout.
     ///
-    /// Similar to `ask`, but allows specifying a timeout for the operation.
+    /// Similar to [`UntypedActorRef::ask`], but allows specifying a timeout for the operation.
     /// The message is sent to the actor's mailbox, and this method will wait for
     /// the actor to process the message and send a reply, or timeout if the reply
     /// doesn't arrive within the specified duration.
@@ -201,6 +203,7 @@ impl UntypedActorRef {
     ///
     /// The actor will stop processing messages and shut down as soon as possible.
     /// The actor's final result will indicate it was killed.
+    /// This will trigger the actor's [`on_stop`](crate::Actor::on_stop) method with `killed = true`.
     pub fn kill(&self) -> Result<()> {
         debug!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.identity);
         // Use the dedicated terminate_sender with try_send
@@ -230,6 +233,7 @@ impl UntypedActorRef {
     /// The actor will process all messages currently in its mailbox and then stop.
     /// New messages sent after this call might be ignored or fail.
     /// The actor's final result will indicate normal completion.
+    /// This will trigger the actor's [`on_stop`](crate::Actor::on_stop) method with `killed = false`.
     pub async fn stop(&self) -> Result<()> {
         debug!("Sending StopGracefully message to actor {}", self.identity);
         match self.sender.send(MailboxMessage::StopGracefully).await {
@@ -257,7 +261,7 @@ impl UntypedActorRef {
     ///
     /// ## Example
     ///
-    /// The following example illustrates using `tell_blocking`. A similar approach applies to `ask_blocking`.
+    /// The following example illustrates using [`UntypedActorRef::tell_blocking`]. A similar approach applies to [`UntypedActorRef::ask_blocking`].
     ///
     /// ```rust,no_run
     /// # use rsactor::{ActorRef, Result, Actor, Message};
@@ -290,7 +294,7 @@ impl UntypedActorRef {
     /// # }
     /// ```
     ///
-    /// For more comprehensive examples, including `ask_blocking`, refer to
+    /// For more comprehensive examples, including [`UntypedActorRef::ask_blocking`], refer to
     /// `examples/actor_blocking_tasks.rs`.
     pub fn tell_blocking<M>(&self, msg: M, timeout: Option<Duration>) -> Result<()>
     where
@@ -316,7 +320,7 @@ impl UntypedActorRef {
         }
     }
 
-    /// Synchronous version of `ask` that blocks until the reply is received.
+    /// Synchronous version of [`UntypedActorRef::ask`] that blocks until the reply is received.
     ///
     /// The message is sent to the actor's mailbox, and this method will block until
     /// the actor processes the message and sends a reply or the timeout expires.
@@ -389,12 +393,12 @@ impl UntypedActorRef {
 ///
 /// `ActorRef<T>` provides type-safe message passing to actors, ensuring that only
 /// messages that the actor can handle are sent, and that reply types are correctly typed.
-/// It wraps an `UntypedActorRef` and provides compile-time type safety through Rust's
+/// It wraps an [`UntypedActorRef`] and provides compile-time type safety through Rust's
 /// type system and trait bounds.
 ///
 /// ## Type Safety Benefits
 ///
-/// - **Compile-Time Message Validation**: Only messages implementing `Message<M>` for actor `T` are accepted
+/// - **Compile-Time Message Validation**: Only messages implementing [`Message<M>`] for actor `T` are accepted
 /// - **Automatic Reply Type Inference**: Return types are inferred from trait implementations
 /// - **Zero Runtime Overhead**: Type safety is enforced at compile time with no performance cost
 /// - **IDE Support**: Full autocomplete and type checking support
@@ -421,12 +425,12 @@ impl UntypedActorRef {
 /// - **Utility Methods**:
 ///   - [`identity`](ActorRef::identity): Get the unique ID of the actor.
 ///   - [`is_alive`](ActorRef::is_alive): Check if the actor is still running.
-///   - [`untyped_actor_ref`](ActorRef::untyped_actor_ref): Access the underlying `UntypedActorRef`.
+///   - [`untyped_actor_ref`](ActorRef::untyped_actor_ref): Access the underlying [`UntypedActorRef`].
 ///
 /// ## Recommended Usage
 ///
-/// Use `ActorRef<T>` by default for all actor communication. It provides the same functionality
-/// as `UntypedActorRef` but with compile-time guarantees that prevent type-related runtime errors.
+/// Use [`ActorRef<T>`] by default for all actor communication. It provides the same functionality
+/// as [`UntypedActorRef`] but with compile-time guarantees that prevent type-related runtime errors.
 ///
 /// **When to use `ActorRef<T>`**:
 /// - Default choice for actor communication
@@ -478,7 +482,7 @@ impl<T: Actor> ActorRef<T> {
     /// The message is sent to the actor's mailbox for processing.
     /// This method returns immediately.
     ///
-    /// Type safety: Only messages that the actor `T` can handle via `Message<M>` trait are accepted.
+    /// Type safety: Only messages that the actor `T` can handle via [`Message<M>`] trait are accepted.
     #[inline]
     pub async fn tell<M>(&self, msg: M) -> Result<()>
     where
@@ -490,7 +494,7 @@ impl<T: Actor> ActorRef<T> {
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget) with a timeout.
     ///
-    /// Similar to `tell`, but allows specifying a timeout for the send operation.
+    /// Similar to [`ActorRef::tell`], but allows specifying a timeout for the send operation.
     /// The message is sent to the actor's mailbox, and this method will return once
     /// the message is sent or timeout if the send operation doesn't complete
     /// within the specified duration.
@@ -508,7 +512,7 @@ impl<T: Actor> ActorRef<T> {
     /// The message is sent to the actor's mailbox, and this method will wait for
     /// the actor to process the message and send a reply.
     ///
-    /// Type safety: The return type `R` is automatically inferred from the `Message<M>` trait
+    /// Type safety: The return type `R` is automatically inferred from the [`Message<M>`] trait
     /// implementation, ensuring compile-time type safety for replies.
     #[inline]
     pub async fn ask<M>(&self, msg: M) -> Result<T::Reply>
@@ -522,7 +526,7 @@ impl<T: Actor> ActorRef<T> {
 
     /// Sends a message to the actor and awaits a reply with a timeout.
     ///
-    /// Similar to `ask`, but allows specifying a timeout for the operation.
+    /// Similar to [`ActorRef::ask`], but allows specifying a timeout for the operation.
     /// The message is sent to the actor's mailbox, and this method will wait for
     /// the actor to process the message and send a reply, or timeout if the reply
     /// doesn't arrive within the specified duration.
@@ -555,7 +559,7 @@ impl<T: Actor> ActorRef<T> {
         self.untyped_ref.stop().await
     }
 
-    /// Synchronous version of `tell` that blocks until the message is sent.
+    /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
     ///
     /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
     #[inline]
@@ -567,7 +571,7 @@ impl<T: Actor> ActorRef<T> {
         self.untyped_ref.tell_blocking(msg, timeout)
     }
 
-    /// Synchronous version of `ask` that blocks until the reply is received.
+    /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
     ///
     /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
     #[inline]

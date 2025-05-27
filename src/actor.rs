@@ -14,22 +14,22 @@ use log::{info, error, debug, trace};
 ///
 /// # Error Handling
 ///
-/// Actor lifecycle methods (`on_start`, `on_run`, `on_stop`) can return errors. How these errors
+/// Actor lifecycle methods ([`on_start`](Actor::on_start), [`on_run`](Actor::on_run), [`on_stop`](Actor::on_stop)) can return errors. How these errors
 /// are handled depends on when they occur:
 ///
-/// 1. Errors in `on_start`: The actor fails to initialize. The error is captured in
+/// 1. Errors in [`on_start`](Actor::on_start): The actor fails to initialize. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
 ///    [`FailurePhase::OnStart`](crate::FailurePhase::OnStart) and `actor` set to `None`.
 ///
-/// 2. Errors in `on_run`: The actor terminates during runtime. The error is captured in
+/// 2. Errors in [`on_run`](Actor::on_run): The actor terminates during runtime. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
 ///    [`FailurePhase::OnRun`](crate::FailurePhase::OnRun) and `actor` contains the actor instance.
 ///
-/// 3. Errors in `on_stop`: The actor fails during cleanup. The error is captured in
+/// 3. Errors in [`on_stop`](Actor::on_stop): The actor fails during cleanup. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
 ///    [`FailurePhase::OnStop`](crate::FailurePhase::OnStop) and `actor` contains the actor instance.
 ///
-/// When awaiting the completion of an actor, check the [`ActorResult`](crate::ActorResult) to determine
+/// When awaiting the completion of an actor, check the [`ActorResult`] to determine
 /// the outcome and access any errors:
 ///
 /// - Use methods like [`is_failed`](crate::ActorResult::is_failed),
@@ -42,17 +42,19 @@ use log::{info, error, debug, trace};
 ///
 /// Implementors of this trait must also be `Send + 'static`.
 pub trait Actor: Sized + Send + 'static {
-    /// Type for arguments passed to `on_start` for actor initialization.
+    /// Type for arguments passed to [`on_start`](Actor::on_start) for actor initialization.
     /// This type provides the necessary data to create an instance of the actor.
     type Args: Send;
     /// The error type that can be returned by the actor\'s lifecycle methods.
+    /// Used in [`on_start`](Actor::on_start), [`on_run`](Actor::on_run), and [`on_stop`](Actor::on_stop).
     type Error: Send + Debug;
 
     /// Called when the actor is started. This is required for actor creation.
     ///
     /// This method is the initialization point for an actor and a fundamental part of the actor model design.
     /// Unlike traditional object construction, the actor's instance is created within this asynchronous method,
-    /// allowing for complex initialization that may require awaiting resources.
+    /// allowing for complex initialization that may require awaiting resources. This method is called by
+    /// [`spawn`](crate::spawn) or [`spawn_with_mailbox_capacity`](crate::spawn_with_mailbox_capacity).
     ///
     /// # Actor State Initialization
     ///
@@ -109,19 +111,24 @@ pub trait Actor: Sized + Send + 'static {
     /// // Main function showing the basic lifecycle
     /// #[tokio::main]
     /// async fn main() -> Result<()> {
-    ///     // Spawn the actor with a name argument
+    ///     // Spawn the actor with a name argument using the [`spawn`](crate::spawn) function
     ///     let (actor_ref, join_handle) = spawn::<SimpleActor>("MyActor".to_string());
     ///
-    ///     // Gracefully stop the actor
+    ///     // Gracefully stop the actor using [`stop`](crate::actor_ref::ActorRef::stop)
     ///     actor_ref.stop().await?;
     ///
     ///     // Wait for the actor to complete and get its final state
+    ///     // The JoinHandle returns an [`ActorResult`](crate::ActorResult) enum
     ///     match join_handle.await? {
     ///         ActorResult::Completed { actor, killed } => {
     ///             println!("Actor '{}' completed. Killed: {}", actor.name, killed);
+    ///             // The `actor` field contains the final actor instance
+    ///             // The `killed` flag indicates whether the actor was stopped or killed
     ///         }
     ///         ActorResult::Failed { error, phase, .. } => {
     ///             println!("Actor failed in phase {:?}: {}", phase, error);
+    ///             // The `phase` field indicates which lifecycle method caused the failure
+    ///             // See [`FailurePhase`](crate::FailurePhase) enum for possible values
     ///         }
     ///     }
     ///
@@ -132,7 +139,7 @@ pub trait Actor: Sized + Send + 'static {
 
     /// The primary task execution logic for the actor, designed for iterative execution.
     ///
-    /// The main processing loop for the actor. This method is called repeatedly after `on_start` completes.
+    /// The main processing loop for the actor. This method is called repeatedly after [`on_start`](Actor::on_start) completes.
     /// If this method returns `Ok(())`, it will be called again, allowing the actor to process
     /// ongoing or periodic tasks. The actor continues running as long as `on_run` returns `Ok(())`.
     /// To stop the actor normally from within `on_run`, call [`actor_ref.stop()`](crate::actor_ref::ActorRef::stop)
@@ -203,7 +210,7 @@ pub trait Actor: Sized + Send + 'static {
     ///        self.ticks_done += 1;
     ///
     ///        // If your task is computationally intensive, ensure you still have an await
-    ///        // or offload it (e.g., using tokio::task::spawn_blocking).
+    ///        // or offload it (e.g., using [`tokio::task::spawn_blocking`](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html)).
     ///        if self.heavy_computation_needed() {
     ///            // Example: Offload heavy work if truly blocking
     ///            // let _ = tokio::task::spawn_blocking(|| { /* heavy work */ }).await?;
@@ -265,6 +272,7 @@ pub trait Actor: Sized + Send + 'static {
     /// to [`ActorRef::stop`](crate::actor_ref::ActorRef::stop) (graceful termination) or
     /// [`ActorRef::kill`](crate::actor_ref::ActorRef::kill) (immediate termination). It is not called
     /// if the actor stops due to other errors that occurred during message processing or in [`on_run`](Actor::on_run).
+    /// The result of this method affects the final [`ActorResult`](crate::ActorResult) returned when awaiting the join handle.
     ///
     /// The `killed` parameter indicates how the actor is being stopped:
     /// - `killed = false`: The actor is stopping gracefully (via `stop()` call)
@@ -296,6 +304,12 @@ pub trait Actor: Sized + Send + 'static {
     /// }
     /// # }
     /// ```
+    ///
+    /// The [`identity`](crate::actor_ref::ActorRef::identity) method provides a unique identifier for the actor.
+    ///
+    /// For a complete lifecycle example, see the example in [`on_start`](Actor::on_start) that demonstrates
+    /// actor creation with [`spawn`](crate::spawn), graceful termination with [`stop`](crate::actor_ref::ActorRef::stop),
+    /// and handling the [`ActorResult`](crate::ActorResult) from the join handle.
     #[allow(unused_variables)]
     fn on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // Default implementation does nothing on stop.
@@ -307,30 +321,36 @@ pub trait Actor: Sized + Send + 'static {
 /// A trait for messages that an actor can handle, defining the reply type.
 ///
 /// An actor struct implements this trait for each specific message type it can process.
+/// Messages are sent to actors using methods like [`tell`](crate::actor_ref::ActorRef::tell),
+/// [`ask`](crate::actor_ref::ActorRef::ask), or their variants.
 pub trait Message<T: Send + 'static>: Actor {
     /// The type of the reply that will be sent back to the caller.
     type Reply: Send + 'static;
 
     /// Handles the incoming message and produces a reply.
     ///
-    /// The `actor_ref` parameter is a reference to the actor\'s own `ActorRef`.
-    /// This is an asynchronous method where the actor\'s business logic for
+    /// The `actor_ref` parameter is a reference to the actor's own [`ActorRef`].
+    /// This is an asynchronous method where the actor's business logic for
     /// processing the message `T` resides.
+    ///
+    /// This method is called by the actor system when a message is received via
+    /// [`tell`](crate::actor_ref::ActorRef::tell), [`ask`](crate::actor_ref::ActorRef::ask),
+    /// or their variants.
     fn handle(&mut self, msg: T, actor_ref: &ActorRef<Self>) -> impl Future<Output = Self::Reply> + Send;
 }
 
-/// A trait for type-erased message handling within the actor\'s `Runtime`.
+/// A trait for type-erased message handling within the actor system.
 ///
-/// This trait is typically implemented automatically by the `impl_message_handler!` macro.
-/// It allows the `Runtime` to handle messages of different types by downcasting
-/// them to their concrete types before passing them to the actor\'s specific `Message::handle`
-/// implementation.
+/// This trait is typically implemented automatically by the [`impl_message_handler!`](crate::impl_message_handler) macro.
+/// It enables the actor system to handle messages of different types by downcasting
+/// them to their concrete types before passing them to the actor's specific [`Message::handle`](crate::actor::Message::handle)
+/// implementation. This trait powers the message processing capabilities of actors.
 pub trait MessageHandler: Actor + Send + 'static {
     /// Handles a type-erased message.
     ///
     /// The implementation should attempt to downcast `msg_any` to one of the
     /// message types the actor supports and then call the corresponding
-    /// `Message::handle` method.
+    /// [`Message::handle`](crate::actor::Message::handle) method.
     fn handle(
         &mut self,
         msg_any: Box<dyn Any + Send>,
