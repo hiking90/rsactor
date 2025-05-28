@@ -106,12 +106,21 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Running the Example
+## Examples
 
-Run the example from `examples/basic.rs`:
+rsActor comes with several examples that demonstrate various features and use cases:
 
+* **[basic](./examples/basic.rs)** - Simple counter actor demonstrating core actor model concepts
+* **[actor_with_timeout](./examples/actor_with_timeout.rs)** - Using timeouts for actor communication
+* **[actor_async_worker](./examples/actor_async_worker.rs)** - Inter-actor communication with async tasks
+* **[actor_task](./examples/actor_task.rs)** - Background task communication with actors
+* **[actor_blocking_task](./examples/actor_blocking_task.rs)** - Using blocking APIs with actors
+* **[dining_philosophers](./examples/dining_philosophers.rs)** - Classic concurrency problem implementation
+* **[unified_macro_demo](./examples/unified_macro_demo.rs)** - Message handling with macros
+
+Run any example with:
 ```bash
-cargo run --example basic
+cargo run --example <example_name>
 ```
 
 ## Further Information
