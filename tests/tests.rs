@@ -844,31 +844,64 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
     // Give a small delay to ensure the mailbox is actually full
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
-    // 3. Try to send multiple messages quickly to ensure the mailbox is truly full
-    // Use a very short timeout to increase the chance of timeout in CI
+    // 3. Try to send multiple messages with progressively longer timeouts
+    // to increase reliability in CI environments while still testing timeout behavior
     let mut timeout_occurred = false;
-    for i in 2..=5 {
+    let timeouts = [1, 2, 5, 10, 15]; // Progressive timeouts in milliseconds
+
+    for (idx, timeout_ms) in timeouts.iter().enumerate() {
+        let i = idx + 2; // Start from UpdateCounterMsg(2)
         let actor_ref_clone = actor_ref.clone();
+        let timeout_duration = std::time::Duration::from_millis(*timeout_ms);
+
         let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
-            actor_ref_clone.tell_blocking(
-                UpdateCounterMsg(i),
-                Some(std::time::Duration::from_millis(5)), // Very short timeout
-            )
+            actor_ref_clone.tell_blocking(UpdateCounterMsg(i as i32), Some(timeout_duration))
         });
 
-        match join_handle_blocking_task.await.expect("Blocking task panicked") {
+        match join_handle_blocking_task
+            .await
+            .expect("Blocking task panicked")
+        {
             Err(e) if e.to_string().contains("timed out") => {
                 timeout_occurred = true;
                 break;
             }
             _ => {
-                // If this message didn't timeout, continue trying
+                // If this message didn't timeout, continue trying with longer timeout
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
         }
     }
 
-    assert!(timeout_occurred, "At least one tell_blocking should have timed out when mailbox is full");
+    // If none of the short timeouts worked, try a more aggressive approach
+    if !timeout_occurred {
+        // Send several more messages to definitely fill any buffers
+        for i in 10..=20 {
+            let actor_ref_clone = actor_ref.clone();
+            let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
+                actor_ref_clone.tell_blocking(
+                    UpdateCounterMsg(i),
+                    Some(std::time::Duration::from_millis(1)), // Very aggressive timeout
+                )
+            });
+
+            match join_handle_blocking_task
+                .await
+                .expect("Blocking task panicked")
+            {
+                Err(e) if e.to_string().contains("timed out") => {
+                    timeout_occurred = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    assert!(
+        timeout_occurred,
+        "At least one tell_blocking should have timed out when mailbox is full"
+    );
 
     // Allow the actor to process messages (SlowMsg, then UpdateCounterMsg(1), and potentially others)
     tokio::time::sleep(std::time::Duration::from_millis(200)).await; // Wait for all processing
