@@ -82,6 +82,48 @@ jobs:
             rust: beta
           - os: macos-latest
             rust: beta
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.rust }}-cargo-
+
+      - name: Build
+        run: cargo build --verbose --all-features
+
+      - name: Run tests
+        run: cargo test --verbose --all-features
+
+      - name: Run examples
+        shell: bash
+        run: |
+          if [ -d "examples" ]; then
+            for example in examples/*.rs; do
+              if [ -f "$example" ]; then
+                example_name=$(basename "$example" .rs)
+                echo "Running example: $example_name"
+                cargo run --example "$example_name" || echo "Example $example_name failed or requires interaction"
+              fi
+            done
+          else
+            echo "No examples directory found"
+          fi
 
   # Dedicated MSRV check for clarity
   msrv-check:
@@ -127,49 +169,6 @@ jobs:
             exit 1
           fi
           echo "✓ Cargo.toml rust-version matches MSRV: $MSRV"
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-cargo-
-
-      - name: Build
-        run: cargo build --verbose --all-features
-
-      - name: Run tests
-        run: cargo test --verbose --all-features
-
-      - name: Run examples
-        shell: bash
-        run: |
-          if [ -d "examples" ]; then
-            for example in examples/*.rs; do
-              if [ -f "$example" ]; then
-                example_name=$(basename "$example" .rs)
-                echo "Running example: $example_name"
-                cargo run --example "$example_name" || echo "Example $example_name failed or requires interaction"
-              fi
-            done
-          else
-            echo "No examples directory found"
-          fi
 
   # Documentation build
   docs:
