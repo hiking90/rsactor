@@ -1,9 +1,9 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{Actor, ActorRef, Message}; // MODIFIED: Removed ActorStopReason
 use anyhow::Result;
-use log::{info, debug}; // ADDED
+use log::{debug, info}; // ADDED
+use rsactor::{Actor, ActorRef, Message}; // MODIFIED: Removed ActorStopReason
 use tokio::time::{interval, Duration}; // MODIFIED: Added MissedTickBehavior
 
 // Message types
@@ -12,10 +12,10 @@ struct Decrement; // Message to decrement the actor's counter
 
 // Define the actor struct
 struct MyActor {
-    count: u32, // Internal state of the actor
-    start_up: std::time::Instant, // Optional field to track the start time
+    count: u32,                        // Internal state of the actor
+    start_up: std::time::Instant,      // Optional field to track the start time
     tick_300ms: tokio::time::Interval, // Interval for 300ms ticks
-    tick_1s: tokio::time::Interval, // Interval for 1s ticks
+    tick_1s: tokio::time::Interval,    // Interval for 1s ticks
 }
 
 // Implement the Actor trait for MyActor
@@ -127,7 +127,10 @@ async fn main() -> Result<()> {
 
     // Signal the actor to stop gracefully.
     // The actor will process any remaining messages in its mailbox before stopping.
-    println!("Sending StopGracefully message to actor {}.", actor_ref.identity());
+    println!(
+        "Sending StopGracefully message to actor {}.",
+        actor_ref.identity()
+    );
     actor_ref.stop().await?; // Corrected method name
 
     // Wait for the actor's task to complete.
@@ -146,7 +149,12 @@ async fn main() -> Result<()> {
                 killed
             );
         }
-        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+        rsactor::ActorResult::Failed {
+            actor,
+            error,
+            phase,
+            killed,
+        } => {
             println!(
                 "Actor {} stop failed: {}. Phase: {}, Killed: {}. Final count: {}",
                 actor_ref.identity(),

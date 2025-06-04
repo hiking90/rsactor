@@ -1,4 +1,4 @@
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
 
 // Demo of non-generic actor (original syntax)
 #[derive(Debug)]

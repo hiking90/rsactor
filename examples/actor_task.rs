@@ -8,9 +8,9 @@
 //! 2. Send data from the actor to the background task using mpsc::channel
 //! 3. Send data from the background task back to the actor using actor messages
 
-use rsactor::{Actor, ActorRef, Message};
 use anyhow::Result;
-use log::{info, debug};
+use log::{debug, info};
+use rsactor::{Actor, ActorRef, Message};
 use std::time::Duration;
 
 // Define message types for our actor
@@ -55,7 +55,10 @@ impl Actor for DataProcessorActor {
     type Error = anyhow::Error;
 
     async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        info!("DataProcessorActor (id: {}) starting...", actor_ref.identity());
+        info!(
+            "DataProcessorActor (id: {}) starting...",
+            actor_ref.identity()
+        );
 
         let mut actor = Self {
             factor: 1.0,
@@ -89,8 +92,7 @@ impl Actor for DataProcessorActor {
 
             debug!(
                 "Generated data: original={:.2}, processed={:.2}",
-                raw_value,
-                processed_value
+                raw_value, processed_value
             );
         }
     }
@@ -112,7 +114,10 @@ impl Message<SetFactor> for DataProcessorActor {
     async fn handle(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> Self::Reply {
         let old_factor = self.factor;
         self.factor = msg.0;
-        info!("Changed factor from {:.2} to {:.2}", old_factor, self.factor);
+        info!(
+            "Changed factor from {:.2} to {:.2}",
+            old_factor, self.factor
+        );
         self.factor
     }
 }
@@ -153,7 +158,10 @@ impl Message<SendTaskCommand> for DataProcessorActor {
 }
 
 // Implement the message handler trait for our actor
-rsactor::impl_message_handler!(DataProcessorActor, [GetState, SetFactor, ProcessedData, SendTaskCommand]);
+rsactor::impl_message_handler!(
+    DataProcessorActor,
+    [GetState, SetFactor, ProcessedData, SendTaskCommand]
+);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -171,9 +179,12 @@ async fn main() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Get the current state
-    let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) = actor_ref.ask(GetState).await?;
-    println!("Current state: factor={:.2}, latest_value={:?}",
-             factor, latest_value);
+    let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
+        actor_ref.ask(GetState).await?;
+    println!(
+        "Current state: factor={:.2}, latest_value={:?}",
+        factor, latest_value
+    );
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());
@@ -188,9 +199,11 @@ async fn main() -> Result<()> {
     println!("Changing the task's data generation interval...");
 
     // Now we can send our command via actor messaging
-    let command_result = actor_ref.ask(SendTaskCommand(
-        TaskCommand::ChangeInterval(Duration::from_millis(200))
-    )).await?;
+    let command_result = actor_ref
+        .ask(SendTaskCommand(TaskCommand::ChangeInterval(
+            Duration::from_millis(200),
+        )))
+        .await?;
 
     if command_result {
         println!("Successfully changed task interval");
@@ -202,9 +215,12 @@ async fn main() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Get the updated state
-    let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) = actor_ref.ask(GetState).await?;
-    println!("Updated state: factor={:.2}, latest_value={:?}",
-             factor, latest_value);
+    let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
+        actor_ref.ask(GetState).await?;
+    println!(
+        "Updated state: factor={:.2}, latest_value={:?}",
+        factor, latest_value
+    );
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());
@@ -220,14 +236,23 @@ async fn main() -> Result<()> {
     match result {
         rsactor::ActorResult::Completed { actor, killed } => {
             println!("Actor completed successfully. Killed: {}", killed);
-            println!("Final state: factor={:.2}, latest_value={:?}",
-                     actor.factor, actor.latest_value);
+            println!(
+                "Final state: factor={:.2}, latest_value={:?}",
+                actor.factor, actor.latest_value
+            );
         }
-        rsactor::ActorResult::Failed { actor, error, killed, phase} => {
+        rsactor::ActorResult::Failed {
+            actor,
+            error,
+            killed,
+            phase,
+        } => {
             println!("Actor stop failed: {error}. Phase: {phase}, Killed: {killed}");
             if let Some(actor) = actor {
-                println!("Final state: factor={:.2}, latest_value={:?}",
-                         actor.factor, actor.latest_value);
+                println!(
+                    "Final state: factor={:.2}, latest_value={:?}",
+                    actor.factor, actor.latest_value
+                );
             }
         }
     }

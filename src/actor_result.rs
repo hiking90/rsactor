@@ -87,11 +87,14 @@ impl<T: Actor> From<ActorResult<T>> for (Option<T>, Option<T::Error>) {
     fn from(result: ActorResult<T>) -> Self {
         match result {
             ActorResult::Completed { actor, .. } => (Some(actor), None),
-            ActorResult::Failed { actor, error: cause, .. } => (actor, Some(cause)),
+            ActorResult::Failed {
+                actor,
+                error: cause,
+                ..
+            } => (actor, Some(cause)),
         }
     }
 }
-
 
 impl<T: Actor> ActorResult<T> {
     /// Returns `true` if the actor completed successfully.
@@ -108,7 +111,10 @@ impl<T: Actor> ActorResult<T> {
     /// regardless of whether it completed successfully or failed. Both `ActorResult::Completed`
     /// and `ActorResult::Failed` can have `killed: true`.
     pub fn was_killed(&self) -> bool {
-        matches!(self, ActorResult::Completed { killed: true, .. } | ActorResult::Failed { killed: true, .. })
+        matches!(
+            self,
+            ActorResult::Completed { killed: true, .. } | ActorResult::Failed { killed: true, .. }
+        )
     }
 
     /// Returns `true` if the actor stopped normally.
@@ -124,7 +130,13 @@ impl<T: Actor> ActorResult<T> {
     /// This indicates that the actor failed during the [`on_start`](crate::Actor::on_start) lifecycle phase,
     /// which means it couldn't initialize properly.
     pub fn is_startup_failed(&self) -> bool {
-        matches!(self, ActorResult::Failed { phase: FailurePhase::OnStart, .. })
+        matches!(
+            self,
+            ActorResult::Failed {
+                phase: FailurePhase::OnStart,
+                ..
+            }
+        )
     }
 
     /// Returns `true` if the actor failed during runtime.
@@ -132,7 +144,13 @@ impl<T: Actor> ActorResult<T> {
     /// This indicates that the actor started successfully but encountered an error
     /// during its normal operation in the [`on_run`](crate::Actor::on_run) lifecycle phase.
     pub fn is_runtime_failed(&self) -> bool {
-        matches!(self, ActorResult::Failed { phase: FailurePhase::OnRun, .. })
+        matches!(
+            self,
+            ActorResult::Failed {
+                phase: FailurePhase::OnRun,
+                ..
+            }
+        )
     }
 
     /// Returns `true` if the actor failed during the stop phase.
@@ -140,7 +158,13 @@ impl<T: Actor> ActorResult<T> {
     /// This indicates that the actor encountered an error while trying to shut down
     /// in the [`on_stop`](crate::Actor::on_stop) lifecycle phase.
     pub fn is_stop_failed(&self) -> bool {
-        matches!(self, ActorResult::Failed { phase: FailurePhase::OnStop, .. })
+        matches!(
+            self,
+            ActorResult::Failed {
+                phase: FailurePhase::OnStop,
+                ..
+            }
+        )
     }
 
     /// Returns the actor instance if available, regardless of the result type.

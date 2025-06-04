@@ -1,8 +1,8 @@
 // An example demonstrating how Actor A can request work from Actor B,
 // which processes the work in a spawned async task and sends the results back to Actor A
 
-use rsactor::{Actor, ActorRef, Message};
 use anyhow::Result;
+use rsactor::{Actor, ActorRef, Message};
 use tokio::time::Duration;
 
 // -------------------------------------------------------------------
@@ -18,7 +18,10 @@ impl Actor for RequesterActor {
     type Args = ActorRef<WorkerActor>;
     type Error = anyhow::Error;
 
-    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+    async fn on_start(
+        args: Self::Args,
+        _actor_ref: &ActorRef<Self>,
+    ) -> std::result::Result<Self, Self::Error> {
         println!("RequesterActor started");
         Ok(RequesterActor {
             worker_ref: args,
@@ -37,17 +40,23 @@ impl Message<RequestWork> for RequesterActor {
     type Reply = ();
 
     async fn handle(&mut self, msg: RequestWork, actor_ref: &ActorRef<Self>) -> Self::Reply {
-        println!("RequesterActor sending work request for task {}", msg.task_id);
+        println!(
+            "RequesterActor sending work request for task {}",
+            msg.task_id
+        );
 
         // Send request to the worker actor
         let requester = actor_ref.clone();
 
         // Request the worker to process our task
-        self.worker_ref.tell(ProcessTask {
-            task_id: msg.task_id,
-            data: msg.data,
-            requester,
-        }).await.expect("Failed to send task to worker");
+        self.worker_ref
+            .tell(ProcessTask {
+                task_id: msg.task_id,
+                data: msg.data,
+                requester,
+            })
+            .await
+            .expect("Failed to send task to worker");
     }
 }
 
@@ -61,7 +70,10 @@ impl Message<WorkCompleted> for RequesterActor {
     type Reply = ();
 
     async fn handle(&mut self, msg: WorkCompleted, _actor_ref: &ActorRef<Self>) -> Self::Reply {
-        println!("RequesterActor received result for task {}: {}", msg.task_id, msg.result);
+        println!(
+            "RequesterActor received result for task {}: {}",
+            msg.task_id, msg.result
+        );
         self.received_results.push(msg.result);
     }
 }
@@ -90,7 +102,10 @@ impl Actor for WorkerActor {
     type Args = ();
     type Error = anyhow::Error;
 
-    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+    async fn on_start(
+        _args: Self::Args,
+        _actor_ref: &ActorRef<Self>,
+    ) -> std::result::Result<Self, Self::Error> {
         println!("WorkerActor started");
         Ok(WorkerActor)
     }
@@ -117,12 +132,17 @@ impl Message<ProcessTask> for WorkerActor {
         tokio::spawn(async move {
             // Simulate some processing time
             let processing_time = (task_id % 3 + 1) as u64;
-            println!("Processing task {} will take {} seconds", task_id, processing_time);
+            println!(
+                "Processing task {} will take {} seconds",
+                task_id, processing_time
+            );
             tokio::time::sleep(Duration::from_secs(processing_time)).await;
 
             // Generate a result
-            let result = format!("Result of task {} with data '{}' (took {}s)",
-                task_id, data, processing_time);
+            let result = format!(
+                "Result of task {} with data '{}' (took {}s)",
+                task_id, data, processing_time
+            );
 
             // Send the result back to the requester
             match requester.tell(WorkCompleted { task_id, result }).await {
@@ -147,10 +167,12 @@ async fn main() -> Result<()> {
 
     // Send multiple work requests
     for i in 1..=5 {
-        requester_ref.tell(RequestWork {
-            task_id: i,
-            data: format!("Task data {}", i),
-        }).await?;
+        requester_ref
+            .tell(RequestWork {
+                task_id: i,
+                data: format!("Task data {}", i),
+            })
+            .await?;
     }
 
     // Wait a bit for all tasks to complete

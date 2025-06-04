@@ -1,12 +1,12 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
 use anyhow::Result;
+use rand::Rng;
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::sleep;
-use rand::Rng;
 
 const NUM_PHILOSOPHERS: usize = 5;
 const SIMULATION_TIME_MS: u64 = 5000; // 5 seconds
@@ -23,7 +23,7 @@ enum ForkSide {
 /// Message from Philosopher to Table to register.
 #[derive(Debug, Clone)] // Clone needed if we were to send it multiple times, not strictly here.
 struct RegisterPhilosopher {
-    logical_id: usize, // The 0..N-1 ID of the philosopher
+    logical_id: usize,                      // The 0..N-1 ID of the philosopher
     philosopher_ref: ActorRef<Philosopher>, // Reference to the Philosopher actor
 }
 
@@ -86,12 +86,18 @@ impl Actor for Philosopher {
             philosopher_ref: actor_ref.clone(),
         };
         if let Err(e) = table_ref.tell(register_msg).await {
-            eprintln!("Philosopher {} ({}): Failed to send registration to table: {:?}", id, name, e);
+            eprintln!(
+                "Philosopher {} ({}): Failed to send registration to table: {:?}",
+                id, name, e
+            );
         }
 
         // Start the initial thinking cycle
         if let Err(e) = actor_ref.tell(StartThinking).await {
-            eprintln!("Philosopher {} ({}): Failed to send StartThinking to self: {:?}", id, name, e);
+            eprintln!(
+                "Philosopher {} ({}): Failed to send StartThinking to self: {:?}",
+                id, name, e
+            );
         }
         Ok(philosopher)
     }
@@ -118,64 +124,113 @@ impl Message<StartThinking> for Philosopher {
             eprintln!("Philosopher {} ({}) was in inconsistent fork state before thinking. Releasing all.", self.id, self.name);
             // If holding the left fork, send a message to the table to release it.
             if self.has_left_fork {
-                let release_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Left };
+                let release_msg = ReleaseFork {
+                    logical_id: self.id,
+                    side: ForkSide::Left,
+                };
                 if let Err(e) = self.table_ref.tell(release_msg).await {
-                    eprintln!("Philosopher {} ({}): Error releasing left fork (cleanup): {:?}", self.id, self.name, e);
+                    eprintln!(
+                        "Philosopher {} ({}): Error releasing left fork (cleanup): {:?}",
+                        self.id, self.name, e
+                    );
                 }
                 self.has_left_fork = false;
             }
             // If holding the right fork, send a message to the table to release it.
             if self.has_right_fork {
-                let release_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Right };
+                let release_msg = ReleaseFork {
+                    logical_id: self.id,
+                    side: ForkSide::Right,
+                };
                 if let Err(e) = self.table_ref.tell(release_msg).await {
-                     eprintln!("Philosopher {} ({}): Error releasing right fork (cleanup): {:?}", self.id, self.name, e);
+                    eprintln!(
+                        "Philosopher {} ({}): Error releasing right fork (cleanup): {:?}",
+                        self.id, self.name, e
+                    );
                 }
                 self.has_right_fork = false;
             }
         }
 
         // Attempt to acquire the Left Fork by sending a request to the Table actor.
-        println!("Philosopher {} ({}) attempts to acquire Left fork.", self.id, self.name);
-        let req_left_fork_msg = RequestFork { logical_id: self.id, side: ForkSide::Left };
+        println!(
+            "Philosopher {} ({}) attempts to acquire Left fork.",
+            self.id, self.name
+        );
+        let req_left_fork_msg = RequestFork {
+            logical_id: self.id,
+            side: ForkSide::Left,
+        };
         // The 'ask' pattern is used here to wait for a reply from the Table actor
         // indicating whether the fork was successfully acquired.
         match self.table_ref.ask(req_left_fork_msg).await {
-            Ok(true) => { // Successfully acquired the left fork.
+            Ok(true) => {
+                // Successfully acquired the left fork.
                 self.has_left_fork = true;
-                println!("Philosopher {} ({}) acquired Left fork. Attempting Right fork.", self.id, self.name);
+                println!(
+                    "Philosopher {} ({}) acquired Left fork. Attempting Right fork.",
+                    self.id, self.name
+                );
 
                 // Now, attempt to acquire the Right Fork.
-                let req_right_fork_msg = RequestFork { logical_id: self.id, side: ForkSide::Right };
+                let req_right_fork_msg = RequestFork {
+                    logical_id: self.id,
+                    side: ForkSide::Right,
+                };
                 match self.table_ref.ask(req_right_fork_msg).await {
-                    Ok(true) => { // Successfully acquired the right fork as well.
+                    Ok(true) => {
+                        // Successfully acquired the right fork as well.
                         self.has_right_fork = true;
-                        println!("Philosopher {} ({}) acquired both Left and Right forks.", self.id, self.name);
+                        println!(
+                            "Philosopher {} ({}) acquired both Left and Right forks.",
+                            self.id, self.name
+                        );
                         // Both forks acquired, tell self to start eating.
                         if let Err(e) = actor_ref.tell(StartEating).await {
-                            eprintln!("Philosopher {} ({}): Failed to send StartEating to self: {:?}", self.id, self.name, e);
+                            eprintln!(
+                                "Philosopher {} ({}): Failed to send StartEating to self: {:?}",
+                                self.id, self.name, e
+                            );
                             // If sending StartEating fails, it's crucial to release the forks
                             // to prevent deadlock and then try thinking again.
                             self.release_both_forks().await;
                             self.think_again(actor_ref).await;
                         }
                     }
-                    Ok(false) => { // Failed to acquire the right fork.
-                        println!("Philosopher {} ({}) failed to get Right fork. Releasing Left fork.", self.id, self.name);
+                    Ok(false) => {
+                        // Failed to acquire the right fork.
+                        println!(
+                            "Philosopher {} ({}) failed to get Right fork. Releasing Left fork.",
+                            self.id, self.name
+                        );
                         // Must release the already acquired left fork before thinking again.
-                        let release_left_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Left };
+                        let release_left_msg = ReleaseFork {
+                            logical_id: self.id,
+                            side: ForkSide::Left,
+                        };
                         if let Err(e) = self.table_ref.tell(release_left_msg).await {
-                             eprintln!("Philosopher {} ({}): Error releasing left fork: {:?}", self.id, self.name, e);
+                            eprintln!(
+                                "Philosopher {} ({}): Error releasing left fork: {:?}",
+                                self.id, self.name, e
+                            );
                         }
                         self.has_left_fork = false;
                         // Go back to thinking.
                         self.think_again(actor_ref).await;
                     }
-                    Err(e) => { // An error occurred while trying to acquire the right fork.
+                    Err(e) => {
+                        // An error occurred while trying to acquire the right fork.
                         eprintln!("Philosopher {} ({}) error getting Right fork: {:?}. Releasing Left fork.", self.id, self.name, e);
                         // Must release the already acquired left fork.
-                        let release_left_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Left };
+                        let release_left_msg = ReleaseFork {
+                            logical_id: self.id,
+                            side: ForkSide::Left,
+                        };
                         if let Err(e) = self.table_ref.tell(release_left_msg).await {
-                            eprintln!("Philosopher {} ({}): Error releasing left fork (on error): {:?}", self.id, self.name, e);
+                            eprintln!(
+                                "Philosopher {} ({}): Error releasing left fork (on error): {:?}",
+                                self.id, self.name, e
+                            );
                         }
                         self.has_left_fork = false;
                         // Go back to thinking.
@@ -183,13 +238,21 @@ impl Message<StartThinking> for Philosopher {
                     }
                 }
             }
-            Ok(false) => { // Failed to acquire the left fork.
-                println!("Philosopher {} ({}) failed to get Left fork. Thinking again.", self.id, self.name);
+            Ok(false) => {
+                // Failed to acquire the left fork.
+                println!(
+                    "Philosopher {} ({}) failed to get Left fork. Thinking again.",
+                    self.id, self.name
+                );
                 // No forks acquired, so just go back to thinking.
                 self.think_again(actor_ref).await;
             }
-            Err(e) => { // An error occurred while trying to acquire the left fork.
-                eprintln!("Philosopher {} ({}) error getting Left fork: {:?}. Thinking again.", self.id, self.name, e);
+            Err(e) => {
+                // An error occurred while trying to acquire the left fork.
+                eprintln!(
+                    "Philosopher {} ({}) error getting Left fork: {:?}. Thinking again.",
+                    self.id, self.name, e
+                );
                 // Go back to thinking.
                 self.think_again(actor_ref).await;
             }
@@ -200,16 +263,28 @@ impl Message<StartThinking> for Philosopher {
 impl Philosopher {
     async fn release_both_forks(&mut self) {
         if self.has_left_fork {
-            let release_left_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Left };
+            let release_left_msg = ReleaseFork {
+                logical_id: self.id,
+                side: ForkSide::Left,
+            };
             if let Err(e) = self.table_ref.tell(release_left_msg).await {
-                eprintln!("Philosopher {} ({}): Error releasing left fork: {:?}", self.id, self.name, e);
+                eprintln!(
+                    "Philosopher {} ({}): Error releasing left fork: {:?}",
+                    self.id, self.name, e
+                );
             }
             self.has_left_fork = false;
         }
         if self.has_right_fork {
-            let release_right_msg = ReleaseFork { logical_id: self.id, side: ForkSide::Right };
+            let release_right_msg = ReleaseFork {
+                logical_id: self.id,
+                side: ForkSide::Right,
+            };
             if let Err(e) = self.table_ref.tell(release_right_msg).await {
-                eprintln!("Philosopher {} ({}): Error releasing right fork: {:?}", self.id, self.name, e);
+                eprintln!(
+                    "Philosopher {} ({}): Error releasing right fork: {:?}",
+                    self.id, self.name, e
+                );
             }
             self.has_right_fork = false;
         }
@@ -217,11 +292,13 @@ impl Philosopher {
 
     async fn think_again(&self, actor_ref: &ActorRef<Self>) {
         if let Err(e) = actor_ref.tell(StartThinking).await {
-            eprintln!("Philosopher {} ({}): Failed to send StartThinking to self: {:?}", self.id, self.name, e);
+            eprintln!(
+                "Philosopher {} ({}): Failed to send StartThinking to self: {:?}",
+                self.id, self.name, e
+            );
         }
     }
 }
-
 
 impl Message<StartEating> for Philosopher {
     type Reply = (); // Fire-and-forget
@@ -237,12 +314,18 @@ impl Message<StartEating> for Philosopher {
         }
 
         self.eat_count += 1;
-        println!("Philosopher {} ({}) is eating. (Meal #{})", self.id, self.name, self.eat_count);
+        println!(
+            "Philosopher {} ({}) is eating. (Meal #{})",
+            self.id, self.name, self.eat_count
+        );
 
         let eat_duration = rand::rng().random_range(500..1500);
         sleep(Duration::from_millis(eat_duration)).await;
 
-        println!("Philosopher {} ({}) finished eating. Releasing forks.", self.id, self.name);
+        println!(
+            "Philosopher {} ({}) finished eating. Releasing forks.",
+            self.id, self.name
+        );
 
         // Release forks
         self.release_both_forks().await;
@@ -253,7 +336,6 @@ impl Message<StartEating> for Philosopher {
 }
 
 impl_message_handler!(Philosopher, [StartThinking, StartEating]);
-
 
 // --- Table Actor Definition ---
 #[derive(Debug)]
@@ -283,8 +365,13 @@ impl Message<RegisterPhilosopher> for Table {
     type Reply = (); // Fire-and-forget
 
     async fn handle(&mut self, msg: RegisterPhilosopher, _: &ActorRef<Self>) -> Self::Reply {
-        println!("Table: Philosopher {} (Actor ID: {}) registered.", msg.logical_id, msg.philosopher_ref.identity());
-        self.philosophers.insert(msg.logical_id, msg.philosopher_ref);
+        println!(
+            "Table: Philosopher {} (Actor ID: {}) registered.",
+            msg.logical_id,
+            msg.philosopher_ref.identity()
+        );
+        self.philosophers
+            .insert(msg.logical_id, msg.philosopher_ref);
     }
 }
 
@@ -301,16 +388,23 @@ impl Message<RequestFork> for Table {
         };
 
         if fork_idx >= num_forks {
-             eprintln!("Table: Invalid fork index {} requested by Philosopher {} for side {:?}. Num forks: {}", fork_idx, philosopher_id, msg.side, num_forks);
-             return false; // Should not happen with correct logical_id
+            eprintln!("Table: Invalid fork index {} requested by Philosopher {} for side {:?}. Num forks: {}", fork_idx, philosopher_id, msg.side, num_forks);
+            return false; // Should not happen with correct logical_id
         }
 
-        if self.forks[fork_idx] { // Fork is available
+        if self.forks[fork_idx] {
+            // Fork is available
             self.forks[fork_idx] = false; // Mark as taken
-            println!("Table: Granted fork {} ({:?}) to Philosopher {}.", fork_idx, msg.side, philosopher_id);
+            println!(
+                "Table: Granted fork {} ({:?}) to Philosopher {}.",
+                fork_idx, msg.side, philosopher_id
+            );
             true
         } else {
-            println!("Table: Fork {} ({:?}) not available for Philosopher {}.", fork_idx, msg.side, philosopher_id);
+            println!(
+                "Table: Fork {} ({:?}) not available for Philosopher {}.",
+                fork_idx, msg.side, philosopher_id
+            );
             false
         }
     }
@@ -329,28 +423,37 @@ impl Message<ReleaseFork> for Table {
         };
 
         if fork_idx >= num_forks {
-             eprintln!("Table: Invalid fork index {} attempted to release by Philosopher {} for side {:?}. Num forks: {}", fork_idx, philosopher_id, msg.side, num_forks);
-             return; // Should not happen
+            eprintln!("Table: Invalid fork index {} attempted to release by Philosopher {} for side {:?}. Num forks: {}", fork_idx, philosopher_id, msg.side, num_forks);
+            return; // Should not happen
         }
 
-        if !self.forks[fork_idx] { // If fork was indeed taken
+        if !self.forks[fork_idx] {
+            // If fork was indeed taken
             self.forks[fork_idx] = true; // Mark as available
-            println!("Table: Philosopher {} returned fork {} ({:?}).", philosopher_id, fork_idx, msg.side);
+            println!(
+                "Table: Philosopher {} returned fork {} ({:?}).",
+                philosopher_id, fork_idx, msg.side
+            );
         } else {
             // This might happen if a philosopher tries to release a fork it didn't successfully acquire
             // or releases it multiple times.
-            println!("Table: Philosopher {} tried to return fork {} ({:?}) which was already available.", philosopher_id, fork_idx, msg.side);
+            println!(
+                "Table: Philosopher {} tried to return fork {} ({:?}) which was already available.",
+                philosopher_id, fork_idx, msg.side
+            );
         }
     }
 }
 
 impl_message_handler!(Table, [RegisterPhilosopher, RequestFork, ReleaseFork]);
 
-
 // --- Main Function ---
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Starting Dining Philosophers simulation ({} philosophers, {}ms)...", NUM_PHILOSOPHERS, SIMULATION_TIME_MS);
+    println!(
+        "Starting Dining Philosophers simulation ({} philosophers, {}ms)...",
+        NUM_PHILOSOPHERS, SIMULATION_TIME_MS
+    );
 
     // Spawn the Table actor
     let (table_ref, table_join_handle) = spawn::<Table>(NUM_PHILOSOPHERS);
@@ -359,19 +462,38 @@ async fn main() -> Result<()> {
     // Spawn Philosopher actors
     let mut philosopher_refs: Vec<ActorRef<Philosopher>> = Vec::new();
     let mut philosopher_join_handles = Vec::new();
-    let names = ["Socrates", "Plato", "Aristotle", "Descartes", "Kant", "Nietzsche", "Confucius"]; // More names
+    let names = [
+        "Socrates",
+        "Plato",
+        "Aristotle",
+        "Descartes",
+        "Kant",
+        "Nietzsche",
+        "Confucius",
+    ]; // More names
 
     for i in 0..NUM_PHILOSOPHERS {
-        let philosopher_name = if i < names.len() { names[i] } else { "Philosopher" }.to_string();
+        let philosopher_name = if i < names.len() {
+            names[i]
+        } else {
+            "Philosopher"
+        }
+        .to_string();
         let name = format!("{} #{}", philosopher_name, i);
         let (p_ref, p_join) = spawn::<Philosopher>((i, name, table_ref.clone()));
-        println!("Philosopher {} spawned with Actor ID: {}", i, p_ref.identity());
+        println!(
+            "Philosopher {} spawned with Actor ID: {}",
+            i,
+            p_ref.identity()
+        );
         philosopher_refs.push(p_ref);
         philosopher_join_handles.push(p_join);
     }
 
-    println!("All philosophers are at the table. Simulation will run for {}ms.",
-        SIMULATION_TIME_MS);
+    println!(
+        "All philosophers are at the table. Simulation will run for {}ms.",
+        SIMULATION_TIME_MS
+    );
     sleep(Duration::from_millis(SIMULATION_TIME_MS)).await;
     println!("Simulation time ended.");
 
@@ -396,7 +518,10 @@ async fn main() -> Result<()> {
     match table_join_handle.await {
         Ok(result) => match result {
             ActorResult::Completed { actor, .. } => {
-                println!("Table terminated normally. Forks remaining: {:?}", actor.forks);
+                println!(
+                    "Table terminated normally. Forks remaining: {:?}",
+                    actor.forks
+                );
             }
             ActorResult::Failed { error, .. } => {
                 eprintln!("Table failed to start: {:?}", error);
@@ -409,7 +534,10 @@ async fn main() -> Result<()> {
     for result in &results {
         match result {
             Ok(ActorResult::Completed { actor, .. }) => {
-                println!("Philosopher {} ({}): {} meals", actor.id, actor.name, actor.eat_count);
+                println!(
+                    "Philosopher {} ({}): {} meals",
+                    actor.id, actor.name, actor.eat_count
+                );
             }
             Ok(ActorResult::Failed { error, phase, .. }) => {
                 eprintln!("Philosopher failed to phase({phase}): {:?}", error);

@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{Actor, ActorRef, ActorResult, FailurePhase, spawn, Message, impl_message_handler};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, FailurePhase, Message};
 
 // Dummy message for test actors
 #[derive(Debug)]
@@ -76,7 +76,11 @@ impl Actor for FailureTestActor {
         }
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
+    async fn on_stop(
+        &mut self,
+        _actor_ref: &ActorRef<Self>,
+        _killed: bool,
+    ) -> Result<(), Self::Error> {
         if self.id.contains("fail_on_stop") {
             return Err(anyhow::anyhow!("Test failure in on_stop"));
         }
@@ -125,7 +129,10 @@ async fn test_actor_result_completed_stopped_normally() {
 
     // Test to_result conversion
     let result_copy = ActorResult::Completed {
-        actor: TestActor { id: "test_normal".to_string(), value: 42 },
+        actor: TestActor {
+            id: "test_normal".to_string(),
+            value: 42,
+        },
         killed: false,
     };
     let std_result = result_copy.to_result();
@@ -157,7 +164,10 @@ async fn test_actor_result_completed_killed() {
     // Test all methods for Completed { killed: true }
     assert!(result.is_completed(), "Should be completed");
     assert!(result.was_killed(), "Should be killed");
-    assert!(!result.stopped_normally(), "Should not have stopped normally");
+    assert!(
+        !result.stopped_normally(),
+        "Should not have stopped normally"
+    );
     assert!(!result.is_startup_failed(), "Should not be startup failed");
     assert!(!result.is_runtime_failed(), "Should not be runtime failed");
     assert!(!result.is_stop_failed(), "Should not be stop failed");
@@ -191,12 +201,18 @@ async fn test_actor_result_failed_on_start() {
     // Test all methods for Failed { phase: OnStart }
     assert!(!result.is_completed(), "Should not be completed");
     assert!(!result.was_killed(), "Should not be killed");
-    assert!(!result.stopped_normally(), "Should not have stopped normally");
+    assert!(
+        !result.stopped_normally(),
+        "Should not have stopped normally"
+    );
     assert!(result.is_startup_failed(), "Should be startup failed");
     assert!(!result.is_runtime_failed(), "Should not be runtime failed");
     assert!(!result.is_stop_failed(), "Should not be stop failed");
     assert!(result.is_failed(), "Should be failed");
-    assert!(!result.has_actor(), "Should not have actor (failed on_start)");
+    assert!(
+        !result.has_actor(),
+        "Should not have actor (failed on_start)"
+    );
 
     // Test actor access (should be None for on_start failure)
     assert!(result.actor().is_none(), "Should not have actor reference");
@@ -222,7 +238,10 @@ async fn test_actor_result_failed_on_start() {
 
     // Test into_actor and into_error
     let actor_option = result.into_actor();
-    assert!(actor_option.is_none(), "into_actor should return None for on_start failure");
+    assert!(
+        actor_option.is_none(),
+        "into_actor should return None for on_start failure"
+    );
 }
 
 #[tokio::test]
@@ -239,12 +258,18 @@ async fn test_actor_result_failed_on_run() {
     // Test all methods for Failed { phase: OnRun }
     assert!(!result.is_completed(), "Should not be completed");
     assert!(!result.was_killed(), "Should not be killed");
-    assert!(!result.stopped_normally(), "Should not have stopped normally");
+    assert!(
+        !result.stopped_normally(),
+        "Should not have stopped normally"
+    );
     assert!(!result.is_startup_failed(), "Should not be startup failed");
     assert!(result.is_runtime_failed(), "Should be runtime failed");
     assert!(!result.is_stop_failed(), "Should not be stop failed");
     assert!(result.is_failed(), "Should be failed");
-    assert!(result.has_actor(), "Should have actor (failed after on_start)");
+    assert!(
+        result.has_actor(),
+        "Should have actor (failed after on_start)"
+    );
 
     // Test actor access (should be Some for on_run failure)
     assert!(result.actor().is_some(), "Should have actor reference");
@@ -278,7 +303,10 @@ async fn test_actor_result_failed_on_stop_graceful() {
     // Test all methods for Failed { phase: OnStop, killed: false }
     assert!(!result.is_completed(), "Should not be completed");
     assert!(!result.was_killed(), "Should not be killed (graceful stop)");
-    assert!(!result.stopped_normally(), "Should not have stopped normally");
+    assert!(
+        !result.stopped_normally(),
+        "Should not have stopped normally"
+    );
     assert!(!result.is_startup_failed(), "Should not be startup failed");
     assert!(!result.is_runtime_failed(), "Should not be runtime failed");
     assert!(result.is_stop_failed(), "Should be stop failed");
@@ -317,7 +345,10 @@ async fn test_actor_result_failed_on_stop_killed() {
     // Test all methods for Failed { phase: OnStop, killed: true }
     assert!(!result.is_completed(), "Should not be completed");
     assert!(result.was_killed(), "Should be killed");
-    assert!(!result.stopped_normally(), "Should not have stopped normally");
+    assert!(
+        !result.stopped_normally(),
+        "Should not have stopped normally"
+    );
     assert!(!result.is_startup_failed(), "Should not be startup failed");
     assert!(!result.is_runtime_failed(), "Should not be runtime failed");
     assert!(result.is_stop_failed(), "Should be stop failed");
@@ -363,7 +394,10 @@ async fn test_failure_phase_equality() {
 #[tokio::test]
 async fn test_actor_result_from_completed() {
     let result = ActorResult::Completed {
-        actor: TestActor { id: "test".to_string(), value: 123 },
+        actor: TestActor {
+            id: "test".to_string(),
+            value: 123,
+        },
         killed: false,
     };
 
@@ -381,7 +415,10 @@ async fn test_actor_result_from_completed() {
 #[tokio::test]
 async fn test_actor_result_from_failed_with_actor() {
     let result = ActorResult::Failed {
-        actor: Some(TestActor { id: "test".to_string(), value: 456 }),
+        actor: Some(TestActor {
+            id: "test".to_string(),
+            value: 456,
+        }),
         error: anyhow::anyhow!("test error"),
         phase: FailurePhase::OnRun,
         killed: false,
@@ -426,12 +463,18 @@ async fn test_actor_result_from_failed_without_actor() {
 #[tokio::test]
 async fn test_actor_result_into_error_completed() {
     let result = ActorResult::Completed {
-        actor: TestActor { id: "test".to_string(), value: 789 },
+        actor: TestActor {
+            id: "test".to_string(),
+            value: 789,
+        },
         killed: false,
     };
 
     let error_option = result.into_error();
-    assert!(error_option.is_none(), "Completed result should not have error");
+    assert!(
+        error_option.is_none(),
+        "Completed result should not have error"
+    );
 }
 
 #[tokio::test]
@@ -457,11 +500,17 @@ async fn test_actor_result_into_error_failed() {
 async fn test_actor_result_debug_format() {
     // Test that Debug is implemented and doesn't panic
     let completed_result = ActorResult::Completed {
-        actor: TestActor { id: "debug_test".to_string(), value: 42 },
+        actor: TestActor {
+            id: "debug_test".to_string(),
+            value: 42,
+        },
         killed: false,
     };
     let debug_str = format!("{:?}", completed_result);
-    assert!(debug_str.contains("Completed"), "Debug should contain variant name");
+    assert!(
+        debug_str.contains("Completed"),
+        "Debug should contain variant name"
+    );
 
     let failed_result = ActorResult::Failed::<TestActor> {
         actor: None,
@@ -470,7 +519,10 @@ async fn test_actor_result_debug_format() {
         killed: false,
     };
     let debug_str = format!("{:?}", failed_result);
-    assert!(debug_str.contains("Failed"), "Debug should contain variant name");
+    assert!(
+        debug_str.contains("Failed"),
+        "Debug should contain variant name"
+    );
 }
 
 #[tokio::test]
@@ -479,14 +531,20 @@ async fn test_all_boolean_combinations() {
 
     // Completed, not killed
     let result1 = ActorResult::Completed {
-        actor: TestActor { id: "test1".to_string(), value: 1 },
+        actor: TestActor {
+            id: "test1".to_string(),
+            value: 1,
+        },
         killed: false,
     };
     assert!(result1.is_completed() && !result1.was_killed() && result1.stopped_normally());
 
     // Completed, killed
     let result2 = ActorResult::Completed {
-        actor: TestActor { id: "test2".to_string(), value: 2 },
+        actor: TestActor {
+            id: "test2".to_string(),
+            value: 2,
+        },
         killed: true,
     };
     assert!(result2.is_completed() && result2.was_killed() && !result2.stopped_normally());
@@ -502,7 +560,10 @@ async fn test_all_boolean_combinations() {
 
     // Failed OnRun, not killed
     let result4 = ActorResult::Failed {
-        actor: Some(TestActor { id: "test4".to_string(), value: 4 }),
+        actor: Some(TestActor {
+            id: "test4".to_string(),
+            value: 4,
+        }),
         error: anyhow::anyhow!("error4"),
         phase: FailurePhase::OnRun,
         killed: false,
@@ -511,7 +572,10 @@ async fn test_all_boolean_combinations() {
 
     // Failed OnStop, not killed
     let result5 = ActorResult::Failed {
-        actor: Some(TestActor { id: "test5".to_string(), value: 5 }),
+        actor: Some(TestActor {
+            id: "test5".to_string(),
+            value: 5,
+        }),
         error: anyhow::anyhow!("error5"),
         phase: FailurePhase::OnStop,
         killed: false,
@@ -520,7 +584,10 @@ async fn test_all_boolean_combinations() {
 
     // Failed OnStop, killed
     let result6 = ActorResult::Failed {
-        actor: Some(TestActor { id: "test6".to_string(), value: 6 }),
+        actor: Some(TestActor {
+            id: "test6".to_string(),
+            value: 6,
+        }),
         error: anyhow::anyhow!("error6"),
         phase: FailurePhase::OnStop,
         killed: true,
@@ -544,14 +611,25 @@ async fn test_error_runtime_tell_blocking_outside_runtime() {
     let thread_handle = std::thread::spawn(move || {
         // This should trigger Error::Runtime because we're calling tell_blocking
         // from a thread that doesn't have a Tokio runtime handle
-        let result = actor_ref_clone.tell_blocking(NoOpMsg, Some(std::time::Duration::from_millis(100)));
+        let result =
+            actor_ref_clone.tell_blocking(NoOpMsg, Some(std::time::Duration::from_millis(100)));
 
         // Verify that we get Error::Runtime
-        assert!(result.is_err(), "tell_blocking should fail outside runtime context");
+        assert!(
+            result.is_err(),
+            "tell_blocking should fail outside runtime context"
+        );
         if let Err(rsactor::Error::Runtime { identity, details }) = result {
-            assert_eq!(identity, actor_ref_clone.identity(), "Identity should match");
-            assert!(details.contains("Failed to get Tokio runtime handle for tell_blocking"),
-                   "Error should mention runtime handle failure, got: {}", details);
+            assert_eq!(
+                identity,
+                actor_ref_clone.identity(),
+                "Identity should match"
+            );
+            assert!(
+                details.contains("Failed to get Tokio runtime handle for tell_blocking"),
+                "Error should mention runtime handle failure, got: {}",
+                details
+            );
         } else {
             panic!("Expected Error::Runtime, got: {:?}", result);
         }
@@ -579,14 +657,25 @@ async fn test_error_runtime_ask_blocking_outside_runtime() {
     let thread_handle = std::thread::spawn(move || {
         // This should trigger Error::Runtime because we're calling ask_blocking
         // from a thread that doesn't have a Tokio runtime handle
-        let result: Result<(), rsactor::Error> = actor_ref_clone.ask_blocking(NoOpMsg, Some(std::time::Duration::from_millis(100)));
+        let result: Result<(), rsactor::Error> =
+            actor_ref_clone.ask_blocking(NoOpMsg, Some(std::time::Duration::from_millis(100)));
 
         // Verify that we get Error::Runtime
-        assert!(result.is_err(), "ask_blocking should fail outside runtime context");
+        assert!(
+            result.is_err(),
+            "ask_blocking should fail outside runtime context"
+        );
         if let Err(rsactor::Error::Runtime { identity, details }) = result {
-            assert_eq!(identity, actor_ref_clone.identity(), "Identity should match");
-            assert!(details.contains("Failed to get Tokio runtime handle for ask_blocking"),
-                   "Error should mention runtime handle failure, got: {}", details);
+            assert_eq!(
+                identity,
+                actor_ref_clone.identity(),
+                "Identity should match"
+            );
+            assert!(
+                details.contains("Failed to get Tokio runtime handle for ask_blocking"),
+                "Error should mention runtime handle failure, got: {}",
+                details
+            );
         } else {
             panic!("Expected Error::Runtime, got: {:?}", result);
         }
@@ -610,7 +699,16 @@ async fn test_error_runtime_display_format() {
     };
 
     let display_str = format!("{}", error);
-    assert!(display_str.contains("Runtime error in actor"), "Display should mention runtime error");
-    assert!(display_str.contains("TestActor#123"), "Display should contain actor name");
-    assert!(display_str.contains("Test runtime error details"), "Display should contain error details");
+    assert!(
+        display_str.contains("Runtime error in actor"),
+        "Display should mention runtime error"
+    );
+    assert!(
+        display_str.contains("TestActor#123"),
+        "Display should contain actor name"
+    );
+    assert!(
+        display_str.contains("Test runtime error details"),
+        "Display should contain error details"
+    );
 }

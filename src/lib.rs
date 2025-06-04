@@ -147,9 +147,12 @@ mod actor;
 pub use actor::{Actor, Message, MessageHandler};
 
 use std::{
-    any::Any, fmt::Debug, sync::{
-        atomic::{AtomicUsize, Ordering}, OnceLock
-    }
+    any::Any,
+    fmt::Debug,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        OnceLock,
+    },
 };
 
 use tokio::sync::{mpsc, oneshot};
@@ -338,7 +341,8 @@ macro_rules! impl_message_handler {
 /// and control messages like `StopGracefully`. The `Terminate` control signal
 /// is handled through a separate dedicated channel.
 #[derive(Debug)]
-pub(crate) enum MailboxMessage { // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
+pub(crate) enum MailboxMessage {
+    // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
     /// A user-defined message to be processed by the actor.
     Envelope {
         /// The message payload.
@@ -353,7 +357,8 @@ pub(crate) enum MailboxMessage { // This needs to be pub(crate) or pub for actor
 
 /// Represents control signals that can be sent to an actor.
 #[derive(Debug)]
-pub(crate) enum ControlSignal { // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
+pub(crate) enum ControlSignal {
+    // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
     /// A signal for the actor to terminate immediately.
     Terminate,
 }
@@ -389,7 +394,6 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
         })
 }
 
-
 /// Spawns a new actor and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
 ///
 /// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
@@ -398,7 +402,10 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 pub fn spawn<T: Actor + MessageHandler + 'static>(
     args: T::Args,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
-    let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().copied().unwrap_or(DEFAULT_MAILBOX_CAPACITY);
+    let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY
+        .get()
+        .copied()
+        .unwrap_or(DEFAULT_MAILBOX_CAPACITY);
     spawn_with_mailbox_capacity(args, capacity)
 }
 
@@ -425,7 +432,8 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     let untyped_actor_ref = UntypedActorRef::new(
         Identity::new(id, std::any::type_name::<T>()), // Use type name of the actor
         mailbox_tx,
-        terminate_tx); // Pass terminate_tx
+        terminate_tx,
+    ); // Pass terminate_tx
 
     let actor_ref = ActorRef::new(untyped_actor_ref);
 
@@ -433,7 +441,7 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
         args,
         actor_ref.clone(),
         mailbox_rx,
-        terminate_rx
+        terminate_rx,
     ));
 
     (actor_ref, join_handle)

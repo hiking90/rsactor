@@ -1,15 +1,15 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::Identity;
 use crate::error::{Error, Result};
-use crate::{MailboxMessage, MailboxSender, ControlSignal, Actor, Message};
-use std::any::Any;
-use std::time::Duration;
-use std::marker::PhantomData;
-use tokio::sync::{mpsc, oneshot};
+use crate::Identity;
+use crate::{Actor, ControlSignal, MailboxMessage, MailboxSender, Message};
 use log::{debug, warn};
+use std::any::Any;
+use std::marker::PhantomData;
+use std::time::Duration;
 use tokio::runtime::Handle;
+use tokio::sync::{mpsc, oneshot};
 
 /// A type-erased reference to an actor, allowing messages to be sent to it without type safety.
 ///
@@ -68,11 +68,13 @@ pub struct UntypedActorRef {
 impl UntypedActorRef {
     // Creates a new UntypedActorRef with a unique ID and the mailbox sender.
     // This is typically called by the System when an actor is spawned.
-    pub(crate) fn new( // Made pub(crate) as it's likely called from lib.rs spawn function
+    pub(crate) fn new(
+        // Made pub(crate) as it's likely called from lib.rs spawn function
         identity: Identity,
         sender: MailboxSender,
         terminate_sender: mpsc::Sender<ControlSignal>,
-    ) -> Self { // Changed type
+    ) -> Self {
+        // Changed type
         UntypedActorRef {
             identity,
             sender,
@@ -162,7 +164,8 @@ impl UntypedActorRef {
         }
 
         match reply_rx.await {
-            Ok(Ok(reply_any)) => { // recv was Ok, actor reply was Ok
+            Ok(Ok(reply_any)) => {
+                // recv was Ok, actor reply was Ok
                 match reply_any.downcast::<R>() {
                     Ok(reply) => Ok(*reply),
                     Err(_) => Err(Error::Downcast {
@@ -172,7 +175,8 @@ impl UntypedActorRef {
                 }
             }
             Ok(Err(e)) => Err(e), // recv was Ok, actor reply was Err
-            Err(_recv_err) => Err(Error::Receive { // recv itself failed
+            Err(_recv_err) => Err(Error::Receive {
+                // recv itself failed
                 identity: self.identity,
                 details: "Reply channel closed unexpectedly".to_string(),
             }),
@@ -194,7 +198,7 @@ impl UntypedActorRef {
             .await
             .map_err(|_| Error::Timeout {
                 identity: self.identity, // Added missing fields for consistency
-                timeout,                // Added missing fields for consistency
+                timeout,                 // Added missing fields for consistency
                 operation: "ask".to_string(),
             })?
     }
@@ -205,7 +209,10 @@ impl UntypedActorRef {
     /// The actor's final result will indicate it was killed.
     /// This will trigger the actor's [`on_stop`](crate::Actor::on_stop) method with `killed = true`.
     pub fn kill(&self) -> Result<()> {
-        debug!("Attempting to send Terminate message to actor {} via dedicated channel using try_send", self.identity);
+        debug!(
+            "Attempting to send Terminate message to actor {} via dedicated channel using try_send",
+            self.identity
+        );
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
@@ -300,11 +307,12 @@ impl UntypedActorRef {
     where
         M: Send + 'static,
     {
-        let rt = Handle::try_current().map_err(|e| {
-            Error::Runtime {
-                identity: self.identity,
-                details: format!("Failed to get Tokio runtime handle for tell_blocking: {}", e)
-            }
+        let rt = Handle::try_current().map_err(|e| Error::Runtime {
+            identity: self.identity,
+            details: format!(
+                "Failed to get Tokio runtime handle for tell_blocking: {}",
+                e
+            ),
         })?;
 
         match timeout {
@@ -315,7 +323,7 @@ impl UntypedActorRef {
                         timeout: duration,
                         operation: "tell_blocking".to_string(),
                     })? // Flatten Result<Result<()>> to Result<()>
-            },
+            }
             None => rt.block_on(self.tell(msg)),
         }
     }
@@ -368,11 +376,9 @@ impl UntypedActorRef {
         M: Send + 'static,
         R: Send + 'static,
     {
-        let rt = Handle::try_current().map_err(|e| {
-            Error::Runtime {
-                identity: self.identity,
-                details: format!("Failed to get Tokio runtime handle for ask_blocking: {}", e)
-            }
+        let rt = Handle::try_current().map_err(|e| Error::Runtime {
+            identity: self.identity,
+            details: format!("Failed to get Tokio runtime handle for ask_blocking: {}", e),
         })?;
 
         match timeout {
@@ -585,7 +591,7 @@ impl<T: Actor> ActorRef<T> {
     }
 }
 
-impl <T: Actor> Clone for ActorRef<T> {
+impl<T: Actor> Clone for ActorRef<T> {
     #[inline]
     fn clone(&self) -> Self {
         ActorRef {

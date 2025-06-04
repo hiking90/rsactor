@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::actor_ref::ActorRef;
-use crate::{Result, ActorResult, MailboxMessage, ControlSignal, FailurePhase};
+use crate::{ActorResult, ControlSignal, FailurePhase, MailboxMessage, Result};
+use log::{debug, error, info, trace};
 use std::{any::Any, fmt::Debug, future::Future, time::Duration};
 use tokio::sync::mpsc;
-use log::{info, error, debug, trace};
 
 /// Defines the behavior of an actor.
 ///
@@ -135,7 +135,10 @@ pub trait Actor: Sized + Send + 'static {
     ///     Ok(())
     /// }
     /// ```
-    fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
+    fn on_start(
+        args: Self::Args,
+        actor_ref: &ActorRef<Self>,
+    ) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
 
     /// The primary task execution logic for the actor, designed for iterative execution.
     ///
@@ -256,7 +259,10 @@ pub trait Actor: Sized + Send + 'static {
     /// and then returns `Ok(())`, causing it to be called repeatedly until the actor is
     /// explicitly stopped or killed.
     #[allow(unused_variables)]
-    fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+    fn on_run(
+        &mut self,
+        actor_ref: &ActorRef<Self>,
+    ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // This sleep is critical - it creates an await point that allows
         // the Tokio runtime to switch tasks and process incoming messages.
         // Without at least one await point in a loop, message processing would starve.
@@ -311,7 +317,11 @@ pub trait Actor: Sized + Send + 'static {
     /// actor creation with [`spawn`](crate::spawn), graceful termination with [`stop`](crate::actor_ref::ActorRef::stop),
     /// and handling the [`ActorResult`](crate::ActorResult) from the join handle.
     #[allow(unused_variables)]
-    fn on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+    fn on_stop(
+        &mut self,
+        actor_ref: &ActorRef<Self>,
+        killed: bool,
+    ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // Default implementation does nothing on stop.
         // Override this method in your actor if you need to perform cleanup.
         async { Ok(()) }
@@ -336,7 +346,11 @@ pub trait Message<T: Send + 'static>: Actor {
     /// This method is called by the actor system when a message is received via
     /// [`tell`](crate::actor_ref::ActorRef::tell), [`ask`](crate::actor_ref::ActorRef::ask),
     /// or their variants.
-    fn handle(&mut self, msg: T, actor_ref: &ActorRef<Self>) -> impl Future<Output = Self::Reply> + Send;
+    fn handle(
+        &mut self,
+        msg: T,
+        actor_ref: &ActorRef<Self>,
+    ) -> impl Future<Output = Self::Reply> + Send;
 }
 
 /// A trait for type-erased message handling within the actor system.
@@ -380,7 +394,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                 actor: None,
                 error: e,
                 phase: FailurePhase::OnStart,
-                killed: false
+                killed: false,
             };
         }
     };
@@ -505,5 +519,8 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
     debug!("Actor {} message loop ended.", actor_id);
 
     // Return completed actor result
-    ActorResult::Completed { actor, killed: was_killed }
+    ActorResult::Completed {
+        actor,
+        killed: was_killed,
+    }
 }

@@ -1,12 +1,13 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use tokio::sync::Mutex;
+use log::debug;
 use std::sync::Arc;
-use log::debug; // Ensure 'log' crate is a dev-dependency or available
+use tokio::sync::Mutex; // Ensure 'log' crate is a dev-dependency or available
 
 use rsactor::{
-    impl_message_handler, set_default_mailbox_capacity, spawn, spawn_with_mailbox_capacity, Actor, ActorRef, ActorResult, Error, Identity, Message
+    impl_message_handler, set_default_mailbox_capacity, spawn, spawn_with_mailbox_capacity, Actor,
+    ActorRef, ActorResult, Error, Identity, Message,
 };
 
 // Test Actor Setup
@@ -85,7 +86,10 @@ impl Message<SlowMsg> for TestActor {
     }
 }
 
-impl_message_handler!(TestActor, [PingMsg, UpdateCounterMsg, GetCounterMsg, SlowMsg]);
+impl_message_handler!(
+    TestActor,
+    [PingMsg, UpdateCounterMsg, GetCounterMsg, SlowMsg]
+);
 
 async fn setup_actor() -> (
     ActorRef<TestActor>,
@@ -107,26 +111,27 @@ async fn setup_actor() -> (
     let (actor_ref, handle) = spawn::<TestActor>(args);
     // Give a moment for on_start to potentially run
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    (
-        actor_ref,
-        handle,
-        counter,
-        last_processed_message_type,
-    )
+    (actor_ref, handle, counter, last_processed_message_type)
 }
 
 #[tokio::test]
 async fn test_spawn_and_actor_ref_id() {
-    let (actor_ref, handle, _counter, _lpmt) =
-        setup_actor().await;
+    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
     assert_ne!(actor_ref.identity().id, 0, "Actor ID should be non-zero");
 
     actor_ref.stop().await.expect("Failed to stop actor");
     let result = handle.await.expect("Actor task failed");
-    assert!(result.is_completed(), "Actor should have completed normally");
+    assert!(
+        result.is_completed(),
+        "Actor should have completed normally"
+    );
     let (actor, _) = result.into();
     if let Some(actor) = actor {
-        assert_eq!(actor.id, actor_ref.identity(), "Actor state ID should match ActorRef ID");
+        assert_eq!(
+            actor.id,
+            actor_ref.identity(),
+            "Actor state ID should match ActorRef ID"
+        );
     } else {
         panic!("Actor state should not be None");
     }
@@ -168,8 +173,7 @@ async fn test_actor_ref_ask() {
 
 #[tokio::test]
 async fn test_actor_ref_tell() {
-    let (actor_ref, handle, counter, last_processed) =
-        setup_actor().await;
+    let (actor_ref, handle, counter, last_processed) = setup_actor().await;
 
     actor_ref
         .tell(UpdateCounterMsg(5))
@@ -189,40 +193,60 @@ async fn test_actor_ref_tell() {
 
 #[tokio::test]
 async fn test_actor_ref_stop() {
-    let (actor_ref, handle, _counter, _lpmt) =
-        setup_actor().await;
+    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     actor_ref.tell(UpdateCounterMsg(100)).await.unwrap();
 
     let ask_future = actor_ref.ask(GetCounterMsg); // Send before stop
-    let count_val = ask_future.await.expect("ask sent before stop should succeed");
+    let count_val = ask_future
+        .await
+        .expect("ask sent before stop should succeed");
     assert_eq!(count_val, 100);
 
     actor_ref.stop().await.expect("stop command failed");
 
     let result = handle.await.expect("Actor task failed");
-    assert!(result.is_completed(), "Actor should have completed normally");
+    assert!(
+        result.is_completed(),
+        "Actor should have completed normally"
+    );
     let (actor, _) = result.into();
     if let Some(actor) = actor {
-        assert_eq!(actor.id, actor_ref.identity(), "Actor state ID should match ActorRef ID");
-        assert_eq!(*actor.counter.lock().await, 100, "Counter should be 100 after stop");
+        assert_eq!(
+            actor.id,
+            actor_ref.identity(),
+            "Actor state ID should match ActorRef ID"
+        );
+        assert_eq!(
+            *actor.counter.lock().await,
+            100,
+            "Counter should be 100 after stop"
+        );
     } else {
         panic!("Actor state should not be None");
     }
 
     // Interactions after stop
-    assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to stopped actor should fail");
-    assert!(actor_ref.ask(PingMsg("test".to_string())).await.is_err(), "Ask to stopped actor should fail");
+    assert!(
+        actor_ref.tell(UpdateCounterMsg(1)).await.is_err(),
+        "Tell to stopped actor should fail"
+    );
+    assert!(
+        actor_ref.ask(PingMsg("test".to_string())).await.is_err(),
+        "Ask to stopped actor should fail"
+    );
 }
 
 #[tokio::test]
 async fn test_actor_ref_kill() {
-    let (actor_ref, handle, _counter_arc_from_setup, _lpmt_arc_from_setup) =
-        setup_actor().await;
+    let (actor_ref, handle, _counter_arc_from_setup, _lpmt_arc_from_setup) = setup_actor().await;
 
     // Send a message that should ideally sit in the queue if kill is prioritized.
     // The initial value of counter in TestActor is 0.
-    actor_ref.tell(UpdateCounterMsg(10)).await.expect("Tell UpdateCounterMsg failed");
+    actor_ref
+        .tell(UpdateCounterMsg(10))
+        .await
+        .expect("Tell UpdateCounterMsg failed");
 
     // Immediately send kill, without waiting for the previous message to be processed.
     // The dedicated terminate channel and biased select in Runtime should prioritize this.
@@ -231,7 +255,10 @@ async fn test_actor_ref_kill() {
     let result = handle.await.expect("Actor task failed to complete");
 
     assert!(result.was_killed(), "Actor should have been killed");
-    assert!(result.is_completed(), "Actor should have completed normally (killed is a completion state)");
+    assert!(
+        result.is_completed(),
+        "Actor should have completed normally (killed is a completion state)"
+    );
 
     let (actor, _) = result.into();
     if let Some(actor) = actor {
@@ -243,21 +270,34 @@ async fn test_actor_ref_kill() {
 
         let final_lpmt = actor.last_processed_message_type.lock().await.clone();
         assert_eq!(final_lpmt, None, "Last processed message type should be None, indicating UpdateCounterMsg was not processed. Got: {:?}", final_lpmt);
-        assert_eq!(actor.id, actor_ref.identity(), "Actor ID should match ActorRef ID");
+        assert_eq!(
+            actor.id,
+            actor_ref.identity(),
+            "Actor ID should match ActorRef ID"
+        );
     } else {
         panic!("Actor state should not be None");
     }
 
     // Interactions after kill should still fail
-    assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to killed actor should fail");
-    assert!(actor_ref.ask(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
+    assert!(
+        actor_ref.tell(UpdateCounterMsg(1)).await.is_err(),
+        "Tell to killed actor should fail"
+    );
+    assert!(
+        actor_ref.ask(PingMsg("test".to_string())).await.is_err(),
+        "Ask to killed actor should fail"
+    );
 }
 
 #[tokio::test]
 async fn test_ask_wrong_reply_type() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
-    let result = actor_ref.untyped_actor_ref().ask::<PingMsg, i32>(PingMsg("hello".to_string())).await;
+    let result = actor_ref
+        .untyped_actor_ref()
+        .ask::<PingMsg, i32>(PingMsg("hello".to_string()))
+        .await;
     assert!(result.is_err());
     if let Err(e) = result {
         assert!(e.to_string().contains("Failed to downcast reply"));
@@ -273,18 +313,29 @@ async fn test_unhandled_message_type() {
 
     struct UnhandledMsg; // Not in impl_message_handler! for TestActor
 
-    let result = actor_ref.untyped_actor_ref().ask::<UnhandledMsg, ()>(UnhandledMsg).await;
+    let result = actor_ref
+        .untyped_actor_ref()
+        .ask::<UnhandledMsg, ()>(UnhandledMsg)
+        .await;
     assert!(result.is_err());
     if let Err(e) = result {
-        assert!(e.to_string().contains("received an unhandled message type."));
+        assert!(e
+            .to_string()
+            .contains("received an unhandled message type."));
     }
 
     actor_ref.stop().await.unwrap();
     // Actor panics with unhandled message, no need to call stop
     let join_result = handle.await;
-    assert!(join_result.is_err(), "Expected actor to panic with unhandled message");
+    assert!(
+        join_result.is_err(),
+        "Expected actor to panic with unhandled message"
+    );
     if let Err(join_error) = join_result {
-        assert!(join_error.is_panic(), "The join error should be caused by a panic");
+        assert!(
+            join_error.is_panic(),
+            "The join error should be caused by a panic"
+        );
     }
     // We don't assert on_stop_called since the actor panics before on_stop can be called
 }
@@ -341,7 +392,11 @@ impl Actor for LifecycleErrorActor {
         }
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
+    async fn on_stop(
+        &mut self,
+        _actor_ref: &ActorRef<Self>,
+        _killed: bool,
+    ) -> Result<(), Self::Error> {
         *self.on_stop_attempted.lock().await = true;
         if self.fail_on_stop {
             Err(anyhow::anyhow!("simulated on_stop failure"))
@@ -375,7 +430,10 @@ async fn test_actor_fail_on_start() {
     let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
 
     let result = handle.await.expect("Join handle should not fail");
-    assert!(result.is_startup_failed(), "Actor should have failed on startup");
+    assert!(
+        result.is_startup_failed(),
+        "Actor should have failed on startup"
+    );
     let (_, cause) = result.into();
     if let Some(cause) = cause {
         assert!(cause.to_string().contains("simulated on_start failure"));
@@ -404,10 +462,13 @@ async fn test_actor_fail_on_run() {
     let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
 
     let result = handle.await.expect("Join handle should not fail");
-    assert!(result.is_runtime_failed(), "Actor should have failed at runtime");
+    assert!(
+        result.is_runtime_failed(),
+        "Actor should have failed at runtime"
+    );
 
     match result {
-        rsactor::ActorResult::Failed { actor, error , ..} => {
+        rsactor::ActorResult::Failed { actor, error, .. } => {
             assert!(error.to_string().contains("simulated on_run failure"));
             if let Some(actor) = actor {
                 assert!(*actor.on_start_attempted.lock().await);
@@ -465,15 +526,13 @@ async fn test_set_default_mailbox_capacity_already_set() {
 
 // Test actor panic in message handler
 #[derive(Debug)] // Added Debug for consistency and potential logging
-struct PanicActor {
-}
+struct PanicActor {}
 impl Actor for PanicActor {
     type Args = ();
     type Error = anyhow::Error;
 
     async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(PanicActor {
-        })
+        Ok(PanicActor {})
     }
 }
 #[derive(Debug)] // Added Debug for consistency and potential logging
@@ -531,7 +590,10 @@ async fn test_actor_panic_in_message_handler() {
     if let Err(e) = ask_result {
         // Error could be "reply channel closed" or similar, as the actor task terminates.
         println!("Ask error after handler panic: {}", e);
-        assert!(e.to_string().contains("Reply channel closed") || e.to_string().contains("Mailbox channel closed"));
+        assert!(
+            e.to_string().contains("Reply channel closed")
+                || e.to_string().contains("Mailbox channel closed")
+        );
     }
 
     // The JoinHandle should return Err because the underlying tokio task panicked.
@@ -540,10 +602,16 @@ async fn test_actor_panic_in_message_handler() {
             // This path should ideally not be taken if the task truly panics.
             // However, if the framework were to catch panics and convert them to runtime failures,
             // this would be the case. Current code does not do this for handler panics.
-            panic!("Expected JoinHandle to return Err due to task panic, but got Ok with result: {:?}", result);
+            panic!(
+                "Expected JoinHandle to return Err due to task panic, but got Ok with result: {:?}",
+                result
+            );
         }
         Err(join_error) => {
-            assert!(join_error.is_panic(), "Expected a panic JoinError from actor task");
+            assert!(
+                join_error.is_panic(),
+                "Expected a panic JoinError from actor task"
+            );
         }
     }
 }
@@ -557,19 +625,37 @@ async fn test_actor_with_string_error_type() {
 
     // Give a moment for on_start to potentially run
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert!(*on_start_called.lock().await, "on_start should be called for StringErrorActor");
+    assert!(
+        *on_start_called.lock().await,
+        "on_start should be called for StringErrorActor"
+    );
 
     // Send a message and check reply
-    let reply: String = actor_ref.ask(SimpleMsg).await.expect("ask failed for SimpleMsg");
+    let reply: String = actor_ref
+        .ask(SimpleMsg)
+        .await
+        .expect("ask failed for SimpleMsg");
     assert_eq!(reply, "SimpleMsg processed");
 
     // Stop the actor
-    actor_ref.stop().await.expect("Failed to stop StringErrorActor");
+    actor_ref
+        .stop()
+        .await
+        .expect("Failed to stop StringErrorActor");
     let result = handle.await.expect("StringErrorActor task failed");
 
-    assert!(result.is_completed(), "StringErrorActor should have completed normally");
-    assert!(!result.was_killed(), "StringErrorActor should not have been killed");
-    assert!(result.stopped_normally(), "StringErrorActor should have stopped normally");
+    assert!(
+        result.is_completed(),
+        "StringErrorActor should have completed normally"
+    );
+    assert!(
+        !result.was_killed(),
+        "StringErrorActor should not have been killed"
+    );
+    assert!(
+        result.stopped_normally(),
+        "StringErrorActor should have stopped normally"
+    );
 }
 
 // Test: Spawning multiple actors
@@ -600,15 +686,23 @@ async fn test_spawn_and_stop_dummy_actor() {
     actor_ref.stop().await.expect("Failed to stop dummy actor");
     let result = handle.await.expect("Dummy actor task failed");
 
-    assert!(result.is_completed(), "Dummy actor should have completed normally");
-    assert!(!result.was_killed(), "Dummy actor should not have been killed");
-    assert!(result.stopped_normally(), "Dummy actor should have stopped normally");
+    assert!(
+        result.is_completed(),
+        "Dummy actor should have completed normally"
+    );
+    assert!(
+        !result.was_killed(),
+        "Dummy actor should not have been killed"
+    );
+    assert!(
+        result.stopped_normally(),
+        "Dummy actor should have stopped normally"
+    );
 }
 
 #[tokio::test]
 async fn test_actor_ref_tell_blocking() {
-    let (actor_ref, handle, counter, last_processed) =
-        setup_actor().await;
+    let (actor_ref, handle, counter, last_processed) = setup_actor().await;
 
     let actor_ref_clone = actor_ref.clone();
     let counter_clone = counter.clone();
@@ -617,7 +711,10 @@ async fn test_actor_ref_tell_blocking() {
     // Spawn a blocking task to call tell_blocking
     let join_handle = tokio::task::spawn_blocking(move || {
         actor_ref_clone
-            .tell_blocking(UpdateCounterMsg(7), Some(std::time::Duration::from_millis(100)))
+            .tell_blocking(
+                UpdateCounterMsg(7),
+                Some(std::time::Duration::from_millis(100)),
+            )
             .expect("tell_blocking failed");
     });
 
@@ -642,7 +739,10 @@ async fn test_actor_ref_ask_blocking() {
     // Spawn a blocking task to call ask_blocking
     let join_handle = tokio::task::spawn_blocking(move || {
         let reply: String = actor_ref_clone
-            .ask_blocking(PingMsg("hello_blocking".to_string()), Some(std::time::Duration::from_millis(100)))
+            .ask_blocking(
+                PingMsg("hello_blocking".to_string()),
+                Some(std::time::Duration::from_millis(100)),
+            )
             .expect("ask_blocking failed for PingMsg");
         assert_eq!(reply, "pong: hello_blocking");
 
@@ -652,7 +752,10 @@ async fn test_actor_ref_ask_blocking() {
         assert_eq!(count, 0);
 
         let _: () = actor_ref_clone
-            .ask_blocking(UpdateCounterMsg(15), Some(std::time::Duration::from_millis(100)))
+            .ask_blocking(
+                UpdateCounterMsg(15),
+                Some(std::time::Duration::from_millis(100)),
+            )
             .expect("ask_blocking failed for UpdateCounterMsg");
 
         let count_after_update: i32 = actor_ref_clone
@@ -666,8 +769,12 @@ async fn test_actor_ref_ask_blocking() {
     let thread_handle = std::thread::spawn(move || {
         // Explicitly specify the message type M=PingMsg and reply type R=String
         // PingMsg is defined to reply with String.
-        assert!(actor_ref_clone.ask_blocking(PingMsg("hello_blocking".to_string()), None).is_err());
-        assert!(actor_ref_clone.tell_blocking(PingMsg("hello_blocking".to_string()), None).is_err());
+        assert!(actor_ref_clone
+            .ask_blocking(PingMsg("hello_blocking".to_string()), None)
+            .is_err());
+        assert!(actor_ref_clone
+            .tell_blocking(PingMsg("hello_blocking".to_string()), None)
+            .is_err());
     });
 
     thread_handle.join().expect("Thread panicked");
@@ -680,23 +787,28 @@ async fn test_actor_ref_ask_blocking() {
 
 #[tokio::test]
 async fn test_actor_ref_ask_blocking_timeout() {
-    let (actor_ref, handle, _counter, _lpmt) =
-        setup_actor().await;
+    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     // SlowMsg handler sleeps for 100ms. ask_blocking timeout is 10ms.
     let actor_ref_clone = actor_ref.clone();
     let join_handle = tokio::task::spawn_blocking(move || {
-        let result: Result<(), _> = actor_ref_clone
-            .ask_blocking(SlowMsg, Some(std::time::Duration::from_millis(10))); // Timeout 10ms
+        let result: Result<(), _> =
+            actor_ref_clone.ask_blocking(SlowMsg, Some(std::time::Duration::from_millis(10))); // Timeout 10ms
         assert!(result.is_err(), "ask_blocking should have timed out");
         if let Err(e) = result {
             // The error message format includes actor ID and timeout duration
             // Just check that it contains "timed out" which is what we care about
-            assert!(e.to_string().contains("timed out"), "Error should indicate a timeout: {}", e);
+            assert!(
+                e.to_string().contains("timed out"),
+                "Error should indicate a timeout: {}",
+                e
+            );
         }
     });
 
-    join_handle.await.expect("Blocking task panicked for ask timeout test");
+    join_handle
+        .await
+        .expect("Blocking task panicked for ask timeout test");
 
     actor_ref.stop().await.expect("Failed to stop actor");
     handle.await.expect("Actor task failed");
@@ -723,22 +835,33 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
 
     // 2. Send UpdateCounterMsg(1). This will fill the mailbox (capacity 1)
     //    because the actor is busy with SlowMsg.
-    actor_ref.tell(UpdateCounterMsg(1)).await.expect("Tell UpdateCounterMsg(1) to fill mailbox failed");
+    actor_ref
+        .tell(UpdateCounterMsg(1))
+        .await
+        .expect("Tell UpdateCounterMsg(1) to fill mailbox failed");
 
     // 3. Attempt tell_blocking with another message. This should timeout.
     let actor_ref_clone = actor_ref.clone();
     let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
-        let result = actor_ref_clone
-            .tell_blocking(UpdateCounterMsg(2), Some(std::time::Duration::from_millis(10))); // Timeout 10ms
+        let result = actor_ref_clone.tell_blocking(
+            UpdateCounterMsg(2),
+            Some(std::time::Duration::from_millis(10)),
+        ); // Timeout 10ms
         assert!(result.is_err(), "tell_blocking should have timed out");
         if let Err(e) = result {
             // The error message might include more details like actor ID and timeout duration
             // Just check that it contains "timed out" which is what we care about
-            assert!(e.to_string().contains("timed out"), "Error should indicate a timeout: {}", e);
+            assert!(
+                e.to_string().contains("timed out"),
+                "Error should indicate a timeout: {}",
+                e
+            );
         }
     });
 
-    join_handle_blocking_task.await.expect("Blocking task for tell_blocking timeout panicked");
+    join_handle_blocking_task
+        .await
+        .expect("Blocking task for tell_blocking timeout panicked");
 
     // Allow the actor to process messages (SlowMsg, then UpdateCounterMsg(1))
     // The UpdateCounterMsg(2) from tell_blocking should have failed and not be in the queue.
@@ -749,7 +872,11 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
     let (actor, _) = result.into();
     if let Some(actor) = actor {
         // Verify that only UpdateCounterMsg(1) was processed.
-        assert_eq!(*actor.counter.lock().await, 1, "Counter should be 1 after SlowMsg and UpdateCounterMsg(1)");
+        assert_eq!(
+            *actor.counter.lock().await,
+            1,
+            "Counter should be 1 after SlowMsg and UpdateCounterMsg(1)"
+        );
     } else {
         panic!("Actor state should not be None");
     }
@@ -757,8 +884,7 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
 
 #[tokio::test]
 async fn test_actor_ref_ask_blocking_no_timeout() {
-    let (actor_ref, handle, _counter, _lpmt) =
-        setup_actor().await;
+    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     let actor_ref_clone = actor_ref.clone();
     // Spawn a blocking task to call ask_blocking with None timeout
@@ -784,13 +910,16 @@ async fn test_actor_ref_ask_blocking_no_timeout() {
 
 #[tokio::test]
 async fn test_actor_ref_kill_multiple_times() {
-    let (actor_ref, handle, _counter, _lpmt) =
-        setup_actor().await;
+    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     // Call kill multiple times
     actor_ref.kill().expect("First kill command failed");
-    actor_ref.kill().expect("Second kill command should also succeed (idempotent)");
-    actor_ref.kill().expect("Third kill command should also succeed (idempotent)");
+    actor_ref
+        .kill()
+        .expect("Second kill command should also succeed (idempotent)");
+    actor_ref
+        .kill()
+        .expect("Third kill command should also succeed (idempotent)");
 
     let result = handle.await.expect("Actor task failed to complete");
 
@@ -801,54 +930,100 @@ async fn test_actor_ref_kill_multiple_times() {
         // Verify that messages sent before or after kill are not processed if kill is effective.
         // (This part is similar to test_actor_ref_kill, ensuring state consistency)
         let final_counter = *actor.counter.lock().await;
-        assert_eq!(final_counter, 0, "Counter should be 0, indicating no messages processed due to kill. Got: {}", final_counter);
+        assert_eq!(
+            final_counter, 0,
+            "Counter should be 0, indicating no messages processed due to kill. Got: {}",
+            final_counter
+        );
     } else {
         panic!("Actor state should not be None");
     }
 
     // Interactions after kill should still fail
-    assert!(actor_ref.tell(UpdateCounterMsg(1)).await.is_err(), "Tell to killed actor should fail");
-    assert!(actor_ref.ask(PingMsg("test".to_string())).await.is_err(), "Ask to killed actor should fail");
+    assert!(
+        actor_ref.tell(UpdateCounterMsg(1)).await.is_err(),
+        "Tell to killed actor should fail"
+    );
+    assert!(
+        actor_ref.ask(PingMsg("test".to_string())).await.is_err(),
+        "Ask to killed actor should fail"
+    );
 }
 
 #[tokio::test]
 async fn test_actor_ref_is_alive() {
     // Test 1: Actor is alive after spawn, and dead after stop
-    let (actor_ref_stop_test, handle_stop_test, _counter_stop, _lpmt_stop) =
-        setup_actor().await;
+    let (actor_ref_stop_test, handle_stop_test, _counter_stop, _lpmt_stop) = setup_actor().await;
 
-    assert!(actor_ref_stop_test.is_alive(), "Actor should be alive after spawn (stop test)");
+    assert!(
+        actor_ref_stop_test.is_alive(),
+        "Actor should be alive after spawn (stop test)"
+    );
 
-    actor_ref_stop_test.stop().await.expect("Failed to stop actor (stop test)");
-    let result_stop = handle_stop_test.await.expect("Actor task failed after stop (stop test)");
-    assert!(result_stop.is_completed(), "Actor should have completed normally (stop test)");
-    assert!(!result_stop.was_killed(), "Actor should not have been killed (stop test)");
-    assert!(result_stop.stopped_normally(), "Actor should have stopped normally (stop test)");
+    actor_ref_stop_test
+        .stop()
+        .await
+        .expect("Failed to stop actor (stop test)");
+    let result_stop = handle_stop_test
+        .await
+        .expect("Actor task failed after stop (stop test)");
+    assert!(
+        result_stop.is_completed(),
+        "Actor should have completed normally (stop test)"
+    );
+    assert!(
+        !result_stop.was_killed(),
+        "Actor should not have been killed (stop test)"
+    );
+    assert!(
+        result_stop.stopped_normally(),
+        "Actor should have stopped normally (stop test)"
+    );
 
-    assert!(!actor_ref_stop_test.is_alive(), "Actor should not be alive after stop (stop test)");
+    assert!(
+        !actor_ref_stop_test.is_alive(),
+        "Actor should not be alive after stop (stop test)"
+    );
 
     // Test 2: Actor is alive after spawn, and dead after kill
-    let (actor_ref_kill_test, handle_kill_test, _counter_kill, _lpmt_kill) =
-        setup_actor().await;
+    let (actor_ref_kill_test, handle_kill_test, _counter_kill, _lpmt_kill) = setup_actor().await;
 
-    assert!(actor_ref_kill_test.is_alive(), "Actor should be alive before kill (kill test)");
+    assert!(
+        actor_ref_kill_test.is_alive(),
+        "Actor should be alive before kill (kill test)"
+    );
 
-    actor_ref_kill_test.kill().expect("kill command failed (kill test)");
-    let result_kill = handle_kill_test.await.expect("Actor task failed after kill (kill test)");
-    assert!(result_kill.is_completed(), "Actor should have completed (kill test)");
-    assert!(result_kill.was_killed(), "Actor should have been killed (kill test)");
+    actor_ref_kill_test
+        .kill()
+        .expect("kill command failed (kill test)");
+    let result_kill = handle_kill_test
+        .await
+        .expect("Actor task failed after kill (kill test)");
+    assert!(
+        result_kill.is_completed(),
+        "Actor should have completed (kill test)"
+    );
+    assert!(
+        result_kill.was_killed(),
+        "Actor should have been killed (kill test)"
+    );
 
-    assert!(!actor_ref_kill_test.is_alive(), "Actor should not be alive after kill (kill test)");
+    assert!(
+        !actor_ref_kill_test.is_alive(),
+        "Actor should not be alive after kill (kill test)"
+    );
 }
 
 #[tokio::test]
 async fn test_ask_with_timeout() {
-    let (actor_ref, handle, _counter, _lpmt) =
-        setup_actor().await;
+    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     // Test a successful case (timeout is long enough)
     let reply: String = actor_ref
-        .ask_with_timeout(PingMsg("hello_timeout".to_string()), std::time::Duration::from_millis(500))
+        .ask_with_timeout(
+            PingMsg("hello_timeout".to_string()),
+            std::time::Duration::from_millis(500),
+        )
         .await
         .expect("ask_with_timeout failed with sufficient timeout");
     assert_eq!(reply, "pong: hello_timeout");
@@ -859,7 +1034,11 @@ async fn test_ask_with_timeout() {
         .await;
     assert!(result.is_err(), "ask_with_timeout should have timed out");
     if let Err(e) = result {
-        assert!(e.to_string().contains("timed out"), "Error message should mention timeout: {}", e);
+        assert!(
+            e.to_string().contains("timed out"),
+            "Error message should mention timeout: {}",
+            e
+        );
     }
 
     // Verify regular operation works after timeout
@@ -875,14 +1054,16 @@ async fn test_ask_with_timeout() {
 
 #[tokio::test]
 async fn test_tell_with_timeout() {
-    let (actor_ref, handle, counter, last_processed) =
-        setup_actor().await;
+    let (actor_ref, handle, counter, last_processed) = setup_actor().await;
 
     // Test a successful case (timeout is sufficient)
     let result = actor_ref
         .tell_with_timeout(UpdateCounterMsg(5), std::time::Duration::from_millis(500))
         .await;
-    assert!(result.is_ok(), "tell_with_timeout with sufficient timeout should succeed");
+    assert!(
+        result.is_ok(),
+        "tell_with_timeout with sufficient timeout should succeed"
+    );
 
     // Allow time for processing
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -915,7 +1096,10 @@ impl Actor for IncompatibleMessageTestActor {
     type Error = anyhow::Error;
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        debug!("IncompatibleMessageTestActor (id: {}) started.", actor_ref.identity());
+        debug!(
+            "IncompatibleMessageTestActor (id: {}) started.",
+            actor_ref.identity()
+        );
         Ok(Self {
             messages_received: args,
         })
@@ -957,7 +1141,10 @@ async fn test_untyped_actor_ref_tell_incompatible_message_single() {
     let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
 
     // First, verify that compatible messages work
-    let result = actor_ref.untyped_actor_ref().tell(CompatibleMsg("test".to_string())).await;
+    let result = actor_ref
+        .untyped_actor_ref()
+        .tell(CompatibleMsg("test".to_string()))
+        .await;
     assert!(result.is_ok(), "Compatible message should succeed");
 
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -966,15 +1153,25 @@ async fn test_untyped_actor_ref_tell_incompatible_message_single() {
     let result = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
 
     // The tell operation itself should succeed (message sent to mailbox)
-    assert!(result.is_ok(), "Tell operation should succeed even with incompatible message");
+    assert!(
+        result.is_ok(),
+        "Tell operation should succeed even with incompatible message"
+    );
 
     // Give the actor time to process the incompatible message
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Check that compatible message was processed
     let messages = messages_received.lock().await;
-    assert_eq!(messages.len(), 1, "Only the compatible message should have been processed");
-    assert!(messages[0].contains("CompatibleMsg: test"), "Compatible message should be processed");
+    assert_eq!(
+        messages.len(),
+        1,
+        "Only the compatible message should have been processed"
+    );
+    assert!(
+        messages[0].contains("CompatibleMsg: test"),
+        "Compatible message should be processed"
+    );
     drop(messages);
 
     // The actor should panic in debug mode when handling the incompatible message
@@ -983,9 +1180,15 @@ async fn test_untyped_actor_ref_tell_incompatible_message_single() {
     #[cfg(debug_assertions)]
     {
         // In debug mode, the actor should panic with unhandled message
-        assert!(join_result.is_err(), "Expected actor to panic with incompatible message in debug mode");
+        assert!(
+            join_result.is_err(),
+            "Expected actor to panic with incompatible message in debug mode"
+        );
         if let Err(join_error) = join_result {
-            assert!(join_error.is_panic(), "The join error should be caused by a panic in debug mode");
+            assert!(
+                join_error.is_panic(),
+                "The join error should be caused by a panic in debug mode"
+            );
         }
     }
 
@@ -996,7 +1199,10 @@ async fn test_untyped_actor_ref_tell_incompatible_message_single() {
         let _ = actor_ref.stop().await;
         let result = join_result.expect("Actor should complete in release mode");
         // The actor should complete normally in release mode
-        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete or fail gracefully in release mode");
+        assert!(
+            result.is_completed() || result.is_stop_failed(),
+            "Actor should complete or fail gracefully in release mode"
+        );
     }
 }
 
@@ -1007,10 +1213,13 @@ async fn test_untyped_actor_ref_tell_multiple_incompatible_messages() {
 
     // Send multiple incompatible messages via UntypedActorRef.tell
     let result1 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
-    let result2 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg2 {
-        _data: "test".to_string(),
-        _value: 456
-    }).await;
+    let result2 = actor_ref
+        .untyped_actor_ref()
+        .tell(IncompatibleMsg2 {
+            _data: "test".to_string(),
+            _value: 456,
+        })
+        .await;
     let result3 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg3).await;
 
     // All tell operations should succeed (messages sent to mailbox)
@@ -1023,7 +1232,11 @@ async fn test_untyped_actor_ref_tell_multiple_incompatible_messages() {
 
     // No messages should have been processed (all incompatible)
     let messages = messages_received.lock().await;
-    assert_eq!(messages.len(), 0, "No incompatible messages should have been processed");
+    assert_eq!(
+        messages.len(),
+        0,
+        "No incompatible messages should have been processed"
+    );
     drop(messages);
 
     // The actor should panic in debug mode when handling the first incompatible message
@@ -1032,9 +1245,15 @@ async fn test_untyped_actor_ref_tell_multiple_incompatible_messages() {
     #[cfg(debug_assertions)]
     {
         // In debug mode, the actor should panic with the first unhandled message
-        assert!(join_result.is_err(), "Expected actor to panic with incompatible messages in debug mode");
+        assert!(
+            join_result.is_err(),
+            "Expected actor to panic with incompatible messages in debug mode"
+        );
         if let Err(join_error) = join_result {
-            assert!(join_error.is_panic(), "The join error should be caused by a panic in debug mode");
+            assert!(
+                join_error.is_panic(),
+                "The join error should be caused by a panic in debug mode"
+            );
         }
     }
 
@@ -1043,7 +1262,10 @@ async fn test_untyped_actor_ref_tell_multiple_incompatible_messages() {
         // In release mode, the actor continues running despite unhandled messages
         let _ = actor_ref.stop().await;
         let result = join_result.expect("Actor should complete in release mode");
-        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete or fail gracefully in release mode");
+        assert!(
+            result.is_completed() || result.is_stop_failed(),
+            "Actor should complete or fail gracefully in release mode"
+        );
     }
 }
 
@@ -1053,9 +1275,15 @@ async fn test_untyped_actor_ref_tell_mixed_compatible_incompatible_messages() {
     let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
 
     // Send a mix of compatible and incompatible messages
-    let result1 = actor_ref.untyped_actor_ref().tell(CompatibleMsg("first".to_string())).await;
+    let result1 = actor_ref
+        .untyped_actor_ref()
+        .tell(CompatibleMsg("first".to_string()))
+        .await;
     let result2 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
-    let result3 = actor_ref.untyped_actor_ref().tell(CompatibleMsg("second".to_string())).await;
+    let result3 = actor_ref
+        .untyped_actor_ref()
+        .tell(CompatibleMsg("second".to_string()))
+        .await;
 
     // All tell operations should succeed (messages sent to mailbox)
     assert!(result1.is_ok(), "First compatible tell should succeed");
@@ -1072,20 +1300,36 @@ async fn test_untyped_actor_ref_tell_mixed_compatible_incompatible_messages() {
     {
         // In debug mode, actor panics on first incompatible message
         // So only the first compatible message should be processed
-        assert_eq!(messages.len(), 1, "Only first compatible message should be processed before panic");
-        assert!(messages[0].contains("CompatibleMsg: first"), "First compatible message should be processed");
+        assert_eq!(
+            messages.len(),
+            1,
+            "Only first compatible message should be processed before panic"
+        );
+        assert!(
+            messages[0].contains("CompatibleMsg: first"),
+            "First compatible message should be processed"
+        );
     }
 
     #[cfg(not(debug_assertions))]
     {
         // In release mode, incompatible messages are logged but actor continues
         // Both compatible messages should be processed
-        assert!(messages.len() >= 1, "At least the first compatible message should be processed");
-        assert!(messages[0].contains("CompatibleMsg: first"), "First compatible message should be processed");
+        assert!(
+            messages.len() >= 1,
+            "At least the first compatible message should be processed"
+        );
+        assert!(
+            messages[0].contains("CompatibleMsg: first"),
+            "First compatible message should be processed"
+        );
 
         // The second compatible message might also be processed depending on timing
         if messages.len() > 1 {
-            assert!(messages[1].contains("CompatibleMsg: second"), "Second compatible message should be processed if reached");
+            assert!(
+                messages[1].contains("CompatibleMsg: second"),
+                "Second compatible message should be processed if reached"
+            );
         }
     }
     drop(messages);
@@ -1096,9 +1340,15 @@ async fn test_untyped_actor_ref_tell_mixed_compatible_incompatible_messages() {
     #[cfg(debug_assertions)]
     {
         // In debug mode, the actor should panic with the incompatible message
-        assert!(join_result.is_err(), "Expected actor to panic with incompatible message in debug mode");
+        assert!(
+            join_result.is_err(),
+            "Expected actor to panic with incompatible message in debug mode"
+        );
         if let Err(join_error) = join_result {
-            assert!(join_error.is_panic(), "The join error should be caused by a panic in debug mode");
+            assert!(
+                join_error.is_panic(),
+                "The join error should be caused by a panic in debug mode"
+            );
         }
     }
 
@@ -1107,7 +1357,10 @@ async fn test_untyped_actor_ref_tell_mixed_compatible_incompatible_messages() {
         // In release mode, stop the actor manually
         let _ = actor_ref.stop().await;
         let result = join_result.expect("Actor should complete in release mode");
-        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete or fail gracefully in release mode");
+        assert!(
+            result.is_completed() || result.is_stop_failed(),
+            "Actor should complete or fail gracefully in release mode"
+        );
     }
 }
 
@@ -1117,7 +1370,10 @@ async fn test_untyped_actor_ref_tell_incompatible_after_stop() {
     let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
 
     // Send a compatible message first
-    let result = actor_ref.untyped_actor_ref().tell(CompatibleMsg("before_stop".to_string())).await;
+    let result = actor_ref
+        .untyped_actor_ref()
+        .tell(CompatibleMsg("before_stop".to_string()))
+        .await;
     assert!(result.is_ok(), "Compatible message should succeed");
 
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1135,15 +1391,25 @@ async fn test_untyped_actor_ref_tell_incompatible_after_stop() {
     // This should fail because the actor is stopped
     assert!(result.is_err(), "Tell to stopped actor should fail");
     if let Err(e) = result {
-        assert!(e.to_string().contains("Mailbox channel closed") ||
-                e.to_string().contains("Failed to send message"),
-                "Error should indicate mailbox is closed, got: {}", e);
+        assert!(
+            e.to_string().contains("Mailbox channel closed")
+                || e.to_string().contains("Failed to send message"),
+            "Error should indicate mailbox is closed, got: {}",
+            e
+        );
     }
 
     // Verify only the compatible message was processed
     let messages = messages_received.lock().await;
-    assert_eq!(messages.len(), 1, "Only the compatible message before stop should be processed");
-    assert!(messages[0].contains("CompatibleMsg: before_stop"), "Compatible message should be processed");
+    assert_eq!(
+        messages.len(),
+        1,
+        "Only the compatible message before stop should be processed"
+    );
+    assert!(
+        messages[0].contains("CompatibleMsg: before_stop"),
+        "Compatible message should be processed"
+    );
 }
 
 #[tokio::test]
@@ -1152,18 +1418,31 @@ async fn test_untyped_actor_ref_ask_incompatible_message_error_handling() {
     let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
 
     // Test ask with incompatible message - this should return an error immediately
-    let ask_result = actor_ref.untyped_actor_ref().ask::<IncompatibleMsg1, String>(IncompatibleMsg1).await;
+    let ask_result = actor_ref
+        .untyped_actor_ref()
+        .ask::<IncompatibleMsg1, String>(IncompatibleMsg1)
+        .await;
 
     // ask should return an UnhandledMessageType error
-    assert!(ask_result.is_err(), "Ask with incompatible message should return error");
+    assert!(
+        ask_result.is_err(),
+        "Ask with incompatible message should return error"
+    );
     if let Err(e) = ask_result {
-        assert!(e.to_string().contains("received an unhandled message type"),
-                "Ask error should indicate unhandled message type, got: {}", e);
+        assert!(
+            e.to_string().contains("received an unhandled message type"),
+            "Ask error should indicate unhandled message type, got: {}",
+            e
+        );
     }
 
     // No messages should have been processed
     let messages = messages_received.lock().await;
-    assert_eq!(messages.len(), 0, "No incompatible messages should be processed");
+    assert_eq!(
+        messages.len(),
+        0,
+        "No incompatible messages should be processed"
+    );
     drop(messages);
 
     // Clean up - handle actor termination based on build mode
@@ -1172,9 +1451,15 @@ async fn test_untyped_actor_ref_ask_incompatible_message_error_handling() {
     #[cfg(debug_assertions)]
     {
         // In debug mode, actor should panic when processing the ask message
-        assert!(join_result.is_err(), "Expected actor to panic in debug mode");
+        assert!(
+            join_result.is_err(),
+            "Expected actor to panic in debug mode"
+        );
         if let Err(join_error) = join_result {
-            assert!(join_error.is_panic(), "Should be a panic error in debug mode");
+            assert!(
+                join_error.is_panic(),
+                "Should be a panic error in debug mode"
+            );
         }
     }
 
@@ -1183,7 +1468,10 @@ async fn test_untyped_actor_ref_ask_incompatible_message_error_handling() {
         // In release mode, stop the actor manually
         let _ = actor_ref.stop().await;
         let result = join_result.expect("Actor should complete in release mode");
-        assert!(result.is_completed() || result.is_stop_failed(), "Actor should complete gracefully in release mode");
+        assert!(
+            result.is_completed() || result.is_stop_failed(),
+            "Actor should complete gracefully in release mode"
+        );
     }
 }
 
@@ -1195,20 +1483,30 @@ async fn test_untyped_actor_ref_tell_vs_ask_behavior_comparison() {
         let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
 
         // Test tell with incompatible message - this should succeed in sending
-        let tell_result = actor_ref.untyped_actor_ref().tell(IncompatibleMsg2 {
-            _data: "tell_test".to_string(),
-            _value: 222
-        }).await;
+        let tell_result = actor_ref
+            .untyped_actor_ref()
+            .tell(IncompatibleMsg2 {
+                _data: "tell_test".to_string(),
+                _value: 222,
+            })
+            .await;
 
         // tell should succeed in sending the message to the mailbox
-        assert!(tell_result.is_ok(), "Tell with incompatible message should succeed in sending");
+        assert!(
+            tell_result.is_ok(),
+            "Tell with incompatible message should succeed in sending"
+        );
 
         // Give some time for processing
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // No messages should have been processed
         let messages = messages_received.lock().await;
-        assert_eq!(messages.len(), 0, "No incompatible messages should be processed");
+        assert_eq!(
+            messages.len(),
+            0,
+            "No incompatible messages should be processed"
+        );
         drop(messages);
 
         // Clean up
@@ -1216,7 +1514,10 @@ async fn test_untyped_actor_ref_tell_vs_ask_behavior_comparison() {
 
         #[cfg(debug_assertions)]
         {
-            assert!(join_result.is_err(), "Expected actor to panic in debug mode");
+            assert!(
+                join_result.is_err(),
+                "Expected actor to panic in debug mode"
+            );
         }
 
         #[cfg(not(debug_assertions))]
@@ -1232,13 +1533,22 @@ async fn test_untyped_actor_ref_tell_vs_ask_behavior_comparison() {
         let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
 
         // Test ask with incompatible message - this should return an error
-        let ask_result = actor_ref.untyped_actor_ref().ask::<IncompatibleMsg1, String>(IncompatibleMsg1).await;
+        let ask_result = actor_ref
+            .untyped_actor_ref()
+            .ask::<IncompatibleMsg1, String>(IncompatibleMsg1)
+            .await;
 
         // ask should return an UnhandledMessageType error
-        assert!(ask_result.is_err(), "Ask with incompatible message should return error");
+        assert!(
+            ask_result.is_err(),
+            "Ask with incompatible message should return error"
+        );
         if let Err(e) = ask_result {
-            assert!(e.to_string().contains("received an unhandled message type"),
-                    "Ask error should indicate unhandled message type, got: {}", e);
+            assert!(
+                e.to_string().contains("received an unhandled message type"),
+                "Ask error should indicate unhandled message type, got: {}",
+                e
+            );
         }
 
         // Clean up
@@ -1246,7 +1556,10 @@ async fn test_untyped_actor_ref_tell_vs_ask_behavior_comparison() {
 
         #[cfg(debug_assertions)]
         {
-            assert!(join_result.is_err(), "Expected actor to panic in debug mode");
+            assert!(
+                join_result.is_err(),
+                "Expected actor to panic in debug mode"
+            );
         }
 
         #[cfg(not(debug_assertions))]
@@ -1282,19 +1595,40 @@ async fn test_actor_fail_on_stop_during_graceful_stop() {
     actor_ref.stop().await.expect("stop command should succeed");
 
     let result = handle.await.expect("Join handle should not fail");
-    assert!(result.is_stop_failed(), "Actor should have failed during stop");
+    assert!(
+        result.is_stop_failed(),
+        "Actor should have failed during stop"
+    );
     assert!(!result.was_killed(), "Actor should not have been killed");
 
     match result {
-        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
-            assert_eq!(phase, rsactor::FailurePhase::OnStop, "Should fail in OnStop phase");
+        rsactor::ActorResult::Failed {
+            actor,
+            error,
+            phase,
+            killed,
+        } => {
+            assert_eq!(
+                phase,
+                rsactor::FailurePhase::OnStop,
+                "Should fail in OnStop phase"
+            );
             assert!(!killed, "Should not be marked as killed for graceful stop");
             assert!(error.to_string().contains("simulated on_stop failure"));
 
             if let Some(actor) = actor {
-                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
-                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
-                assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
+                assert!(
+                    *actor.on_start_attempted.lock().await,
+                    "on_start should have been called"
+                );
+                assert!(
+                    *actor.on_run_attempted.lock().await,
+                    "on_run should have been called"
+                );
+                assert!(
+                    *actor.on_stop_attempted.lock().await,
+                    "on_stop should have been called"
+                );
             }
         }
         _ => panic!("Expected Failed result"),
@@ -1324,19 +1658,40 @@ async fn test_actor_fail_on_stop_during_kill() {
     actor_ref.kill().expect("kill command should succeed");
 
     let result = handle.await.expect("Join handle should not fail");
-    assert!(result.is_stop_failed(), "Actor should have failed during stop");
+    assert!(
+        result.is_stop_failed(),
+        "Actor should have failed during stop"
+    );
     assert!(result.was_killed(), "Actor should be marked as killed");
 
     match result {
-        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
-            assert_eq!(phase, rsactor::FailurePhase::OnStop, "Should fail in OnStop phase");
+        rsactor::ActorResult::Failed {
+            actor,
+            error,
+            phase,
+            killed,
+        } => {
+            assert_eq!(
+                phase,
+                rsactor::FailurePhase::OnStop,
+                "Should fail in OnStop phase"
+            );
             assert!(killed, "Should be marked as killed for kill operation");
             assert!(error.to_string().contains("simulated on_stop failure"));
 
             if let Some(actor) = actor {
-                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
-                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
-                assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
+                assert!(
+                    *actor.on_start_attempted.lock().await,
+                    "on_start should have been called"
+                );
+                assert!(
+                    *actor.on_run_attempted.lock().await,
+                    "on_run should have been called"
+                );
+                assert!(
+                    *actor.on_stop_attempted.lock().await,
+                    "on_stop should have been called"
+                );
             }
         }
         _ => panic!("Expected Failed result"),
@@ -1363,18 +1718,42 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
 
     // When on_run fails, the actor immediately returns Failed with OnRun phase.
     // on_stop is NOT called when on_run fails in the rsActor framework.
-    assert!(result.is_runtime_failed(), "Actor should have failed during runtime (on_run)");
+    assert!(
+        result.is_runtime_failed(),
+        "Actor should have failed during runtime (on_run)"
+    );
 
     match result {
-        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
-            assert_eq!(phase, rsactor::FailurePhase::OnRun, "Should fail in OnRun phase");
-            assert!(!killed, "Should not be marked as killed for on_run failure scenario");
+        rsactor::ActorResult::Failed {
+            actor,
+            error,
+            phase,
+            killed,
+        } => {
+            assert_eq!(
+                phase,
+                rsactor::FailurePhase::OnRun,
+                "Should fail in OnRun phase"
+            );
+            assert!(
+                !killed,
+                "Should not be marked as killed for on_run failure scenario"
+            );
             assert!(error.to_string().contains("simulated on_run failure"));
 
             if let Some(actor) = actor {
-                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
-                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
-                assert!(!*actor.on_stop_attempted.lock().await, "on_stop should NOT be called when on_run fails");
+                assert!(
+                    *actor.on_start_attempted.lock().await,
+                    "on_start should have been called"
+                );
+                assert!(
+                    *actor.on_run_attempted.lock().await,
+                    "on_run should have been called"
+                );
+                assert!(
+                    !*actor.on_stop_attempted.lock().await,
+                    "on_stop should NOT be called when on_run fails"
+                );
             }
         }
         _ => panic!("Expected Failed result with OnRun phase"),
@@ -1401,18 +1780,42 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
 
     // When on_run fails, the actor immediately returns Failed with OnRun phase.
     // on_stop is NOT called when on_run fails in the rsActor framework.
-    assert!(result.is_runtime_failed(), "Actor should have failed during runtime (on_run)");
+    assert!(
+        result.is_runtime_failed(),
+        "Actor should have failed during runtime (on_run)"
+    );
 
     match result {
-        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
-            assert_eq!(phase, rsactor::FailurePhase::OnRun, "Should fail in OnRun phase");
-            assert!(!killed, "Should not be marked as killed for on_run failure scenario");
+        rsactor::ActorResult::Failed {
+            actor,
+            error,
+            phase,
+            killed,
+        } => {
+            assert_eq!(
+                phase,
+                rsactor::FailurePhase::OnRun,
+                "Should fail in OnRun phase"
+            );
+            assert!(
+                !killed,
+                "Should not be marked as killed for on_run failure scenario"
+            );
             assert!(error.to_string().contains("simulated on_run failure"));
 
             if let Some(actor) = actor {
-                assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
-                assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
-                assert!(!*actor.on_stop_attempted.lock().await, "on_stop should NOT be called when on_run fails");
+                assert!(
+                    *actor.on_start_attempted.lock().await,
+                    "on_start should have been called"
+                );
+                assert!(
+                    *actor.on_run_attempted.lock().await,
+                    "on_run should have been called"
+                );
+                assert!(
+                    !*actor.on_stop_attempted.lock().await,
+                    "on_stop should NOT be called when on_run fails"
+                );
             }
         }
         _ => panic!("Expected Failed result with OnRun phase"),
@@ -1442,15 +1845,30 @@ async fn test_actor_on_stop_success_during_graceful_stop() {
     actor_ref.stop().await.expect("stop command should succeed");
 
     let result = handle.await.expect("Join handle should not fail");
-    assert!(result.is_completed(), "Actor should have completed successfully");
-    assert!(result.stopped_normally(), "Actor should have stopped normally");
+    assert!(
+        result.is_completed(),
+        "Actor should have completed successfully"
+    );
+    assert!(
+        result.stopped_normally(),
+        "Actor should have stopped normally"
+    );
     assert!(!result.was_killed(), "Actor should not have been killed");
 
     if let rsactor::ActorResult::Completed { actor, killed } = result {
         assert!(!killed, "Should not be marked as killed for graceful stop");
-        assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
-        assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
-        assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
+        assert!(
+            *actor.on_start_attempted.lock().await,
+            "on_start should have been called"
+        );
+        assert!(
+            *actor.on_run_attempted.lock().await,
+            "on_run should have been called"
+        );
+        assert!(
+            *actor.on_stop_attempted.lock().await,
+            "on_stop should have been called"
+        );
     } else {
         panic!("Expected Completed result");
     }
@@ -1479,14 +1897,26 @@ async fn test_actor_on_stop_success_during_kill() {
     actor_ref.kill().expect("kill command should succeed");
 
     let result = handle.await.expect("Join handle should not fail");
-    assert!(result.is_completed(), "Actor should have completed successfully");
+    assert!(
+        result.is_completed(),
+        "Actor should have completed successfully"
+    );
     assert!(result.was_killed(), "Actor should be marked as killed");
 
     if let rsactor::ActorResult::Completed { actor, killed } = result {
         assert!(killed, "Should be marked as killed for kill operation");
-        assert!(*actor.on_start_attempted.lock().await, "on_start should have been called");
-        assert!(*actor.on_run_attempted.lock().await, "on_run should have been called");
-        assert!(*actor.on_stop_attempted.lock().await, "on_stop should have been called");
+        assert!(
+            *actor.on_start_attempted.lock().await,
+            "on_start should have been called"
+        );
+        assert!(
+            *actor.on_run_attempted.lock().await,
+            "on_run should have been called"
+        );
+        assert!(
+            *actor.on_stop_attempted.lock().await,
+            "on_stop should have been called"
+        );
     } else {
         panic!("Expected Completed result");
     }

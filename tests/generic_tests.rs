@@ -1,6 +1,6 @@
 // filepath: /Volumes/Workspace/rust/rsactor/tests/generic_tests.rs
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
 use anyhow::Result;
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
 use std::fmt::Debug;
 
 // ---- Generic Actor Definition ----
@@ -29,7 +29,10 @@ struct MyTestData {
 
 impl MyTestData {
     fn new(id: i32, name: &str) -> Self {
-        Self { id, name: name.to_string() }
+        Self {
+            id,
+            name: name.to_string(),
+        }
     }
 }
 
@@ -151,7 +154,8 @@ mod tests {
     async fn test_generic_actor_struct() {
         let initial_data = MyTestData::new(1, "initial_data");
         // Ensure MyTestData satisfies Send + Debug + Clone + 'static for GenericActor<MyTestData>
-        let (actor_ref, join_handle) = spawn::<GenericActor<MyTestData>>(Some(initial_data.clone()));
+        let (actor_ref, join_handle) =
+            spawn::<GenericActor<MyTestData>>(Some(initial_data.clone()));
 
         let value: Option<MyTestData> = actor_ref.ask(GetValue).await.unwrap();
         assert_eq!(value, Some(initial_data.clone()));
@@ -182,7 +186,10 @@ mod tests {
         let (actor_ref, join_handle) = spawn::<BiGenericActor<String, i32>>((None, None));
 
         // Set key-value pair
-        actor_ref.tell(SetKeyValue("hello".to_string(), 42)).await.unwrap();
+        actor_ref
+            .tell(SetKeyValue("hello".to_string(), 42))
+            .await
+            .unwrap();
 
         // Get key
         let key: Option<String> = actor_ref.ask(GetKey).await.unwrap();
@@ -208,10 +215,12 @@ mod tests {
     #[tokio::test]
     async fn test_tri_generic_actor() {
         // Test TriGenericActor with Vec<u8>, bool, and String
-        let (actor_ref, join_handle) = spawn::<TriGenericActor<Vec<u8>, bool, String>>((true, "initial".to_string()));
+        let (actor_ref, join_handle) =
+            spawn::<TriGenericActor<Vec<u8>, bool, String>>((true, "initial".to_string()));
 
         // Test GetAll to get initial state
-        let (t_data, u_data, w_data): (Vec<u8>, bool, String) = actor_ref.ask(GetAll).await.unwrap();
+        let (t_data, u_data, w_data): (Vec<u8>, bool, String) =
+            actor_ref.ask(GetAll).await.unwrap();
         assert_eq!(t_data, Vec::<u8>::default()); // T::default()
         assert!(u_data);
         assert_eq!(w_data, "initial".to_string());
@@ -226,7 +235,8 @@ mod tests {
         actor_ref.tell(SetW("updated".to_string())).await.unwrap();
 
         // Get all updated data
-        let (t_data, u_data, w_data): (Vec<u8>, bool, String) = actor_ref.ask(GetAll).await.unwrap();
+        let (t_data, u_data, w_data): (Vec<u8>, bool, String) =
+            actor_ref.ask(GetAll).await.unwrap();
         assert_eq!(t_data, vec![1, 2, 3]);
         assert!(!u_data);
         assert_eq!(w_data, "updated".to_string());
@@ -254,8 +264,13 @@ mod tests {
         let (actor_ref, join_handle) = spawn::<SerializableActor<JsonData>>(());
 
         // Set JsonData
-        let json_data = JsonData { value: "test".to_string() };
-        actor_ref.tell(SetSerializable(json_data.clone())).await.unwrap();
+        let json_data = JsonData {
+            value: "test".to_string(),
+        };
+        actor_ref
+            .tell(SetSerializable(json_data.clone()))
+            .await
+            .unwrap();
 
         // Get original data
         let original: Option<JsonData> = actor_ref.ask(GetOriginal).await.unwrap();
@@ -277,8 +292,13 @@ mod tests {
         let (actor_ref, join_handle) = spawn::<SerializableActor<XmlData>>(());
 
         // Set XmlData
-        let xml_data = XmlData { content: "example".to_string() };
-        actor_ref.tell(SetSerializable(xml_data.clone())).await.unwrap();
+        let xml_data = XmlData {
+            content: "example".to_string(),
+        };
+        actor_ref
+            .tell(SetSerializable(xml_data.clone()))
+            .await
+            .unwrap();
 
         // Get original data
         let original: Option<XmlData> = actor_ref.ask(GetOriginal).await.unwrap();
@@ -304,14 +324,16 @@ struct BiGenericActor<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone
     value: Option<V>,
 }
 
-impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Actor for BiGenericActor<K, V> {
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Actor
+    for BiGenericActor<K, V>
+{
     type Args = (Option<K>, Option<V>);
     type Error = anyhow::Error;
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(BiGenericActor {
             key: args.0,
-            value: args.1
+            value: args.1,
         })
     }
 }
@@ -331,7 +353,8 @@ pub struct ClearBoth;
 
 // Message implementations for BiGenericActor
 impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
-Message<SetKeyValue<K, V>> for BiGenericActor<K, V> {
+    Message<SetKeyValue<K, V>> for BiGenericActor<K, V>
+{
     type Reply = ();
 
     async fn handle(&mut self, msg: SetKeyValue<K, V>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
@@ -340,8 +363,9 @@ Message<SetKeyValue<K, V>> for BiGenericActor<K, V> {
     }
 }
 
-impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
-Message<GetKey> for BiGenericActor<K, V> {
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Message<GetKey>
+    for BiGenericActor<K, V>
+{
     type Reply = Option<K>;
 
     async fn handle(&mut self, _msg: GetKey, _actor_ref: &ActorRef<Self>) -> Self::Reply {
@@ -349,8 +373,9 @@ Message<GetKey> for BiGenericActor<K, V> {
     }
 }
 
-impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
-Message<GetValueFromBi> for BiGenericActor<K, V> {
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Message<GetValueFromBi>
+    for BiGenericActor<K, V>
+{
     type Reply = Option<V>;
 
     async fn handle(&mut self, _msg: GetValueFromBi, _actor_ref: &ActorRef<Self>) -> Self::Reply {
@@ -358,8 +383,9 @@ Message<GetValueFromBi> for BiGenericActor<K, V> {
     }
 }
 
-impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static>
-Message<ClearBoth> for BiGenericActor<K, V> {
+impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Message<ClearBoth>
+    for BiGenericActor<K, V>
+{
     type Reply = ();
 
     async fn handle(&mut self, _msg: ClearBoth, _actor_ref: &ActorRef<Self>) -> Self::Reply {
@@ -474,7 +500,11 @@ where
     type Reply = (T, U, W);
 
     async fn handle(&mut self, _msg: GetAll, _actor_ref: &ActorRef<Self>) -> Self::Reply {
-        (self.data_t.clone(), self.data_u.clone(), self.data_w.clone())
+        (
+            self.data_t.clone(),
+            self.data_u.clone(),
+            self.data_w.clone(),
+        )
     }
 }
 
@@ -571,7 +601,11 @@ pub struct GetOriginal;
 impl<T: Serializable> Message<SetSerializable<T>> for SerializableActor<T> {
     type Reply = ();
 
-    async fn handle(&mut self, msg: SetSerializable<T>, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    async fn handle(
+        &mut self,
+        msg: SetSerializable<T>,
+        _actor_ref: &ActorRef<Self>,
+    ) -> Self::Reply {
         self.data = Some(msg.0);
     }
 }

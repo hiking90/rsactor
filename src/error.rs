@@ -66,17 +66,46 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Send { identity: actor_id, details } => {
-                write!(f, "Failed to send message to actor {}: {}", actor_id.name(), details)
+            Error::Send {
+                identity: actor_id,
+                details,
+            } => {
+                write!(
+                    f,
+                    "Failed to send message to actor {}: {}",
+                    actor_id.name(),
+                    details
+                )
             }
-            Error::Receive { identity: actor_id, details } => {
-                write!(f, "Failed to receive reply from actor {}: {}", actor_id.name(), details)
+            Error::Receive {
+                identity: actor_id,
+                details,
+            } => {
+                write!(
+                    f,
+                    "Failed to receive reply from actor {}: {}",
+                    actor_id.name(),
+                    details
+                )
             }
-            Error::Timeout { identity: actor_id, timeout, operation } => {
-                write!(f, "{} operation to actor {} timed out after {:?}",
-                       operation, actor_id.name(), timeout)
+            Error::Timeout {
+                identity: actor_id,
+                timeout,
+                operation,
+            } => {
+                write!(
+                    f,
+                    "{} operation to actor {} timed out after {:?}",
+                    operation,
+                    actor_id.name(),
+                    timeout
+                )
             }
-            Error::UnhandledMessageType { identity: actor_id, expected_types, actual_type_id } => {
+            Error::UnhandledMessageType {
+                identity: actor_id,
+                expected_types,
+                actual_type_id,
+            } => {
                 write!(
                     f,
                     "Actor '{}' received an unhandled message type. Expected one of: [{}]. Actual message type ID: {:?}",
@@ -85,11 +114,21 @@ impl std::fmt::Display for Error {
                     actual_type_id
                 )
             }
-            Error::Downcast { identity: actor_id, expected_type } => {
-                write!(f, "Failed to downcast reply from actor {} to expected type '{}'",
-                    actor_id.name(), expected_type)
+            Error::Downcast {
+                identity: actor_id,
+                expected_type,
+            } => {
+                write!(
+                    f,
+                    "Failed to downcast reply from actor {} to expected type '{}'",
+                    actor_id.name(),
+                    expected_type
+                )
             }
-            Error::Runtime { identity: actor_id, details } => {
+            Error::Runtime {
+                identity: actor_id,
+                details,
+            } => {
                 write!(f, "Runtime error in actor {}: {}", actor_id.name(), details)
             }
             Error::MailboxCapacity { message } => {
