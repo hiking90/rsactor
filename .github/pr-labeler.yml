@@ -1,0 +1,37 @@
+# Configuration for PR labeler
+# https://github.com/actions/labeler
+
+"area: core":
+  - "src/actor.rs"
+  - "src/actor_ref.rs"
+  - "src/actor_result.rs"
+  - "src/error.rs"
+  - "src/lib.rs"
+
+"area: examples":
+  - "examples/**/*"
+
+"area: documentation":
+  - "README.md"
+  - "book/**/*"
+  - "docs/**/*"
+  - "**/*.md"
+
+"area: tests":
+  - "tests/**/*"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+
+"area: ci/cd":
+  - ".github/**/*"
+  - "Cargo.toml"
+  - "Cargo.lock"
+
+"dependencies":
+  - "Cargo.toml"
+  - "Cargo.lock"
+
+"breaking change":
+  - "src/lib.rs"
+  - "src/actor.rs"
+  - "src/actor_ref.rs"
