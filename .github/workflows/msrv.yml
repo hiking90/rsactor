@@ -1,0 +1,174 @@
+name: MSRV Check
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    # Monthly MSRV compatibility check
+    - cron: '0 0 1 * *'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  MSRV: "1.75.0"
+
+jobs:
+  msrv-validation:
+    name: Validate MSRV (${{ env.MSRV }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.MSRV }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-msrv-${{ env.MSRV }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Verify Rust version
+        run: |
+          echo "Expected MSRV: ${{ env.MSRV }}"
+          ACTUAL_VERSION=$(rustc --version | awk '{print $2}')
+          echo "Actual Rust version: $ACTUAL_VERSION"
+          if [[ "$ACTUAL_VERSION" != "${{ env.MSRV }}" ]]; then
+            echo "Error: Rust version mismatch!"
+            exit 1
+          fi
+
+      - name: Verify Cargo.toml rust-version
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            TOML_MSRV=$(grep "^rust-version" Cargo.toml | cut -d'"' -f2 || echo "not specified")
+            echo "Cargo.toml rust-version: $TOML_MSRV"
+            if [ "$TOML_MSRV" != "${{ env.MSRV }}" ]; then
+              echo "Warning: Cargo.toml rust-version ($TOML_MSRV) doesn't match MSRV (${{ env.MSRV }})"
+              echo "This should be fixed to ensure proper MSRV enforcement"
+            else
+              echo "✓ Cargo.toml rust-version matches MSRV"
+            fi
+          fi
+
+      - name: Check compilation
+        run: |
+          echo "Testing compilation with MSRV..."
+          cargo check --verbose
+
+      - name: Build with MSRV
+        run: |
+          echo "Building with MSRV..."
+          cargo build --verbose
+
+      - name: Build all features with MSRV
+        run: |
+          echo "Building all features with MSRV..."
+          cargo build --verbose --all-features
+
+      - name: Test with MSRV
+        run: |
+          echo "Running tests with MSRV..."
+          cargo test --verbose
+
+      - name: Test all features with MSRV
+        run: |
+          echo "Running tests with all features using MSRV..."
+          cargo test --verbose --all-features
+
+      - name: Build examples with MSRV
+        run: |
+          echo "Building examples with MSRV..."
+          for example in examples/*.rs; do
+            if [ -f "$example" ]; then
+              example_name=$(basename "$example" .rs)
+              echo "Building example: $example_name"
+              cargo build --example "$example_name" --verbose || {
+                echo "Failed to build example: $example_name"
+                exit 1
+              }
+            fi
+          done
+
+      - name: Check documentation build with MSRV
+        run: |
+          echo "Building documentation with MSRV..."
+          cargo doc --no-deps --verbose
+
+  msrv-feature-matrix:
+    name: MSRV Feature Matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - ""  # No features
+          - "--all-features"
+          - "--no-default-features"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.MSRV }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ubuntu-msrv-features-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Test with feature configuration
+        run: |
+          echo "Testing with features: ${{ matrix.features }}"
+          cargo test --verbose ${{ matrix.features }}
+
+  msrv-clippy:
+    name: MSRV Clippy Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.MSRV }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+          components: clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ubuntu-msrv-clippy-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy with MSRV
+        run: |
+          echo "Running clippy with MSRV..."
+          cargo clippy --all-targets --all-features -- -D warnings
