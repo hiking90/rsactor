@@ -866,10 +866,7 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
                 timeout_occurred = true;
                 break;
             }
-            _ => {
-                // If this message didn't timeout, continue trying with longer timeout
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
+            _ => {}
         }
     }
 
