@@ -830,9 +830,6 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
 
     // 1. Send SlowMsg to make the actor busy. Handler sleeps for 100ms.
     actor_ref.tell(SlowMsg).await.expect("Tell SlowMsg failed");
-    // Give enough time for the actor to pick up SlowMsg and start sleeping.
-    // Increase delay to ensure SlowMsg is being processed in CI environments
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // 2. Send UpdateCounterMsg(1). This will fill the mailbox (capacity 1)
     //    because the actor is busy with SlowMsg.
@@ -840,9 +837,6 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
         .tell(UpdateCounterMsg(1))
         .await
         .expect("Tell UpdateCounterMsg(1) to fill mailbox failed");
-
-    // Give a small delay to ensure the mailbox is actually full
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     // 3. Try to send multiple messages with progressively longer timeouts
     // to increase reliability in CI environments while still testing timeout behavior
