@@ -125,6 +125,105 @@ jobs:
             echo "No examples directory found"
           fi
 
+  # Android cross-compilation test
+  android:
+    name: Android Cross-compilation
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - aarch64-linux-android    # ARM64 Android
+          - armv7-linux-androideabi  # ARM Android
+          - i686-linux-android       # x86 Android
+          - x86_64-linux-android     # x86_64 Android
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          add-to-path: false
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-android-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-android-${{ matrix.target }}-cargo-
+
+      - name: Setup Android cross-compilation environment
+        run: |
+          export ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+
+          # Set up linker for each target
+          case "${{ matrix.target }}" in
+            aarch64-linux-android)
+              echo "CC_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
+              echo "CXX_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++" >> $GITHUB_ENV
+              echo "AR_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+              echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
+              ;;
+            armv7-linux-androideabi)
+              echo "CC_armv7_linux_androideabi=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang" >> $GITHUB_ENV
+              echo "CXX_armv7_linux_androideabi=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang++" >> $GITHUB_ENV
+              echo "AR_armv7_linux_androideabi=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+              echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang" >> $GITHUB_ENV
+              ;;
+            i686-linux-android)
+              echo "CC_i686_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang" >> $GITHUB_ENV
+              echo "CXX_i686_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang++" >> $GITHUB_ENV
+              echo "AR_i686_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+              echo "CARGO_TARGET_I686_LINUX_ANDROID_LINKER=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang" >> $GITHUB_ENV
+              ;;
+            x86_64-linux-android)
+              echo "CC_x86_64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang" >> $GITHUB_ENV
+              echo "CXX_x86_64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang++" >> $GITHUB_ENV
+              echo "AR_x86_64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+              echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Build for Android target
+        run: |
+          echo "Building for target: ${{ matrix.target }}"
+          cargo build --target ${{ matrix.target }} --verbose --all-features
+
+      - name: Check if examples can be built for Android
+        run: |
+          echo "Checking if examples can be built for ${{ matrix.target }}"
+          if [ -d "examples" ]; then
+            for example in examples/*.rs; do
+              if [ -f "$example" ]; then
+                example_name=$(basename "$example" .rs)
+                echo "Building example: $example_name for ${{ matrix.target }}"
+                cargo build --target ${{ matrix.target }} --example "$example_name" || echo "Example $example_name failed to build for ${{ matrix.target }}"
+              fi
+            done
+          else
+            echo "No examples directory found"
+          fi
+
+      - name: Verify Android compatibility
+        run: |
+          echo "✓ Successfully built rsactor for Android target: ${{ matrix.target }}"
+          echo "  - Target architecture: ${{ matrix.target }}"
+          echo "  - Android API level: 33"
+          echo "  - NDK version: r26d"
+
   # Dedicated MSRV check for clarity
   msrv-check:
     name: Minimum Supported Rust Version (1.75.0)
@@ -245,7 +344,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [quality, security, test, msrv-check, docs, coverage]
+    needs: [quality, security, test, android, msrv-check, docs, coverage]
     if: always()
     steps:
       - name: Check all jobs
@@ -260,6 +359,10 @@ jobs:
           fi
           if [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "Tests failed"
+            exit 1
+          fi
+          if [[ "${{ needs.android.result }}" != "success" ]]; then
+            echo "Android cross-compilation tests failed"
             exit 1
           fi
           if [[ "${{ needs.msrv-check.result }}" != "success" ]]; then
