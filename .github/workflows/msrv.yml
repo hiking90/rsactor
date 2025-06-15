@@ -16,7 +16,7 @@ env:
 
 jobs:
   msrv-validation:
-    name: Validate MSRV (${{ env.MSRV }})
+    name: Validate MSRV
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
