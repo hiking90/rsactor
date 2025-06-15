@@ -43,16 +43,18 @@ jobs:
           key: ${{ runner.os }}-msrv-${{ env.MSRV }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Verify Rust version
+        shell: bash
         run: |
           echo "Expected MSRV: ${{ env.MSRV }}"
           ACTUAL_VERSION=$(rustc --version | awk '{print $2}')
           echo "Actual Rust version: $ACTUAL_VERSION"
-          if [[ "$ACTUAL_VERSION" != "${{ env.MSRV }}" ]]; then
+          if [ "$ACTUAL_VERSION" != "${{ env.MSRV }}" ]; then
             echo "Error: Rust version mismatch!"
             exit 1
           fi
 
       - name: Verify Cargo.toml rust-version
+        shell: bash
         run: |
           if [ -f "Cargo.toml" ]; then
             TOML_MSRV=$(grep "^rust-version" Cargo.toml | cut -d'"' -f2 || echo "not specified")
@@ -66,31 +68,37 @@ jobs:
           fi
 
       - name: Check compilation
+        shell: bash
         run: |
           echo "Testing compilation with MSRV..."
           cargo check --verbose
 
       - name: Build with MSRV
+        shell: bash
         run: |
           echo "Building with MSRV..."
           cargo build --verbose
 
       - name: Build all features with MSRV
+        shell: bash
         run: |
           echo "Building all features with MSRV..."
           cargo build --verbose --all-features
 
       - name: Test with MSRV
+        shell: bash
         run: |
           echo "Running tests with MSRV..."
           cargo test --verbose
 
       - name: Test all features with MSRV
+        shell: bash
         run: |
           echo "Running tests with all features using MSRV..."
           cargo test --verbose --all-features
 
       - name: Build examples with MSRV
+        shell: bash
         run: |
           echo "Building examples with MSRV..."
           for example in examples/*.rs; do
@@ -105,6 +113,7 @@ jobs:
           done
 
       - name: Check documentation build with MSRV
+        shell: bash
         run: |
           echo "Building documentation with MSRV..."
           cargo doc --no-deps --verbose
@@ -140,6 +149,7 @@ jobs:
           key: ubuntu-msrv-features-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Test with feature configuration
+        shell: bash
         run: |
           echo "Testing with features: ${{ matrix.features }}"
           cargo test --verbose ${{ matrix.features }}
@@ -169,6 +179,7 @@ jobs:
           key: ubuntu-msrv-clippy-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run clippy with MSRV
+        shell: bash
         run: |
           echo "Running clippy with MSRV..."
           cargo clippy --all-targets --all-features -- -D warnings
