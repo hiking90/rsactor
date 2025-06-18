@@ -496,7 +496,6 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                 match maybe_result {
                     Ok(_) => {
                         // on_run completed successfully, continue processing messages.
-                        debug!("Actor {} on_run completed successfully, continuing.", actor_id);
                     }
                     Err(e) => { // e is A::Error
                         let error_msg = format!("Actor {} on_run error: {:?}", actor_id, e);
