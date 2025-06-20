@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use log::info;
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, ActorResult, spawn};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,7 +52,10 @@ impl Actor for PanicTestActor {
     async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
         if let Some(threshold) = self.panic_threshold {
             if self.counter >= threshold {
-                panic!("Counter reached threshold {} - intentional panic in on_run!", threshold);
+                panic!(
+                    "Counter reached threshold {} - intentional panic in on_run!",
+                    threshold
+                );
             }
         }
 
@@ -60,7 +63,11 @@ impl Actor for PanicTestActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
+    async fn on_stop(
+        &mut self,
+        _actor_ref: &ActorRef<Self>,
+        _killed: bool,
+    ) -> Result<(), Self::Error> {
         info!("PanicTestActor stopping. Final counter: {}", self.counter);
         Ok(())
     }
@@ -94,14 +101,21 @@ impl Message<ErrorMessage> for PanicTestActor {
 impl Message<CounterResetMessage> for PanicTestActor {
     type Reply = u32;
 
-    async fn handle(&mut self, _msg: CounterResetMessage, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    async fn handle(
+        &mut self,
+        _msg: CounterResetMessage,
+        _actor_ref: &ActorRef<Self>,
+    ) -> Self::Reply {
         let old_counter = self.counter;
         self.counter = 0;
         old_counter
     }
 }
 
-impl_message_handler!(PanicTestActor, [SafeMessage, PanicMessage, ErrorMessage, CounterResetMessage]);
+impl_message_handler!(
+    PanicTestActor,
+    [SafeMessage, PanicMessage, ErrorMessage, CounterResetMessage]
+);
 
 #[cfg(test)]
 mod tests {
@@ -127,7 +141,7 @@ mod tests {
             ActorResult::Completed { actor, killed } => {
                 assert!(!killed);
                 assert_eq!(actor.counter, 8);
-            },
+            }
             _ => panic!("Expected completed actor result"),
         }
 
@@ -201,7 +215,7 @@ mod tests {
         let actor_result = join_handle.await.unwrap();
 
         match actor_result {
-            ActorResult::Completed { .. } => {},
+            ActorResult::Completed { .. } => {}
             _ => panic!("Expected completed actor result"),
         }
 
@@ -278,7 +292,7 @@ mod tests {
         let timeout_result = timeout(Duration::from_millis(100), panic_future).await;
 
         match timeout_result {
-            Ok(Err(_)) => {}, // Expected: ask failed due to panic
+            Ok(Err(_)) => {} // Expected: ask failed due to panic
             Err(_) => panic!("Ask operation should fail quickly, not timeout"),
             Ok(Ok(_)) => panic!("Panic message should not succeed"),
         }
@@ -388,7 +402,10 @@ mod advanced_tests {
         type Args = bool; // true to panic during on_start
         type Error = anyhow::Error;
 
-        async fn on_start(should_panic: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        async fn on_start(
+            should_panic: Self::Args,
+            _actor_ref: &ActorRef<Self>,
+        ) -> Result<Self, Self::Error> {
             if should_panic {
                 panic!("Intentional panic during on_start!");
             }
@@ -433,11 +450,18 @@ mod advanced_tests {
         type Args = bool; // true to panic during on_stop
         type Error = anyhow::Error;
 
-        async fn on_start(panic_on_stop: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        async fn on_start(
+            panic_on_stop: Self::Args,
+            _actor_ref: &ActorRef<Self>,
+        ) -> Result<Self, Self::Error> {
             Ok(StopPanicActor { panic_on_stop })
         }
 
-        async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, _killed: bool) -> Result<(), Self::Error> {
+        async fn on_stop(
+            &mut self,
+            _actor_ref: &ActorRef<Self>,
+            _killed: bool,
+        ) -> Result<(), Self::Error> {
             if self.panic_on_stop {
                 panic!("Intentional panic during on_stop!");
             }
@@ -485,11 +509,20 @@ mod advanced_tests {
         type Args = bool;
         type Error = anyhow::Error;
 
-        async fn on_start(should_panic_on_stop: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-            Ok(KillTestActor { should_panic_on_stop })
+        async fn on_start(
+            should_panic_on_stop: Self::Args,
+            _actor_ref: &ActorRef<Self>,
+        ) -> Result<Self, Self::Error> {
+            Ok(KillTestActor {
+                should_panic_on_stop,
+            })
         }
 
-        async fn on_stop(&mut self, _actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error> {
+        async fn on_stop(
+            &mut self,
+            _actor_ref: &ActorRef<Self>,
+            killed: bool,
+        ) -> Result<(), Self::Error> {
             if !killed && self.should_panic_on_stop {
                 panic!("Panic during graceful stop!");
             }
@@ -520,7 +553,10 @@ mod advanced_tests {
         let (actor_ref2, join_handle2) = spawn::<KillTestActor>(true);
         let _ = actor_ref2.kill();
         let result2 = join_handle2.await.unwrap();
-        assert!(matches!(result2, ActorResult::Completed { killed: true, .. }));
+        assert!(matches!(
+            result2,
+            ActorResult::Completed { killed: true, .. }
+        ));
 
         Ok(())
     }
@@ -536,7 +572,10 @@ mod advanced_tests {
         sleep(Duration::from_millis(50)).await;
 
         let result = join_handle.await.unwrap();
-        assert!(matches!(result, ActorResult::Completed { killed: true, .. }));
+        assert!(matches!(
+            result,
+            ActorResult::Completed { killed: true, .. }
+        ));
 
         Ok(())
     }
@@ -583,9 +622,7 @@ mod stress_tests {
         let mut tasks = Vec::new();
         for _ in 0..50 {
             let actor_ref_clone = actor_ref.clone();
-            let task = tokio::spawn(async move {
-                actor_ref_clone.ask(SafeMessage(1)).await
-            });
+            let task = tokio::spawn(async move { actor_ref_clone.ask(SafeMessage(1)).await });
             tasks.push(task);
         }
 
@@ -610,7 +647,10 @@ mod stress_tests {
 
         // At least some messages should have been processed
         assert!(success_count > 0);
-        println!("Processed {} messages before panic, {} failed", success_count, error_count);
+        println!(
+            "Processed {} messages before panic, {} failed",
+            success_count, error_count
+        );
 
         // Actor should have panicked
         let join_result = join_handle.await;
@@ -681,7 +721,10 @@ mod integration_tests {
             type Args = ();
             type Error = anyhow::Error;
 
-            async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            async fn on_start(
+                _args: Self::Args,
+                _actor_ref: &ActorRef<Self>,
+            ) -> Result<Self, Self::Error> {
                 Ok(ServiceActor {
                     processed_count: 0,
                     error_count: 0,
@@ -759,7 +802,10 @@ mod integration_tests {
             type Args = u32;
             type Error = anyhow::Error;
 
-            async fn on_start(id: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            async fn on_start(
+                id: Self::Args,
+                _actor_ref: &ActorRef<Self>,
+            ) -> Result<Self, Self::Error> {
                 Ok(SimpleActor { id })
             }
         }
@@ -767,7 +813,11 @@ mod integration_tests {
         impl Message<SimpleMsg> for SimpleActor {
             type Reply = u32;
 
-            async fn handle(&mut self, _msg: SimpleMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+            async fn handle(
+                &mut self,
+                _msg: SimpleMsg,
+                _actor_ref: &ActorRef<Self>,
+            ) -> Self::Reply {
                 if self.id == 2 {
                     panic!("Actor {} panicked!", self.id);
                 }
