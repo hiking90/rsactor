@@ -1,5 +1,9 @@
 name: Rust CI/CD
 
+# Main CI/CD pipeline for general Rust development workflows
+# Covers: quality checks, security audit, testing, cross-compilation, docs, coverage
+# MSRV testing is handled separately by msrv.yml workflow
+
 on:
   push:
     branches: [ "main" ]
@@ -75,7 +79,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, beta, 1.75.0] # minimum supported version (MSRV)
+        rust: [stable, beta] # MSRV testing is handled by dedicated msrv.yml workflow
         exclude:
           # Reduce matrix size by excluding some combinations
           - os: windows-latest
@@ -224,51 +228,6 @@ jobs:
           echo "  - Android API level: 33"
           echo "  - NDK version: r26d"
 
-  # Dedicated MSRV check for clarity
-  msrv-check:
-    name: Minimum Supported Rust Version (1.75.0)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust 1.75.0
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.75.0
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-msrv-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Check MSRV compatibility
-        run: |
-          echo "Testing with Rust 1.75.0 (MSRV)"
-          rustc --version
-          cargo --version
-
-      - name: Build with MSRV
-        run: cargo build --verbose --all-features
-
-      - name: Test with MSRV
-        run: cargo test --verbose --all-features
-
-      - name: Verify Cargo.toml rust-version
-        run: |
-          MSRV=$(grep "^rust-version" Cargo.toml | cut -d'"' -f2)
-          if [ "$MSRV" != "1.75.0" ]; then
-            echo "Error: Cargo.toml rust-version ($MSRV) doesn't match MSRV (1.75.0)"
-            exit 1
-          fi
-          echo "✓ Cargo.toml rust-version matches MSRV: $MSRV"
-
   # Documentation build
   docs:
     name: Documentation
@@ -344,7 +303,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [quality, security, test, android, msrv-check, docs, coverage]
+    needs: [quality, security, test, android, docs, coverage]
     if: always()
     steps:
       - name: Check all jobs
@@ -365,10 +324,6 @@ jobs:
             echo "Android cross-compilation tests failed"
             exit 1
           fi
-          if [[ "${{ needs.msrv-check.result }}" != "success" ]]; then
-            echo "MSRV (1.75.0) compatibility check failed"
-            exit 1
-          fi
           if [[ "${{ needs.docs.result }}" != "success" ]]; then
             echo "Documentation build failed"
             exit 1
@@ -377,4 +332,4 @@ jobs:
             echo "Coverage check failed"
             exit 1
           fi
-          echo "All CI jobs passed!"
+          echo "All CI jobs passed! (MSRV testing handled by separate msrv.yml workflow)"

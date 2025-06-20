@@ -1,12 +1,16 @@
 name: MSRV Check
 
+# This workflow is dedicated to comprehensive MSRV (Minimum Supported Rust Version) testing
+# It dynamically extracts the rust-version from workspace.package in Cargo.toml
+# Runs on: push/PR to main, and monthly for MSRV compatibility validation
+
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   schedule:
-    # Monthly MSRV compatibility check
+    # Monthly MSRV compatibility check to catch ecosystem changes
     - cron: '0 0 1 * *'
 
 env:
