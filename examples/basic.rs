@@ -20,7 +20,7 @@ struct MyActor {
 
 // Implement the Actor trait for MyActor
 impl Actor for MyActor {
-    type Args = u32;
+    type Args = Self;
     type Error = anyhow::Error; // Define the error type for actor operations
 
     // Called when the actor is started
@@ -28,14 +28,9 @@ impl Actor for MyActor {
         info!(
             "MyActor (id: {}) started. Initial count: {}.",
             actor_ref.identity(),
-            args
+            args.count
         );
-        Ok(MyActor {
-            count: args,
-            start_up: std::time::Instant::now(),
-            tick_300ms: interval(Duration::from_millis(300)),
-            tick_1s: interval(Duration::from_secs(1)),
-        })
+        Ok(args)
     }
 
     async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
@@ -101,9 +96,17 @@ async fn main() -> Result<()> {
     env_logger::init(); // Initialize the logger
 
     println!("Spawning MyActor...");
+
+    let my_actor = MyActor {
+        count: 100,
+        start_up: std::time::Instant::now(),
+        tick_300ms: interval(Duration::from_millis(300)),
+        tick_1s: interval(Duration::from_secs(1)),
+    };
+
     // Spawn the actor. This returns an ActorRef for sending messages
     // and a JoinHandle to await the actor's completion.
-    let (actor_ref, join_handle) = rsactor::spawn::<MyActor>(100); // MODIFIED: use system.spawn and await
+    let (actor_ref, join_handle) = rsactor::spawn::<MyActor>(my_actor); // MODIFIED: use system.spawn and await
     println!("MyActor spawned with ref: {:?}", actor_ref.identity());
 
     tokio::time::sleep(Duration::from_millis(700)).await;
