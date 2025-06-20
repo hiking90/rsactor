@@ -13,6 +13,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 ## Core Features
 
 *   **Minimalist Actor System**: Focuses on core actor model primitives.
+*   **Actor Derive Macro**: `#[derive(Actor)]` for simple actors that don't need complex initialization.
 *   **Message Passing**:
     *   `ask`/`ask_with_timeout`: Send a message and asynchronously await a reply.
     *   `tell`/`tell_with_timeout`: Send a message without waiting for a reply.
@@ -31,12 +32,66 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
 ```toml
 [dependencies]
-rsactor = "0.7" # Check crates.io for the latest version
+rsactor = "0.8" # Check crates.io for the latest version
 ```
 
-### 2. Basic Usage Example
+### 2. Choose Your Implementation Approach
 
-A simple counter actor:
+#### Option A: Using the Actor Derive Macro (Recommended for Simple Cases)
+
+For simple actors that don't need complex initialization logic:
+
+```rust
+use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+
+// 1. Define your actor struct and derive Actor
+#[derive(Actor)]
+struct CounterActor {
+    count: u32,
+}
+
+// 2. Define message types
+struct Increment;
+struct GetCount;
+
+// 3. Implement message handlers
+impl Message<Increment> for CounterActor {
+    type Reply = ();
+    async fn handle(&mut self, _: Increment, _: &ActorRef<Self>) -> Self::Reply {
+        self.count += 1;
+    }
+}
+
+impl Message<GetCount> for CounterActor {
+    type Reply = u32;
+    async fn handle(&mut self, _: GetCount, _: &ActorRef<Self>) -> Self::Reply {
+        self.count
+    }
+}
+
+// 4. Wire up message handlers
+impl_message_handler!(CounterActor, [Increment, GetCount]);
+
+// 5. Usage
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create actor instance and spawn
+    let actor = CounterActor { count: 0 };
+    let (actor_ref, _join_handle) = spawn::<CounterActor>(actor);
+
+    // Send messages
+    actor_ref.tell(Increment).await?;
+    let count = actor_ref.ask(GetCount).await?;
+    println!("Count: {}", count); // Prints: Count: 1
+
+    actor_ref.stop().await?;
+    Ok(())
+}
+```
+
+#### Option B: Manual Implementation (For Complex Initialization)
+
+For actors that need complex initialization logic:
 
 ```rust
 use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
