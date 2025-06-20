@@ -1,6 +1,6 @@
 // Tests for the Actor derive macro
 
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
 
 #[derive(Actor, Debug, PartialEq)]
 struct TestActor {

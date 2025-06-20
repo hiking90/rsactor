@@ -1,6 +1,6 @@
 // Advanced example showing different ways to use the Actor derive macro
 
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
 
 // Simple actor with derive
 #[derive(Actor, Debug)]
@@ -109,7 +109,11 @@ impl Message<DoWork> for WorkerActor {
 impl Message<GetTasksCompleted> for WorkerActor {
     type Reply = u32;
 
-    async fn handle(&mut self, _msg: GetTasksCompleted, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    async fn handle(
+        &mut self,
+        _msg: GetTasksCompleted,
+        _actor_ref: &ActorRef<Self>,
+    ) -> Self::Reply {
         self.tasks_completed
     }
 }

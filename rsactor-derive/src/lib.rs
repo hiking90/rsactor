@@ -63,7 +63,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data};
+use syn::{parse_macro_input, Data, DeriveInput};
 
 /// Derive macro for automatically implementing the Actor trait.
 ///
@@ -140,11 +140,9 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             Ok(expanded)
         }
-        _ => {
-            Err(syn::Error::new_spanned(
-                name,
-                "Actor derive macro can only be used on structs"
-            ))
-        }
+        _ => Err(syn::Error::new_spanned(
+            name,
+            "Actor derive macro can only be used on structs",
+        )),
     }
 }
