@@ -27,7 +27,7 @@ jobs:
         id: get-msrv
         shell: bash
         run: |
-          MSRV=$(grep -A 10 "^\[workspace\.package\]" Cargo.toml | grep "^rust-version" | cut -d'"' -f2)
+          MSRV=$(awk '/^\[workspace\.package\]/{flag=1; next} /^\[/{flag=0} flag && /^rust-version/{print $3; exit}' Cargo.toml | tr -d '"')
           echo "msrv=$MSRV" >> $GITHUB_OUTPUT
           echo "Extracted MSRV: $MSRV"
 
@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           if [ -f "Cargo.toml" ]; then
-            TOML_MSRV=$(grep -A 10 "^\[workspace\.package\]" Cargo.toml | grep "^rust-version" | cut -d'"' -f2 || echo "not specified")
+            TOML_MSRV=$(awk '/^\[workspace\.package\]/{flag=1; next} /^\[/{flag=0} flag && /^rust-version/{print $3; exit}' Cargo.toml | tr -d '"')
             echo "Cargo.toml workspace rust-version: $TOML_MSRV"
             if [ "$TOML_MSRV" != "${{ needs.extract-msrv.outputs.msrv }}" ]; then
               echo "Error: Workspace rust-version ($TOML_MSRV) doesn't match extracted MSRV (${{ needs.extract-msrv.outputs.msrv }})"
