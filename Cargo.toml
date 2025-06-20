@@ -39,7 +39,7 @@ keywords.workspace = true
 [dependencies]
 tokio.workspace = true
 log.workspace = true
-rsactor-derive = { path = "rsactor-derive" }
+rsactor-derive = { version = "0.8", path = "rsactor-derive" }
 
 [dev-dependencies]
 anyhow.workspace = true

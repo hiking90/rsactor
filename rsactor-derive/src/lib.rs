@@ -9,17 +9,18 @@
 //! ## Actor Derive Macro
 //!
 //! The `#[derive(Actor)]` macro provides a convenient way to implement the Actor trait
-//! for simple structs that don't require complex initialization logic.
+//! for simple structs and enums that don't require complex initialization logic.
 //!
 //! ### Generated Implementation
 //!
 //! When you use `#[derive(Actor)]`, it generates:
-//! - `Args` type set to `Self` (the struct itself)
+//! - `Args` type set to `Self` (the struct or enum itself)
 //! - `Error` type set to `std::convert::Infallible` (never fails)
 //! - `on_start` method that simply returns the provided args
 //!
 //! ### Usage
 //!
+//! #### With Structs
 //! ```rust
 //! use rsactor::Actor;
 //!
@@ -27,6 +28,18 @@
 //! struct MyActor {
 //!     name: String,
 //!     count: u32,
+//! }
+//! ```
+//!
+//! #### With Enums
+//! ```rust
+//! use rsactor::Actor;
+//!
+//! #[derive(Actor)]
+//! enum StateActor {
+//!     Idle,
+//!     Processing(String),
+//!     Completed(i32),
 //! }
 //! ```
 //!
@@ -72,14 +85,27 @@ use syn::{parse_macro_input, Data, DeriveInput};
 /// - `Error` type is set to `std::convert::Infallible`
 /// - `on_start` method returns the args as the actor instance
 ///
-/// # Example
+/// # Examples
 ///
+/// ## Struct Actor
 /// ```rust
 /// use rsactor::Actor;
 ///
 /// #[derive(Actor)]
 /// struct MyActor {
 ///     name: String,
+/// }
+/// ```
+///
+/// ## Enum Actor
+/// ```rust
+/// use rsactor::Actor;
+///
+/// #[derive(Actor)]
+/// enum StateActor {
+///     Idle,
+///     Processing(String),
+///     Completed(i32),
 /// }
 /// ```
 ///
@@ -102,7 +128,7 @@ use syn::{parse_macro_input, Data, DeriveInput};
 ///
 /// # Limitations
 ///
-/// - Only works on structs (not enums or unions)
+/// - Only works on structs and enums (not unions)
 /// - Generates a very basic implementation - for complex initialization logic,
 ///   implement the Actor trait manually
 #[proc_macro_derive(Actor)]
@@ -120,9 +146,9 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
 
-    // Check if it's a struct
+    // Check if it's a struct or enum
     match &input.data {
-        Data::Struct(_) => {
+        Data::Struct(_) | Data::Enum(_) => {
             // Generate the Actor implementation
             let expanded = quote! {
                 impl rsactor::Actor for #name {
@@ -142,7 +168,7 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
         _ => Err(syn::Error::new_spanned(
             name,
-            "Actor derive macro can only be used on structs",
+            "Actor derive macro can only be used on structs and enums",
         )),
     }
 }
