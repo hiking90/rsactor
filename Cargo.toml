@@ -1,9 +1,10 @@
-[package]
-name = "rsactor"
-version = "0.7.3"
+[workspace]
+members = [".", "rsactor-derive"]
+
+[workspace.package]
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.75.0"
-description = "A Simple and Efficient In-Process Actor Model Implementation for Rust."
 authors = ["Jeff Kim <hiking90@gmail.com>"]
 repository = "https://github.com/hiking90/rsactor"
 homepage = "https://github.com/hiking90/rsactor"
@@ -11,12 +12,37 @@ license = "Apache-2.0"
 readme = "README.md"
 keywords = ["actor", "rust", "framework"]
 
-[dependencies]
+[workspace.dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 log = "0.4"
-
-[dev-dependencies]
 anyhow = "1.0"
 env_logger = "0.11"
 futures = "0.3"
 rand = "0.9"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
+
+[package]
+name = "rsactor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "A Simple and Efficient In-Process Actor Model Implementation for Rust."
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+keywords.workspace = true
+
+[dependencies]
+tokio.workspace = true
+log.workspace = true
+rsactor-derive = { path = "rsactor-derive" }
+
+[dev-dependencies]
+anyhow.workspace = true
+env_logger.workspace = true
+futures.workspace = true
+rand.workspace = true

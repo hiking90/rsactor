@@ -41,8 +41,56 @@
 //!
 //! ## Getting Started
 //!
-//! Define an actor struct, implement [`Actor`] and [`Message<M>`] for each message type,
-//! then use [`impl_message_handler!`] to wire up message handling.
+//! ### Option 1: Using the Actor Derive Macro (Recommended for Simple Cases)
+//!
+//! For simple actors that don't need custom initialization logic, you can use the `#[derive(Actor)]` macro:
+//!
+//! ```rust
+//! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+//!
+//! // 1. Define your actor struct and derive Actor
+//! #[derive(Actor)]
+//! struct MyActor {
+//!     name: String,
+//!     count: u32,
+//! }
+//!
+//! // 2. Define message types and implement Message<M> for each
+//! struct GetName;
+//! struct Increment;
+//!
+//! impl Message<GetName> for MyActor {
+//!     type Reply = String;
+//!     async fn handle(&mut self, _msg: GetName, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!         self.name.clone()
+//!     }
+//! }
+//!
+//! impl Message<Increment> for MyActor {
+//!     type Reply = ();
+//!     async fn handle(&mut self, _msg: Increment, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!         self.count += 1;
+//!     }
+//! }
+//!
+//! // 3. Wire up message handlers
+//! impl_message_handler!(MyActor, [GetName, Increment]);
+//!
+//! // 4. Usage
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let actor_instance = MyActor { name: "Test".to_string(), count: 0 };
+//! let (actor_ref, _join_handle) = spawn::<MyActor>(actor_instance);
+//!
+//! let name = actor_ref.ask(GetName).await?;
+//! actor_ref.tell(Increment).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Option 2: Manual Implementation (For Complex Initialization)
+//!
+//! For actors that need complex initialization logic, implement the Actor trait manually:
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
@@ -56,7 +104,7 @@
 //!     tick_1s: tokio::time::Interval,
 //! }
 //!
-//! // 2. Implement the Actor trait
+//! // 2. Implement the Actor trait manually
 //! impl Actor for MyActor {
 //!     type Args = String;
 //!     type Error = anyhow::Error;
@@ -145,6 +193,9 @@ pub use actor_result::{ActorResult, FailurePhase};
 
 mod actor;
 pub use actor::{Actor, Message, MessageHandler};
+
+// Re-export derive macro
+pub use rsactor_derive::Actor;
 
 use std::{
     any::Any,

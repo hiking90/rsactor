@@ -1,23 +1,44 @@
 name: MSRV Check
 
+# This workflow is dedicated to comprehensive MSRV (Minimum Supported Rust Version) testing
+# It dynamically extracts the rust-version from workspace.package in Cargo.toml
+# Runs on: push/PR to main, and monthly for MSRV compatibility validation
+
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   schedule:
-    # Monthly MSRV compatibility check
+    # Monthly MSRV compatibility check to catch ecosystem changes
     - cron: '0 0 1 * *'
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MSRV: "1.75.0"
 
 jobs:
+  extract-msrv:
+    name: Extract MSRV from Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      msrv: ${{ steps.get-msrv.outputs.msrv }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract MSRV from workspace
+        id: get-msrv
+        shell: bash
+        run: |
+          MSRV=$(awk '/^\[workspace\.package\]/{flag=1; next} /^\[/{flag=0} flag && /^rust-version/{print $3; exit}' Cargo.toml | tr -d '"')
+          echo "msrv=$MSRV" >> $GITHUB_OUTPUT
+          echo "Extracted MSRV: $MSRV"
+
   msrv-validation:
     name: Validate MSRV
     runs-on: ${{ matrix.os }}
+    needs: extract-msrv
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -26,10 +47,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.MSRV }}
+      - name: Install Rust ${{ needs.extract-msrv.outputs.msrv }}
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.MSRV }}
+          toolchain: ${{ needs.extract-msrv.outputs.msrv }}
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -40,15 +61,15 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-msrv-${{ env.MSRV }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-msrv-${{ needs.extract-msrv.outputs.msrv }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Verify Rust version
         shell: bash
         run: |
-          echo "Expected MSRV: ${{ env.MSRV }}"
+          echo "Expected MSRV: ${{ needs.extract-msrv.outputs.msrv }}"
           ACTUAL_VERSION=$(rustc --version | awk '{print $2}')
           echo "Actual Rust version: $ACTUAL_VERSION"
-          if [ "$ACTUAL_VERSION" != "${{ env.MSRV }}" ]; then
+          if [ "$ACTUAL_VERSION" != "${{ needs.extract-msrv.outputs.msrv }}" ]; then
             echo "Error: Rust version mismatch!"
             exit 1
           fi
@@ -57,13 +78,13 @@ jobs:
         shell: bash
         run: |
           if [ -f "Cargo.toml" ]; then
-            TOML_MSRV=$(grep "^rust-version" Cargo.toml | cut -d'"' -f2 || echo "not specified")
-            echo "Cargo.toml rust-version: $TOML_MSRV"
-            if [ "$TOML_MSRV" != "${{ env.MSRV }}" ]; then
-              echo "Warning: Cargo.toml rust-version ($TOML_MSRV) doesn't match MSRV (${{ env.MSRV }})"
-              echo "This should be fixed to ensure proper MSRV enforcement"
+            TOML_MSRV=$(awk '/^\[workspace\.package\]/{flag=1; next} /^\[/{flag=0} flag && /^rust-version/{print $3; exit}' Cargo.toml | tr -d '"')
+            echo "Cargo.toml workspace rust-version: $TOML_MSRV"
+            if [ "$TOML_MSRV" != "${{ needs.extract-msrv.outputs.msrv }}" ]; then
+              echo "Error: Workspace rust-version ($TOML_MSRV) doesn't match extracted MSRV (${{ needs.extract-msrv.outputs.msrv }})"
+              exit 1
             else
-              echo "✓ Cargo.toml rust-version matches MSRV"
+              echo "✓ Cargo.toml workspace rust-version matches MSRV"
             fi
           fi
 
@@ -121,6 +142,7 @@ jobs:
   msrv-feature-matrix:
     name: MSRV Feature Matrix
     runs-on: ubuntu-latest
+    needs: extract-msrv
     strategy:
       matrix:
         features:
@@ -132,10 +154,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.MSRV }}
+      - name: Install Rust ${{ needs.extract-msrv.outputs.msrv }}
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.MSRV }}
+          toolchain: ${{ needs.extract-msrv.outputs.msrv }}
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -157,14 +179,15 @@ jobs:
   msrv-clippy:
     name: MSRV Clippy Check
     runs-on: ubuntu-latest
+    needs: extract-msrv
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust ${{ env.MSRV }}
+      - name: Install Rust ${{ needs.extract-msrv.outputs.msrv }}
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.MSRV }}
+          toolchain: ${{ needs.extract-msrv.outputs.msrv }}
           components: clippy
 
       - name: Cache cargo dependencies
