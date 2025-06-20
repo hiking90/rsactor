@@ -43,7 +43,7 @@
 //!
 //! ### Option 1: Using the Actor Derive Macro (Recommended for Simple Cases)
 //!
-//! For simple actors that don't need custom initialization logic, you can use the `#[derive(Actor)]` macro:
+//! For simple actors (structs or enums) that don't need custom initialization logic, you can use the `#[derive(Actor)]` macro:
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
@@ -84,6 +84,61 @@
 //!
 //! let name = actor_ref.ask(GetName).await?;
 //! actor_ref.tell(Increment).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The derive macro also works with enums, making it easy to create state machine actors:
+//!
+//! ```rust
+//! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+//!
+//! // 1. Define your actor enum and derive Actor
+//! #[derive(Actor, Clone)]
+//! enum StateActor {
+//!     Idle,
+//!     Processing(String),
+//!     Completed(i32),
+//! }
+//!
+//! // 2. Define message types
+//! struct GetState;
+//! struct StartProcessing(String);
+//! struct Complete(i32);
+//!
+//! impl Message<GetState> for StateActor {
+//!     type Reply = StateActor;
+//!     async fn handle(&mut self, _msg: GetState, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!         self.clone()
+//!     }
+//! }
+//!
+//! impl Message<StartProcessing> for StateActor {
+//!     type Reply = ();
+//!     async fn handle(&mut self, msg: StartProcessing, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!         *self = StateActor::Processing(msg.0);
+//!     }
+//! }
+//!
+//! impl Message<Complete> for StateActor {
+//!     type Reply = ();
+//!     async fn handle(&mut self, msg: Complete, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!         *self = StateActor::Completed(msg.0);
+//!     }
+//! }
+//!
+//! // 3. Wire up message handlers
+//! impl_message_handler!(StateActor, [GetState, StartProcessing, Complete]);
+//!
+//! // 4. Usage
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let actor_instance = StateActor::Idle;
+//! let (actor_ref, _join_handle) = spawn::<StateActor>(actor_instance);
+//!
+//! actor_ref.tell(StartProcessing("task1".to_string())).await?;
+//! let state = actor_ref.ask(GetState).await?;
+//! actor_ref.tell(Complete(42)).await?;
 //! # Ok(())
 //! # }
 //! ```
