@@ -87,7 +87,7 @@ function publish() {
 
         # Show what will be published
         echo "Contents to be published:"
-        cargo package --list | head -10
+        cargo package --list | head -20
 
         if [ $dry_run = true ]; then
             echo "🔍 Dry run mode - not actually publishing"
