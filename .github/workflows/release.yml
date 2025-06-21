@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Perform a dry run (skip actual publishing and tagging)'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Call the main CI/CD workflow first
+  ci:
+    name: Run Rust CI/CD
+    uses: ./.github/workflows/rust.yml
+
+  # Extract version from Cargo.toml for tagging
+  extract-version:
+    name: Extract Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from Cargo.toml
+        id: version
+        run: |
+          # Extract version from workspace.package.version
+          # Find the [workspace.package] section and get the version field
+          version=$(grep -A 20 '\[workspace\.package\]' Cargo.toml | grep '^version[[:space:]]*=' | head -1 | sed 's/version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/')
+
+          if [ -z "$version" ]; then
+            echo "Error: Could not extract version from [workspace.package] section in Cargo.toml"
+            echo "Looking for pattern: version = \"x.y.z\""
+            grep -A 20 '\[workspace\.package\]' Cargo.toml | grep -n 'version'
+            exit 1
+          fi
+
+          # Validate version format (should be semantic version)
+          if ! echo "$version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?$'; then
+            echo "Error: Invalid version format: $version"
+            echo "Expected semantic version format (e.g., 1.0.0, 1.0.0-alpha, 1.0.0+build)"
+            exit 1
+          fi
+
+          echo "Extracted version: $version"
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "tag=v$version" >> $GITHUB_OUTPUT
+
+  # Release job that depends on successful CI
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: [ci, extract-version]
+    if: needs.ci.result == 'success'
+    outputs:
+      tag-created: ${{ steps.tag-status.outputs.created }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-
+
+      - name: Check if tag already exists
+        id: check-tag
+        run: |
+          tag="${{ needs.extract-version.outputs.tag }}"
+          if git ls-remote --tags origin | grep -q "refs/tags/$tag$"; then
+            echo "Tag $tag already exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $tag does not exist"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Git tag
+        if: steps.check-tag.outputs.exists == 'false' && github.event.inputs.dry_run != 'true'
+        run: |
+          tag="${{ needs.extract-version.outputs.tag }}"
+          version="${{ needs.extract-version.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create annotated tag
+          git tag -a "$tag" -m "Release version $version"
+          git push origin "$tag"
+
+          echo "Created and pushed tag: $tag"
+
+      - name: Set tag creation status
+        id: tag-status
+        run: |
+          if [[ "${{ steps.check-tag.outputs.exists }}" == "false" && "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            echo "created=true" >> $GITHUB_OUTPUT
+          else
+            echo "created=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Dry run - Show what would be tagged
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "DRY RUN: Would create tag ${{ needs.extract-version.outputs.tag }} for version ${{ needs.extract-version.outputs.version }}"
+
+      - name: Skip tag creation if already exists
+        if: steps.check-tag.outputs.exists == 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          echo "Tag ${{ needs.extract-version.outputs.tag }} already exists, skipping tag creation"
+          echo "Proceeding to GitHub release creation..."
+
+      - name: Create GitHub Release
+        if: steps.check-tag.outputs.exists == 'false' && github.event.inputs.dry_run != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.extract-version.outputs.tag }}
+          name: Release ${{ needs.extract-version.outputs.version }}
+          body: |
+            ## Release ${{ needs.extract-version.outputs.version }}
+
+            This release includes:
+            - rsactor v${{ needs.extract-version.outputs.version }}
+            - rsactor-derive
+
+            ### Changes
+            See the [CHANGELOG](https://github.com/hiking90/rsactor/blob/main/CHANGELOG.md) for detailed changes.
+
+            ### Installation
+            ```bash
+            cargo add rsactor
+            ```
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Dry run - Show what GitHub release would be created
+        if: github.event.inputs.dry_run == 'true'
+        run: |
+          echo "DRY RUN: Would create GitHub release:"
+          echo "Tag: ${{ needs.extract-version.outputs.tag }}"
+          echo "Title: Release ${{ needs.extract-version.outputs.version }}"
+          echo "Draft: false"
+          echo "Prerelease: false"
+
+  # Summary job
+  release-summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [ci, extract-version, release]
+    if: always()
+    steps:
+      - name: Print release summary
+        run: |
+          echo "=== Release Summary ==="
+          echo "CI Status: ${{ needs.ci.result }}"
+          echo "Version: ${{ needs.extract-version.outputs.version }}"
+          echo "Tag: ${{ needs.extract-version.outputs.tag }}"
+          echo "Release Status: ${{ needs.release.result }}"
+          echo "Dry Run: ${{ github.event.inputs.dry_run }}"
+
+          if [[ "${{ needs.release.result }}" == "success" && "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            echo ""
+            echo "✅ Release process completed successfully!"
+
+            # Check if we created a new tag or if it already existed
+            if [[ "${{ needs.release.outputs.tag-created }}" == "true" ]]; then
+              echo "🏷️  New Git tag created: ${{ needs.extract-version.outputs.tag }}"
+              echo "🚀 New GitHub release created"
+            else
+              echo "🏷️  Git tag ${{ needs.extract-version.outputs.tag }} already existed"
+              echo "📝 GitHub release may already exist"
+            fi
+          elif [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            echo ""
+            echo "🧪 Dry run completed - no actual changes made"
+          else
+            echo ""
+            echo "❌ Release failed or was skipped"
+          fi
