@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use log::{debug, info}; // ADDED
-use rsactor::{Actor, ActorRef, Message}; // MODIFIED: Removed ActorStopReason
+use rsactor::{Actor, ActorRef, ActorWeak, Message}; // MODIFIED: Removed ActorStopReason
 use tokio::time::{interval, Duration}; // MODIFIED: Added MissedTickBehavior
 
 // Message types
@@ -33,7 +33,7 @@ impl Actor for MyActor {
         Ok(args)
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
         tokio::select! {
             // Executes when the 300ms interval timer ticks.

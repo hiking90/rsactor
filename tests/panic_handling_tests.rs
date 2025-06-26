@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use log::info;
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
+use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, ActorWeak, Message};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,7 +49,7 @@ impl Actor for PanicTestActor {
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         if let Some(threshold) = self.panic_threshold {
             if self.counter >= threshold {
                 panic!(
@@ -65,7 +65,7 @@ impl Actor for PanicTestActor {
 
     async fn on_stop(
         &mut self,
-        _actor_ref: &ActorRef<Self>,
+        _actor_ref: &ActorWeak<Self>,
         _killed: bool,
     ) -> Result<(), Self::Error> {
         info!("PanicTestActor stopping. Final counter: {}", self.counter);
@@ -459,7 +459,7 @@ mod advanced_tests {
 
         async fn on_stop(
             &mut self,
-            _actor_ref: &ActorRef<Self>,
+            _actor_ref: &ActorWeak<Self>,
             _killed: bool,
         ) -> Result<(), Self::Error> {
             if self.panic_on_stop {
@@ -520,7 +520,7 @@ mod advanced_tests {
 
         async fn on_stop(
             &mut self,
-            _actor_ref: &ActorRef<Self>,
+            _actor_ref: &ActorWeak<Self>,
             killed: bool,
         ) -> Result<(), Self::Error> {
             if !killed && self.should_panic_on_stop {

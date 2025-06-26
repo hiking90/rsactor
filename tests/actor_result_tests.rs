@@ -1,7 +1,11 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, FailurePhase, Message};
+use std::any::TypeId;
+
+use rsactor::{
+    impl_message_handler, spawn, Actor, ActorRef, ActorResult, ActorWeak, FailurePhase, Message,
+};
 
 // Dummy message for test actors
 #[derive(Debug)]
@@ -23,7 +27,7 @@ impl Actor for TestActor {
         Ok(TestActor { id, value })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         // Simple run loop that sleeps
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -66,7 +70,7 @@ impl Actor for FailureTestActor {
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         if self.id.contains("fail_on_run") {
             return Err(anyhow::anyhow!("Test failure in on_run"));
         }
@@ -78,7 +82,7 @@ impl Actor for FailureTestActor {
 
     async fn on_stop(
         &mut self,
-        _actor_ref: &ActorRef<Self>,
+        _actor_ref: &ActorWeak<Self>,
         _killed: bool,
     ) -> Result<(), Self::Error> {
         if self.id.contains("fail_on_stop") {
@@ -692,7 +696,7 @@ async fn test_error_runtime_ask_blocking_outside_runtime() {
 #[tokio::test]
 async fn test_error_runtime_display_format() {
     // Create a sample Error::Runtime for testing Display implementation
-    let identity = rsactor::Identity::new(123, "TestActor");
+    let identity = rsactor::Identity::new(TypeId::of::<TestActor>(), "TestActor");
     let error = rsactor::Error::Runtime {
         identity,
         details: "Test runtime error details".to_string(),
@@ -704,7 +708,7 @@ async fn test_error_runtime_display_format() {
         "Display should mention runtime error"
     );
     assert!(
-        display_str.contains("TestActor#123"),
+        display_str.contains("TestActor"),
         "Display should contain actor name"
     );
     assert!(

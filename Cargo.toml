@@ -2,7 +2,7 @@
 members = [".", "rsactor-derive"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.75.0"
 authors = ["Jeff Kim <hiking90@gmail.com>"]
@@ -39,7 +39,7 @@ keywords.workspace = true
 [dependencies]
 tokio.workspace = true
 log.workspace = true
-rsactor-derive = { version = "0.8", path = "rsactor-derive" }
+rsactor-derive = { version = "0.9", path = "rsactor-derive" }
 
 [dev-dependencies]
 anyhow.workspace = true
