@@ -735,7 +735,7 @@ impl UntypedActorWeak {
 /// prevent the actor from being dropped and can be upgraded to a strong [`ActorRef<T>`]
 /// if the actor is still alive.
 ///
-/// ## Creating ActorWeak<T>
+/// ## Creating `ActorWeak<T>`
 ///
 /// `ActorWeak<T>` instances are created by calling [`downgrade`](ActorRef::downgrade) on an
 /// existing [`ActorRef<T>`]:
@@ -744,7 +744,7 @@ impl UntypedActorWeak {
 /// let weak_ref = actor_ref.downgrade();
 /// ```
 ///
-/// ## Upgrading to ActorRef<T>
+/// ## Upgrading to `ActorRef<T>`
 ///
 /// An `ActorWeak<T>` can be upgraded to an `ActorRef<T>` using the [`upgrade`](ActorWeak::upgrade) method:
 ///
