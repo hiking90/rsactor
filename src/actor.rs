@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::actor_ref::ActorRef;
-use crate::{ActorResult, ControlSignal, FailurePhase, MailboxMessage, Result};
+use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage, Result};
 use log::{debug, error, info, trace};
 use std::{any::Any, fmt::Debug, future::Future, time::Duration};
 use tokio::sync::mpsc;
@@ -185,7 +185,7 @@ pub trait Actor: Sized + Send + 'static {
     ///    would typically involve a single tick of an interval. The `Interval` itself
     ///    should be stored as a field in the actor\'s struct to persist across `on_run` invocations.
     ///    ```rust,no_run
-    ///    # use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+    ///    # use rsactor::{Actor, ActorRef, ActorWeak, Message, impl_message_handler, spawn};
     ///    # use anyhow::Result;
     ///    # use std::time::Duration;
     ///    # use tokio::time::{Interval, MissedTickBehavior};
@@ -204,12 +204,12 @@ pub trait Actor: Sized + Send + 'static {
     ///    #     interval.set_missed_tick_behavior(MissedTickBehavior::Delay); // Or Skip, Burst
     ///    #     Ok(MyActor { interval, ticks_done: 0 })
     ///    # }
-    ///    async fn on_run(&mut self, actor_ref: &ActorRef<MyActor>) -> std::result::Result<(), Self::Error> { // Note: Return type is Result<(), Self::Error>
+    ///    async fn on_run(&mut self, actor_weak: &ActorWeak<MyActor>) -> std::result::Result<(), Self::Error> { // Note: Return type is Result<(), Self::Error>
     ///        // self.interval is stored in the MyActor struct.
     ///        self.interval.tick().await; // This await point allows message processing.
     ///
     ///        // Perform the periodic task here.
-    ///        println!("Periodic task executed by actor {}", actor_ref.identity());
+    ///        println!("Periodic task executed by actor {}", actor_weak.identity());
     ///        self.ticks_done += 1;
     ///
     ///        // If your task is computationally intensive, ensure you still have an await
@@ -224,7 +224,8 @@ pub trait Actor: Sized + Send + 'static {
     ///        // To stop the actor normally from within on_run, call actor_ref.stop() or actor_ref.kill().
     ///        // For example, to stop after 10 ticks:
     ///        if self.ticks_done >= 10 {
-    ///            println!("Actor {} stopping after {} ticks.", actor_ref.identity(), self.ticks_done);
+    ///            println!("Actor {} stopping after {} ticks.", actor_weak.identity(), self.ticks_done);
+    ///            let actor_ref = actor_weak.upgrade().expect("ActorRef should be valid");
     ///            actor_ref.stop().await?; // or actor_ref.kill()?
     ///            // After calling stop/kill, on_run might not be called again as the actor shuts down.
     ///            // It\'s good practice to return Ok(()) here, or handle potential errors from stop().
@@ -261,7 +262,7 @@ pub trait Actor: Sized + Send + 'static {
     #[allow(unused_variables)]
     fn on_run(
         &mut self,
-        actor_ref: &ActorRef<Self>,
+        actor_ref: &ActorWeak<Self>,
     ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // This sleep is critical - it creates an await point that allows
         // the Tokio runtime to switch tasks and process incoming messages.
@@ -289,7 +290,7 @@ pub trait Actor: Sized + Send + 'static {
     ///
     /// # Example
     /// ```rust,no_run
-    /// # use rsactor::{Actor, ActorRef, Result};
+    /// # use rsactor::{Actor, ActorRef, ActorWeak, Result};
     /// # use std::time::Duration;
     /// # struct MyActor { /* ... */ }
     /// # impl Actor for MyActor {
@@ -298,7 +299,7 @@ pub trait Actor: Sized + Send + 'static {
     /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
     /// #         Ok(MyActor { /* ... */ })
     /// #     }
-    /// async fn on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> std::result::Result<(), Self::Error> {
+    /// async fn on_stop(&mut self, actor_ref: &ActorWeak<Self>, killed: bool) -> std::result::Result<(), Self::Error> {
     ///     if killed {
     ///         println!("Actor {} is being forcefully terminated, performing minimal cleanup", actor_ref.identity());
     ///         // Perform minimal, fast cleanup
@@ -319,7 +320,7 @@ pub trait Actor: Sized + Send + 'static {
     #[allow(unused_variables)]
     fn on_stop(
         &mut self,
-        actor_ref: &ActorRef<Self>,
+        actor_ref: &ActorWeak<Self>,
         killed: bool,
     ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // Default implementation does nothing on stop.
@@ -401,7 +402,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
 
     debug!("Runtime for actor {} is running.", actor_id);
 
-    let mut was_killed = false;
+    let actor_weak = ActorRef::downgrade(&actor_ref);
+    drop(actor_ref); // Drop the strong reference to allow graceful shutdown
+
+    let mut killed = false;
 
     // Message processing loop
     loop {
@@ -409,34 +413,34 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
             // Handle Terminate signal with highest priority
             biased; // Ensure Terminate is checked first if multiple conditions are ready
 
-            maybe_signal = terminate_receiver.recv() => {
-                if let Some(ControlSignal::Terminate) = maybe_signal {
-                    info!("Actor {} received Terminate signal. Stopping immediately.", actor_id);
-                    was_killed = true;
+            maybe_terminate = terminate_receiver.recv() => {
+                info!("Actor {} received Terminate signal. Stopping immediately.", actor_id);
 
-                    // Call on_stop for kill scenario
-                    if let Err(e) = actor.on_stop(&actor_ref, true).await {
-                        error!("Actor {} on_stop failed during kill: {:?}", actor_id, e);
-                        return ActorResult::Failed {
-                            actor: Some(actor),
-                            error: e,
-                            phase: FailurePhase::OnStop,
-                            killed: true,
-                        };
-                    }
+                killed = maybe_terminate.is_some(); // Mark as killed
 
-                    break; // Exit the loop
-                } else {
-                    // Channel closed or unexpected signal, this is an error state.
-                    unreachable!("Actor {} terminate_receiver closed unexpectedly or received invalid signal: {:?}", actor_id, maybe_signal);
+                // Call on_stop for kill scenario
+                if let Err(e) = actor.on_stop(&actor_weak, true).await {
+                    error!("Actor {} on_stop failed during kill: {:?}", actor_id, e);
+                    return ActorResult::Failed {
+                        actor: Some(actor),
+                        error: e,
+                        phase: FailurePhase::OnStop,
+                        killed,
+                    };
                 }
+                break; // Exit the loop
             }
 
             // Process incoming messages from the main mailbox
             maybe_message = receiver.recv() => {
                 match maybe_message {
-                    Some(MailboxMessage::Envelope { payload, reply_channel }) => {
+                    Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
                         trace!("Actor {} received message: {:?}", actor_id, payload);
+
+                        assert_eq!(actor_ref.identity().name(), std::any::type_name::<T>());
+
+                        let actor_ref = ActorRef::new(actor_ref);
+
                         match actor.handle(payload, &actor_ref).await {
                             Ok(reply) => {
                                 if let Some(tx) = reply_channel {
@@ -468,11 +472,11 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                             }
                         }
                     }
-                    Some(MailboxMessage::StopGracefully) => {
+                    Some(MailboxMessage::StopGracefully(_)) | None => {
                         info!("Actor {} received StopGracefully. Will stop after processing current messages.", actor_id);
 
                         // Call on_stop for graceful stop scenario
-                        if let Err(e) = actor.on_stop(&actor_ref, false).await {
+                        if let Err(e) = actor.on_stop(&actor_weak, false).await {
                             error!("Actor {} on_stop failed during graceful stop: {:?}", actor_id, e);
                             return ActorResult::Failed {
                                 actor: Some(actor),
@@ -484,15 +488,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
 
                         break;
                     }
-                    // Terminate is handled by its own dedicated channel and select branch.
-                    None => {
-                        // Mailbox closed, meaning all senders (ActorRefs) are dropped.
-                        unreachable!("Actor {} mailbox closed unexpectedly. This should not happen unless all ActorRefs are dropped.", actor_id);
-                    }
                 }
             }
 
-            maybe_result = actor.on_run(&actor_ref) => {
+            maybe_result = actor.on_run(&actor_weak) => {
                 match maybe_result {
                     Ok(_) => {
                         // on_run completed successfully, continue processing messages.
@@ -504,7 +503,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                             actor: Some(actor),
                             error: e,
                             phase: FailurePhase::OnRun,
-                            killed: false
+                            killed,
                         };
                     }
                 }
@@ -518,8 +517,5 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
     debug!("Actor {} message loop ended.", actor_id);
 
     // Return completed actor result
-    ActorResult::Completed {
-        actor,
-        killed: was_killed,
-    }
+    ActorResult::Completed { actor, killed }
 }

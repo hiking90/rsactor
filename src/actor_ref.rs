@@ -62,7 +62,7 @@ use tokio::sync::{mpsc, oneshot};
 pub struct UntypedActorRef {
     identity: Identity,
     sender: MailboxSender,
-    terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
+    pub(crate) terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
 }
 
 impl UntypedActorRef {
@@ -108,7 +108,8 @@ impl UntypedActorRef {
 
         let envelope = MailboxMessage::Envelope {
             payload: msg_any,
-            reply_channel: None, // reply_channel is None for tell
+            reply_channel: None,     // reply_channel is None for tell
+            actor_ref: self.clone(), // Include the actor ref for context
         };
 
         if self.sender.send(envelope).await.is_err() {
@@ -154,6 +155,7 @@ impl UntypedActorRef {
         let envelope = MailboxMessage::Envelope {
             payload: Box::new(msg),
             reply_channel: Some(reply_tx),
+            actor_ref: self.clone(), // Include the actor ref for context
         };
 
         if self.sender.send(envelope).await.is_err() {
@@ -243,7 +245,11 @@ impl UntypedActorRef {
     /// This will trigger the actor's [`on_stop`](crate::Actor::on_stop) method with `killed = false`.
     pub async fn stop(&self) -> Result<()> {
         debug!("Sending StopGracefully message to actor {}", self.identity);
-        match self.sender.send(MailboxMessage::StopGracefully).await {
+        match self
+            .sender
+            .send(MailboxMessage::StopGracefully(self.clone()))
+            .await
+        {
             Ok(_) => Ok(()),
             Err(_) => {
                 // This error means the actor's mailbox channel is closed,
@@ -252,6 +258,36 @@ impl UntypedActorRef {
                 // Considered Ok as the desired state (stopped/stopping) is met.
                 Ok(())
             }
+        }
+    }
+
+    /// Creates a weak reference to this actor.
+    ///
+    /// The returned [`UntypedActorWeak`] can be used to check if the actor is still alive
+    /// and optionally upgrade back to a strong reference without keeping the actor alive.
+    ///
+    /// This is useful for:
+    /// - Breaking circular references between actors
+    /// - Implementing observer patterns
+    /// - Managing collections of actors that should not prevent cleanup
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let weak_ref = actor_ref.downgrade();
+    ///
+    /// // Store weak_ref somewhere...
+    ///
+    /// // Later, try to upgrade when needed
+    /// if let Some(strong_ref) = weak_ref.upgrade() {
+    ///     strong_ref.tell("message").await?;
+    /// }
+    /// ```
+    pub fn downgrade(this: &Self) -> UntypedActorWeak {
+        UntypedActorWeak {
+            identity: this.identity,
+            sender: this.sender.downgrade(),
+            terminate_sender: this.terminate_sender.downgrade(),
         }
     }
 
@@ -473,7 +509,7 @@ impl<T: Actor> ActorRef<T> {
 
     /// Returns the unique ID of the actor.
     #[inline]
-    pub fn identity(&self) -> Identity {
+    pub const fn identity(&self) -> Identity {
         self.untyped_ref.identity()
     }
 
@@ -481,6 +517,17 @@ impl<T: Actor> ActorRef<T> {
     #[inline]
     pub fn is_alive(&self) -> bool {
         self.untyped_ref.is_alive()
+    }
+
+    /// Creates a weak, type-safe reference to this actor.
+    ///
+    /// The returned [`ActorWeak<T>`] can be used to check if the actor is still alive
+    /// and optionally upgrade back to a strong [`ActorRef<T>`] without keeping the actor alive.
+    pub fn downgrade(this: &Self) -> ActorWeak<T> {
+        ActorWeak {
+            untyped_weak: UntypedActorRef::downgrade(&this.untyped_ref),
+            _phantom: PhantomData,
+        }
     }
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget).
@@ -596,6 +643,158 @@ impl<T: Actor> Clone for ActorRef<T> {
     fn clone(&self) -> Self {
         ActorRef {
             untyped_ref: self.untyped_ref.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A weak reference to an actor that does not prevent the actor from being dropped.
+///
+/// `UntypedActorWeak` is similar to `UntypedActorRef`, but it holds weak references to the actor's
+/// channels instead of strong references. This allows you to check if an actor is still alive
+/// and optionally upgrade to a strong reference without keeping the actor alive.
+///
+/// ## Creating UntypedActorWeak
+///
+/// `UntypedActorWeak` instances are typically obtained by calling [`downgrade`](UntypedActorRef::downgrade)
+/// on an existing [`UntypedActorRef`]:
+///
+/// ```ignore
+/// let weak_ref = actor_ref.untyped_actor_ref().downgrade();
+/// ```
+///
+/// ## Upgrading to UntypedActorRef
+///
+/// An `UntypedActorWeak` can be upgraded to an `UntypedActorRef` using the [`upgrade`](UntypedActorWeak::upgrade) method:
+///
+/// ```ignore
+/// if let Some(strong_ref) = weak_ref.upgrade() {
+///     // Successfully upgraded, actor is still alive
+///     strong_ref.tell("Hello!").await?;
+/// } else {
+///     // Actor is no longer alive
+/// }
+/// ```
+///
+/// ## Use Cases
+///
+/// - **Observer Pattern**: Keep references to actors without preventing their cleanup
+/// - **Cache Management**: Store actor references that can be cleaned up automatically
+/// - **Weak Collections**: Maintain collections of actors that don't prevent garbage collection
+/// - **Circular Reference Breaking**: Break potential circular references between actors
+#[derive(Clone, Debug)]
+pub struct UntypedActorWeak {
+    identity: Identity,
+    sender: tokio::sync::mpsc::WeakSender<MailboxMessage>,
+    terminate_sender: tokio::sync::mpsc::WeakSender<ControlSignal>,
+}
+
+impl UntypedActorWeak {
+    /// Attempts to upgrade the weak reference to a strong reference.
+    ///
+    /// Returns `Some(UntypedActorRef)` if the actor is still alive, or `None` if the actor
+    /// has been dropped and its channels are closed.
+    ///
+    /// This operation will fail if:
+    /// - The actor has been stopped or killed
+    /// - All strong references to the actor have been dropped
+    /// - The actor's channels have been closed
+    pub fn upgrade(&self) -> Option<UntypedActorRef> {
+        // Try to upgrade both the mailbox sender and terminate sender
+        let sender = self.sender.upgrade()?;
+        let terminate_sender = self.terminate_sender.upgrade()?;
+
+        Some(UntypedActorRef {
+            identity: self.identity,
+            sender,
+            terminate_sender,
+        })
+    }
+
+    /// Returns the unique ID of the actor.
+    pub const fn identity(&self) -> Identity {
+        self.identity
+    }
+
+    /// Checks if the actor might still be alive.
+    ///
+    /// This method returns `true` if weak references can potentially be upgraded,
+    /// but does not guarantee that a subsequent [`upgrade`](UntypedActorWeak::upgrade) call will succeed.
+    ///
+    /// Returns `false` if the actor is definitely dead (all strong references dropped).
+    pub fn is_alive(&self) -> bool {
+        // Both channels must have strong references for the actor to be alive
+        // This matches the logic in UntypedActorRef::is_alive()
+        self.sender.strong_count() > 0 && self.terminate_sender.strong_count() > 0
+    }
+}
+
+/// A weak, type-safe reference to an actor of type `T`.
+///
+/// `ActorWeak<T>` is the type-safe counterpart to [`UntypedActorWeak`]. It does not
+/// prevent the actor from being dropped and can be upgraded to a strong [`ActorRef<T>`]
+/// if the actor is still alive.
+///
+/// ## Creating `ActorWeak<T>`
+///
+/// `ActorWeak<T>` instances are created by calling [`downgrade`](ActorRef::downgrade) on an
+/// existing [`ActorRef<T>`]:
+///
+/// ```ignore
+/// let weak_ref = actor_ref.downgrade();
+/// ```
+///
+/// ## Upgrading to `ActorRef<T>`
+///
+/// An `ActorWeak<T>` can be upgraded to an `ActorRef<T>` using the [`upgrade`](ActorWeak::upgrade) method:
+///
+/// ```ignore
+/// if let Some(strong_ref) = weak_ref.upgrade() {
+///     // Successfully upgraded, actor is still alive
+///     strong_ref.tell(MyMessage).await?;
+/// } else {
+///     // Actor is no longer alive
+/// }
+/// ```
+#[derive(Debug)]
+pub struct ActorWeak<T: Actor> {
+    untyped_weak: UntypedActorWeak,
+    _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T: Actor> ActorWeak<T> {
+    /// Attempts to upgrade the weak reference to a strong, type-safe reference.
+    ///
+    /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
+    /// has been dropped.
+    #[inline]
+    pub fn upgrade(&self) -> Option<ActorRef<T>> {
+        self.untyped_weak.upgrade().map(ActorRef::new)
+    }
+
+    /// Returns the unique ID of the actor.
+    #[inline]
+    pub const fn identity(&self) -> Identity {
+        self.untyped_weak.identity()
+    }
+
+    /// Checks if the actor might still be alive.
+    ///
+    /// This method returns `true` if weak references can potentially be upgraded,
+    /// but does not guarantee that a subsequent [`upgrade`](ActorWeak::upgrade) call will succeed.
+    ///
+    /// Returns `false` if the actor is definitely dead (all strong references dropped).
+    #[inline]
+    pub fn is_alive(&self) -> bool {
+        self.untyped_weak.is_alive()
+    }
+}
+
+impl<T: Actor> Clone for ActorWeak<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            untyped_weak: self.untyped_weak.clone(),
             _phantom: PhantomData,
         }
     }

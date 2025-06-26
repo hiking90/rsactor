@@ -7,7 +7,7 @@ use tokio::sync::Mutex; // Ensure 'log' crate is a dev-dependency or available
 
 use rsactor::{
     impl_message_handler, set_default_mailbox_capacity, spawn, spawn_with_mailbox_capacity, Actor,
-    ActorRef, ActorResult, Error, Identity, Message,
+    ActorRef, ActorResult, ActorWeak, Error, Identity, Message,
 };
 
 // Test Actor Setup
@@ -117,7 +117,6 @@ async fn setup_actor() -> (
 #[tokio::test]
 async fn test_spawn_and_actor_ref_id() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
-    assert_ne!(actor_ref.identity().id, 0, "Actor ID should be non-zero");
 
     actor_ref.stop().await.expect("Failed to stop actor");
     let result = handle.await.expect("Actor task failed");
@@ -380,7 +379,7 @@ impl Actor for LifecycleErrorActor {
         }
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         *self.on_run_attempted.lock().await = true;
         if self.fail_on_run {
             Err(anyhow::anyhow!("simulated on_run failure"))
@@ -394,7 +393,7 @@ impl Actor for LifecycleErrorActor {
 
     async fn on_stop(
         &mut self,
-        _actor_ref: &ActorRef<Self>,
+        _actor_ref: &ActorWeak<Self>,
         _killed: bool,
     ) -> Result<(), Self::Error> {
         *self.on_stop_attempted.lock().await = true;

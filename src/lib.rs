@@ -148,7 +148,7 @@
 //! For actors that need complex initialization logic, implement the Actor trait manually:
 //!
 //! ```rust
-//! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+//! use rsactor::{Actor, ActorRef, ActorWeak, Message, impl_message_handler, spawn};
 //! use anyhow::Result;
 //!
 //! // 1. Define your actor struct
@@ -173,7 +173,7 @@
 //!         })
 //!     }
 //!
-//!     async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+//!     async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
 //!         tokio::select! {
 //!             _ = self.tick_300ms.tick() => {
 //!                 println!("Tick: 300ms");
@@ -241,7 +241,7 @@ mod error;
 pub use error::{Error, Result};
 
 mod actor_ref;
-pub use actor_ref::{ActorRef, UntypedActorRef};
+pub use actor_ref::{ActorRef, ActorWeak, UntypedActorRef, UntypedActorWeak};
 
 mod actor_result;
 pub use actor_result::{ActorResult, FailurePhase};
@@ -253,12 +253,9 @@ pub use actor::{Actor, Message, MessageHandler};
 pub use rsactor_derive::Actor;
 
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     fmt::Debug,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        OnceLock,
-    },
+    sync::OnceLock,
 };
 
 use tokio::sync::{mpsc, oneshot};
@@ -266,26 +263,26 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Identity {
     /// Unique ID of the actor
-    pub id: usize,
+    pub id: TypeId,
     /// Type name of the actor
     pub type_name: &'static str,
 }
 
 impl Identity {
     /// Creates a new `ActorIdentity` with the given ID and type name.
-    pub fn new(id: usize, type_name: &'static str) -> Self {
+    pub fn new(id: TypeId, type_name: &'static str) -> Self {
         Identity { id, type_name }
     }
 
     /// Returns a string representation of the actor's identity.
-    pub fn name(&self) -> String {
-        format!("{}#{}", self.type_name, self.id)
+    pub fn name(&self) -> &'static str {
+        self.type_name
     }
 }
 
 impl std::fmt::Display for Identity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}#{}", self.type_name, self.id)
+        write!(f, "{}", self.type_name)
     }
 }
 
@@ -455,10 +452,12 @@ pub(crate) enum MailboxMessage {
         payload: Box<dyn Any + Send>,
         /// A channel to send the reply back to the caller. Optional for 'tell' operations.
         reply_channel: Option<oneshot::Sender<Result<Box<dyn Any + Send>>>>,
+        actor_ref: UntypedActorRef, // The actor reference that sent the message
     },
     // Terminate is removed from here
     /// A signal for the actor to stop gracefully after processing existing messages in its mailbox.
-    StopGracefully,
+    #[allow(dead_code)] // To avoid dropping ActorRef until StopGracefully is delivered.
+    StopGracefully(UntypedActorRef),
 }
 
 /// Represents control signals that can be sent to an actor.
@@ -471,9 +470,6 @@ pub(crate) enum ControlSignal {
 
 // Type alias for the sender part of the actor's mailbox channel.
 pub(crate) type MailboxSender = mpsc::Sender<MailboxMessage>; // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
-
-// Counter for generating unique actor IDs.
-static ACTOR_ID: AtomicUsize = AtomicUsize::new(1);
 
 // Global configuration for the default mailbox capacity.
 static CONFIGURED_DEFAULT_MAILBOX_CAPACITY: OnceLock<usize> = OnceLock::new();
@@ -529,14 +525,13 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
         panic!("Mailbox capacity must be greater than 0");
     }
 
-    let id = ACTOR_ID.fetch_add(1, Ordering::Relaxed);
     let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
     // Create a dedicated channel for the Terminate signal with a small capacity (e.g., 1 or 2)
     // This ensures that a kill signal can be sent even if the main mailbox is full.
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
     let untyped_actor_ref = UntypedActorRef::new(
-        Identity::new(id, std::any::type_name::<T>()), // Use type name of the actor
+        Identity::new(TypeId::of::<T>(), std::any::type_name::<T>()), // Use type name of the actor
         mailbox_tx,
         terminate_tx,
     ); // Pass terminate_tx

@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use log::{debug, info};
-use rsactor::{Actor, ActorRef, Message};
+use rsactor::{Actor, ActorRef, ActorWeak, Message};
 use std::time::Duration;
 
 // Define message types for our actor
@@ -76,7 +76,7 @@ impl Actor for DataProcessorActor {
         Ok(actor)
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         loop {
             self.interval.tick().await;
 

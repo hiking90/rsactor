@@ -18,7 +18,10 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
     *   `ask`/`ask_with_timeout`: Send a message and asynchronously await a reply.
     *   `tell`/`tell_with_timeout`: Send a message without waiting for a reply.
     *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Straightforward Actor Lifecycle**: `on_start`, `on_run`, and `on_stop` hooks provide a clean and intuitive actor lifecycle management system. The framework manages the execution flow while giving developers full control over actor behavior.
+*   **Straightforward Actor Lifecycle**: Provides `on_start`, `on_run`, and `on_stop` hooks for managing actor behavior:
+    *   `on_start`: `async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>` - Initializes the actor's state. This method is required.
+    *   `on_run`: `async fn on_run(&mut self, actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error>` - Contains the actor's main execution logic, which runs concurrently with message handling. This method is optional and has a default implementation.
+    *   `on_stop`: `async fn on_stop(&mut self, actor_ref: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error>` - Performs cleanup before the actor terminates. The `killed` flag indicates whether the termination was graceful (`false`) or immediate (`true`). This method is optional and has a default implementation.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 *   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
