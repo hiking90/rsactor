@@ -1,4 +1,5 @@
 // Tests for the Actor derive macro (structs and enums)
+#![allow(deprecated)]
 
 use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
 

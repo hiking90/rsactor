@@ -8,6 +8,7 @@
 //! - Tests for panics in on_run method
 //! - Tests for proper error handling vs panicking
 //! - Tests for supervision patterns
+#![allow(deprecated)]
 
 use anyhow::Result;
 use log::info;

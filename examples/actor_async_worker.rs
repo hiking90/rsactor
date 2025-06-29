@@ -2,7 +2,7 @@
 // which processes the work in a spawned async task and sends the results back to Actor A
 
 use anyhow::Result;
-use rsactor::{Actor, ActorRef, Message};
+use rsactor::{message_handlers, Actor, ActorRef};
 use tokio::time::Duration;
 
 // -------------------------------------------------------------------
@@ -36,10 +36,19 @@ struct RequestWork {
     data: String,
 }
 
-impl Message<RequestWork> for RequesterActor {
-    type Reply = ();
+// Message received when work is completed
+struct WorkCompleted {
+    task_id: usize,
+    result: String,
+}
 
-    async fn handle(&mut self, msg: RequestWork, actor_ref: &ActorRef<Self>) -> Self::Reply {
+// Message to get all results received so far
+struct GetResults;
+
+#[message_handlers]
+impl RequesterActor {
+    #[handler]
+    async fn handle_request_work(&mut self, msg: RequestWork, actor_ref: &ActorRef<Self>) {
         println!(
             "RequesterActor sending work request for task {}",
             msg.task_id
@@ -58,39 +67,25 @@ impl Message<RequestWork> for RequesterActor {
             .await
             .expect("Failed to send task to worker");
     }
-}
 
-// Message received when work is completed
-struct WorkCompleted {
-    task_id: usize,
-    result: String,
-}
-
-impl Message<WorkCompleted> for RequesterActor {
-    type Reply = ();
-
-    async fn handle(&mut self, msg: WorkCompleted, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_work_completed(&mut self, msg: WorkCompleted, _actor_ref: &ActorRef<Self>) {
         println!(
             "RequesterActor received result for task {}: {}",
             msg.task_id, msg.result
         );
         self.received_results.push(msg.result);
     }
-}
 
-// Message to get all results received so far
-struct GetResults;
-
-impl Message<GetResults> for RequesterActor {
-    type Reply = Vec<String>;
-
-    async fn handle(&mut self, _msg: GetResults, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_results(
+        &mut self,
+        _msg: GetResults,
+        _actor_ref: &ActorRef<Self>,
+    ) -> Vec<String> {
         self.received_results.clone()
     }
 }
-
-// Implement the MessageHandler trait for RequesterActor
-rsactor::impl_message_handler!(RequesterActor, [RequestWork, WorkCompleted, GetResults]);
 
 // -------------------------------------------------------------------
 // Actor B (Worker) - Processes work in tokio tasks and replies back
@@ -118,10 +113,10 @@ struct ProcessTask {
     requester: ActorRef<RequesterActor>,
 }
 
-impl Message<ProcessTask> for WorkerActor {
-    type Reply = ();
-
-    async fn handle(&mut self, msg: ProcessTask, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl WorkerActor {
+    #[handler]
+    async fn handle_process_task(&mut self, msg: ProcessTask, _actor_ref: &ActorRef<Self>) {
         let task_id = msg.task_id;
         let data = msg.data;
         let requester = msg.requester;
@@ -152,9 +147,6 @@ impl Message<ProcessTask> for WorkerActor {
         });
     }
 }
-
-// Implement the MessageHandler trait for WorkerActor
-rsactor::impl_message_handler!(WorkerActor, [ProcessTask]);
 
 #[tokio::main]
 async fn main() -> Result<()> {

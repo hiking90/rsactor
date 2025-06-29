@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use log::{debug, info};
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
+use rsactor::{message_handlers, spawn, Actor, ActorRef};
 use std::time::Duration;
 
 // Define an actor that can process requests with varying response times
@@ -33,21 +33,18 @@ struct ConfigurableQuery {
     delay_ms: u64,
 }
 
-// Implement message handlers
-impl Message<FastQuery> for TimeoutDemoActor {
-    type Reply = String;
-
-    async fn handle(&mut self, msg: FastQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+// Message handling using the #[message_handlers] macro with #[handler] attributes
+#[message_handlers]
+impl TimeoutDemoActor {
+    #[handler]
+    async fn handle_fast_query(&mut self, msg: FastQuery, _actor_ref: &ActorRef<Self>) -> String {
         // This is a fast handler that completes quickly
         debug!("{} handling a FastQuery: {}", self.name, msg.0);
         format!("Fast response to: {}", msg.0)
     }
-}
 
-impl Message<SlowQuery> for TimeoutDemoActor {
-    type Reply = String;
-
-    async fn handle(&mut self, msg: SlowQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_slow_query(&mut self, msg: SlowQuery, _actor_ref: &ActorRef<Self>) -> String {
         // This is a slow handler that takes time to complete
         debug!(
             "{} handling a SlowQuery: {}. Will take 500ms",
@@ -56,12 +53,13 @@ impl Message<SlowQuery> for TimeoutDemoActor {
         tokio::time::sleep(Duration::from_millis(500)).await;
         format!("Slow response to: {}", msg.0)
     }
-}
 
-impl Message<ConfigurableQuery> for TimeoutDemoActor {
-    type Reply = String;
-
-    async fn handle(&mut self, msg: ConfigurableQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_configurable_query(
+        &mut self,
+        msg: ConfigurableQuery,
+        _actor_ref: &ActorRef<Self>,
+    ) -> String {
         debug!(
             "{} handling ConfigurableQuery with delay {}ms: {}",
             self.name, msg.delay_ms, msg.question
@@ -70,9 +68,6 @@ impl Message<ConfigurableQuery> for TimeoutDemoActor {
         format!("Response after {}ms to: {}", msg.delay_ms, msg.question)
     }
 }
-
-// Use the macro to implement the MessageHandler trait
-impl_message_handler!(TimeoutDemoActor, [FastQuery, SlowQuery, ConfigurableQuery]);
 
 // Demo helper function for ask_with_timeout
 async fn demonstrate_ask_with_timeout(

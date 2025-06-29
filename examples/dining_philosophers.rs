@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use rand::Rng;
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
+use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorResult};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -105,10 +105,10 @@ impl Actor for Philosopher {
 
 // --- Philosopher Message Handlers ---
 
-impl Message<StartThinking> for Philosopher {
-    type Reply = (); // Fire-and-forget
-
-    async fn handle(&mut self, _msg: StartThinking, actor_ref: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl Philosopher {
+    #[handler]
+    async fn handle_start_thinking(&mut self, _msg: StartThinking, actor_ref: &ActorRef<Self>) {
         println!("Philosopher {} ({}) is thinking.", self.id, self.name);
 
         // Simulate thinking for a random duration.
@@ -258,6 +258,38 @@ impl Message<StartThinking> for Philosopher {
             }
         }
     }
+
+    #[handler]
+    async fn handle_start_eating(&mut self, _msg: StartEating, actor_ref: &ActorRef<Self>) {
+        if !self.has_left_fork || !self.has_right_fork {
+            eprintln!("Philosopher {} ({}) tried to eat without both forks! Left: {}, Right: {}. Thinking again.",
+                self.id, self.name, self.has_left_fork, self.has_right_fork);
+            // Release any potentially held forks just in case, though this state should not be reached.
+            self.release_both_forks().await;
+            self.think_again(actor_ref).await;
+            return;
+        }
+
+        self.eat_count += 1;
+        println!(
+            "Philosopher {} ({}) is eating. (Meal #{})",
+            self.id, self.name, self.eat_count
+        );
+
+        let eat_duration = rand::rng().random_range(500..1500);
+        sleep(Duration::from_millis(eat_duration)).await;
+
+        println!(
+            "Philosopher {} ({}) finished eating. Releasing forks.",
+            self.id, self.name
+        );
+
+        // Release forks
+        self.release_both_forks().await;
+
+        // Go back to thinking
+        self.think_again(actor_ref).await;
+    }
 }
 
 impl Philosopher {
@@ -300,43 +332,6 @@ impl Philosopher {
     }
 }
 
-impl Message<StartEating> for Philosopher {
-    type Reply = (); // Fire-and-forget
-
-    async fn handle(&mut self, _msg: StartEating, actor_ref: &ActorRef<Self>) -> Self::Reply {
-        if !self.has_left_fork || !self.has_right_fork {
-            eprintln!("Philosopher {} ({}) tried to eat without both forks! Left: {}, Right: {}. Thinking again.",
-                self.id, self.name, self.has_left_fork, self.has_right_fork);
-            // Release any potentially held forks just in case, though this state should not be reached.
-            self.release_both_forks().await;
-            self.think_again(actor_ref).await;
-            return;
-        }
-
-        self.eat_count += 1;
-        println!(
-            "Philosopher {} ({}) is eating. (Meal #{})",
-            self.id, self.name, self.eat_count
-        );
-
-        let eat_duration = rand::rng().random_range(500..1500);
-        sleep(Duration::from_millis(eat_duration)).await;
-
-        println!(
-            "Philosopher {} ({}) finished eating. Releasing forks.",
-            self.id, self.name
-        );
-
-        // Release forks
-        self.release_both_forks().await;
-
-        // Go back to thinking
-        self.think_again(actor_ref).await;
-    }
-}
-
-impl_message_handler!(Philosopher, [StartThinking, StartEating]);
-
 // --- Table Actor Definition ---
 #[derive(Debug)]
 struct Table {
@@ -361,10 +356,10 @@ impl Actor for Table {
 
 // --- Table Message Handlers ---
 
-impl Message<RegisterPhilosopher> for Table {
-    type Reply = (); // Fire-and-forget
-
-    async fn handle(&mut self, msg: RegisterPhilosopher, _: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl Table {
+    #[handler]
+    async fn handle_register_philosopher(&mut self, msg: RegisterPhilosopher, _: &ActorRef<Self>) {
         println!(
             "Table: Philosopher {} (Actor ID: {}) registered.",
             msg.logical_id,
@@ -373,12 +368,9 @@ impl Message<RegisterPhilosopher> for Table {
         self.philosophers
             .insert(msg.logical_id, msg.philosopher_ref);
     }
-}
 
-impl Message<RequestFork> for Table {
-    type Reply = bool; // true if acquired, false if not.
-
-    async fn handle(&mut self, msg: RequestFork, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_request_fork(&mut self, msg: RequestFork, _: &ActorRef<Self>) -> bool {
         let philosopher_id = msg.logical_id;
         let num_forks = self.forks.len();
 
@@ -408,12 +400,9 @@ impl Message<RequestFork> for Table {
             false
         }
     }
-}
 
-impl Message<ReleaseFork> for Table {
-    type Reply = (); // Fire-and-forget
-
-    async fn handle(&mut self, msg: ReleaseFork, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_release_fork(&mut self, msg: ReleaseFork, _: &ActorRef<Self>) {
         let philosopher_id = msg.logical_id;
         let num_forks = self.forks.len();
 
@@ -444,8 +433,6 @@ impl Message<ReleaseFork> for Table {
         }
     }
 }
-
-impl_message_handler!(Table, [RegisterPhilosopher, RequestFork, ReleaseFork]);
 
 // --- Main Function ---
 #[tokio::main]

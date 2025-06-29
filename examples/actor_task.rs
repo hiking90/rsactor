@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use log::{debug, info};
-use rsactor::{Actor, ActorRef, ActorWeak, Message};
+use rsactor::{message_handlers, Actor, ActorRef, ActorWeak};
 use std::time::Duration;
 
 // Define message types for our actor
@@ -99,19 +99,19 @@ impl Actor for DataProcessorActor {
 }
 
 // Implement message handlers for our actor
-
-impl Message<GetState> for DataProcessorActor {
-    type Reply = (f64, Option<f64>, Option<std::time::Instant>);
-
-    async fn handle(&mut self, _msg: GetState, _: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl DataProcessorActor {
+    #[handler]
+    async fn handle_get_state(
+        &mut self,
+        _msg: GetState,
+        _: &ActorRef<Self>,
+    ) -> (f64, Option<f64>, Option<std::time::Instant>) {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
-}
 
-impl Message<SetFactor> for DataProcessorActor {
-    type Reply = f64; // Return the new factor
-
-    async fn handle(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_set_factor(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> f64 {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!(
@@ -120,12 +120,9 @@ impl Message<SetFactor> for DataProcessorActor {
         );
         self.factor
     }
-}
 
-impl Message<ProcessedData> for DataProcessorActor {
-    type Reply = (); // No reply needed for data coming from the task
-
-    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_processed_data(&mut self, msg: ProcessedData, _: &ActorRef<Self>) {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -140,13 +137,13 @@ impl Message<ProcessedData> for DataProcessorActor {
             msg.timestamp.elapsed()
         );
     }
-}
 
-// Handler for sending commands to the actor's event system
-impl Message<SendTaskCommand> for DataProcessorActor {
-    type Reply = bool;
-
-    async fn handle(&mut self, msg: SendTaskCommand, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_send_task_command(
+        &mut self,
+        msg: SendTaskCommand,
+        _actor_ref: &ActorRef<Self>,
+    ) -> bool {
         match msg.0 {
             TaskCommand::ChangeInterval(new_interval) => {
                 self.interval = tokio::time::interval(new_interval);
@@ -156,12 +153,6 @@ impl Message<SendTaskCommand> for DataProcessorActor {
         }
     }
 }
-
-// Implement the message handler trait for our actor
-rsactor::impl_message_handler!(
-    DataProcessorActor,
-    [GetState, SetFactor, ProcessedData, SendTaskCommand]
-);
 
 #[tokio::main]
 async fn main() -> Result<()> {

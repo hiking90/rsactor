@@ -1,4 +1,4 @@
-// Copyright 2022 Jeff Kim <hiking90@gmail.com>
+// Copyright 2022 Jeff Kim <hiking90@gmail./// ### Option 1: Using the Actor Derive Macro (Recommended for Simple Cases)om>
 // SPDX-License-Identifier: Apache-2.0
 
 //! # rsActor
@@ -24,8 +24,9 @@
 //!   The framework manages the execution flow while giving developers full control over actor behavior.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
-//! - **Macro for Message Handling**: The [`impl_message_handler!`] macro simplifies
-//!   handling multiple message types.
+//! - **Macro for Message Handling**: Multiple approaches available:
+//!   - [`message_handlers`] attribute macro with `#[handler]` method attributes for automatic message handling (recommended)
+//!   - [`impl_message_handler!`] macro for manual message routing (deprecated, use `#[message_handlers]` instead)
 //! - **Type Safety Features**: Two actor reference types provide different levels of type safety:
 //!   - [`ActorRef<T>`]: Compile-time type safety with zero runtime overhead (recommended)
 //!   - [`UntypedActorRef`]: Runtime type handling for collections and dynamic scenarios
@@ -36,14 +37,66 @@
 //! - **[`Message<M>`](actor::Message)**: Trait for handling a message type `M` and defining its reply type.
 //! - **[`ActorRef`]**: Handle for sending messages to an actor.
 //! - **[`spawn`]**: Function to create and start an actor, returning an [`ActorRef`] and a `JoinHandle`.
-//! - **[`MessageHandler`]**: Trait for type-erased message handling. This is typically implemented automatically by the [`impl_message_handler!`] macro.
+//! - **[`MessageHandler`]**: Trait for type-erased message handling. This is typically implemented automatically by the [`message_handlers`] macro (recommended) or the deprecated [`impl_message_handler!`] macro.
 //! - **[`ActorResult`]**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 //!
 //! ## Getting Started
 //!
-//! ### Option 1: Using the Actor Derive Macro (Recommended for Simple Cases)
+//! ### Option A: Using Message Handlers Macro (Recommended)
 //!
-//! For simple actors (structs or enums) that don't need custom initialization logic, you can use the `#[derive(Actor)]` macro:
+//! For the most concise approach, use the `#[message_handlers]` attribute macro with `#[handler]` method attributes:
+//!
+//! ```rust
+//! use rsactor::{Actor, ActorRef, message_handlers, spawn};
+//!
+//! // 1. Define your actor struct and derive Actor
+//! #[derive(Actor)]
+//! struct MyActor {
+//!     name: String,
+//!     count: u32,
+//! }
+//!
+//! // 2. Define message types
+//! struct GetName;
+//! struct Increment;
+//!
+//! // 3. Use message_handlers macro with handler attributes
+//! #[message_handlers]
+//! impl MyActor {
+//!     #[handler]
+//!     async fn handle_get_name(&mut self, _msg: GetName, _: &ActorRef<Self>) -> String {
+//!         self.name.clone()
+//!     }
+//!
+//!     #[handler]
+//!     async fn handle_increment(&mut self, _msg: Increment, _: &ActorRef<Self>) -> () {
+//!         self.count += 1;
+//!     }
+//!
+//!     // Regular methods can coexist without the #[handler] attribute
+//!     fn get_count(&self) -> u32 {
+//!         self.count
+//!     }
+//! }
+//!
+//! // 4. Usage
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let actor_instance = MyActor { name: "Test".to_string(), count: 0 };
+//! let (actor_ref, _join_handle) = spawn::<MyActor>(actor_instance);
+//!
+//! let name = actor_ref.ask(GetName).await?;
+//! actor_ref.tell(Increment).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Option B: Manual Message Implementation (Deprecated - Use Option A Instead)
+//!
+//! **⚠️ DEPRECATED**: This approach using manual `Message` trait implementation and `impl_message_handler!`
+//! is deprecated and will be removed in version 1.0. Please use the `#[message_handlers]` macro approach shown in Option A instead.
+//!
+//! For cases where you need more control over message handling, you can manually implement the Message trait:
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
@@ -88,12 +141,12 @@
 //! # }
 //! ```
 //!
-//! The derive macro also works with enums, making it easy to create state machine actors:
+//! Both approaches also work with enums, making it easy to create state machine actors:
 //!
 //! ```rust
-//! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+//! use rsactor::{Actor, ActorRef, message_handlers, spawn};
 //!
-//! // 1. Define your actor enum and derive Actor
+//! // Using message_handlers macro approach
 //! #[derive(Actor, Clone)]
 //! enum StateActor {
 //!     Idle,
@@ -101,54 +154,38 @@
 //!     Completed(i32),
 //! }
 //!
-//! // 2. Define message types
 //! struct GetState;
 //! struct StartProcessing(String);
 //! struct Complete(i32);
 //!
-//! impl Message<GetState> for StateActor {
-//!     type Reply = StateActor;
-//!     async fn handle(&mut self, _msg: GetState, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//! #[message_handlers]
+//! impl StateActor {
+//!     #[handler]
+//!     async fn handle_get_state(&mut self, _msg: GetState, _: &ActorRef<Self>) -> StateActor {
 //!         self.clone()
 //!     }
-//! }
 //!
-//! impl Message<StartProcessing> for StateActor {
-//!     type Reply = ();
-//!     async fn handle(&mut self, msg: StartProcessing, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!     #[handler]
+//!     async fn handle_start_processing(&mut self, msg: StartProcessing, _: &ActorRef<Self>) -> () {
 //!         *self = StateActor::Processing(msg.0);
 //!     }
-//! }
 //!
-//! impl Message<Complete> for StateActor {
-//!     type Reply = ();
-//!     async fn handle(&mut self, msg: Complete, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!     #[handler]
+//!     async fn handle_complete(&mut self, msg: Complete, _: &ActorRef<Self>) -> () {
 //!         *self = StateActor::Completed(msg.0);
 //!     }
 //! }
-//!
-//! // 3. Wire up message handlers
-//! impl_message_handler!(StateActor, [GetState, StartProcessing, Complete]);
-//!
-//! // 4. Usage
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let actor_instance = StateActor::Idle;
-//! let (actor_ref, _join_handle) = spawn::<StateActor>(actor_instance);
-//!
-//! actor_ref.tell(StartProcessing("task1".to_string())).await?;
-//! let state = actor_ref.ask(GetState).await?;
-//! actor_ref.tell(Complete(42)).await?;
-//! # Ok(())
-//! # }
 //! ```
 //!
-//! ### Option 2: Manual Implementation (For Complex Initialization)
+//! ### Option C: Manual Actor Implementation (Advanced Usage - Consider Using Option A)
+//!
+//! **Note**: While this approach is still supported, consider using the `#[message_handlers]` macro
+//! for message handling even with custom Actor implementations.
 //!
 //! For actors that need complex initialization logic, implement the Actor trait manually:
 //!
 //! ```rust
-//! use rsactor::{Actor, ActorRef, ActorWeak, Message, impl_message_handler, spawn};
+//! use rsactor::{Actor, ActorRef, ActorWeak, message_handlers, spawn};
 //! use anyhow::Result;
 //!
 //! // 1. Define your actor struct
@@ -190,26 +227,20 @@
 //! struct GetData;
 //! struct UpdateData(String);
 //!
-//! // 4. Implement Message<M> for each message type
-//! impl Message<GetData> for MyActor {
-//!     type Reply = String;
-//!
-//!     async fn handle(&mut self, _msg: GetData, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//! // 4. Use message_handlers macro for message handling (recommended approach)
+//! #[message_handlers]
+//! impl MyActor {
+//!     #[handler]
+//!     async fn handle_get_data(&mut self, _msg: GetData, _actor_ref: &ActorRef<Self>) -> String {
 //!         self.data.clone()
 //!     }
-//! }
 //!
-//! impl Message<UpdateData> for MyActor {
-//!     type Reply = ();
-//!
-//!     async fn handle(&mut self, msg: UpdateData, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+//!     #[handler]
+//!     async fn handle_update_data(&mut self, msg: UpdateData, _actor_ref: &ActorRef<Self>) -> () {
 //!         self.data = msg.0;
 //!         println!("MyActor data updated!");
 //!     }
 //! }
-//!
-//! // 5. Use the macro to implement MessageHandler
-//! impl_message_handler!(MyActor, [GetData, UpdateData]);
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
@@ -250,7 +281,7 @@ mod actor;
 pub use actor::{Actor, Message, MessageHandler};
 
 // Re-export derive macro
-pub use rsactor_derive::Actor;
+pub use rsactor_derive::{message_handlers, Actor};
 
 use std::{
     any::{Any, TypeId},
@@ -302,6 +333,10 @@ impl std::fmt::Display for Identity {
 /// 1. Attempts to downcast the incoming `Box<dyn Any + Send>` to each message type
 /// 2. Calls the appropriate `Message::handle` implementation when a match is found
 /// 3. Returns an error if no message type matches
+#[deprecated(
+    since = "0.9.0",
+    note = "This is an internal helper for the deprecated `impl_message_handler!` macro. Will be removed in version 1.0."
+)]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __impl_message_handler_body {
@@ -338,12 +373,34 @@ macro_rules! __impl_message_handler_body {
     };
 }
 
-/// Implements the `MessageHandler` trait for both generic and non-generic actor types.
+/// **⚠️ DEPRECATED**: Implements the `MessageHandler` trait for both generic and non-generic actor types.
+///
+/// **This macro is deprecated and will be removed in a future version.
+/// Please use the `#[message_handlers]` attribute macro with `#[handler]` method attributes instead.**
 ///
 /// This macro simplifies the process of handling multiple message types within an actor.
 /// It generates the necessary boilerplate code to downcast a `Box<dyn Any + Send>`
 /// message to its concrete type and then calls the appropriate `Message::handle`
 /// implementation on the actor.
+///
+/// # Migration Guide
+///
+/// Instead of:
+/// ```rust,ignore
+/// impl_message_handler!(MyActor, [Msg1, Msg2]);
+/// ```
+///
+/// Use:
+/// ```rust,ignore
+/// #[message_handlers]
+/// impl MyActor {
+///     #[handler]
+///     async fn handle_msg1(&mut self, msg: Msg1, actor_ref: &ActorRef<Self>) -> Reply1 { /* ... */ }
+///
+///     #[handler]
+///     async fn handle_msg2(&mut self, msg: Msg2, actor_ref: &ActorRef<Self>) -> Reply2 { /* ... */ }
+/// }
+/// ```
 ///
 /// # Usage
 ///
@@ -421,10 +478,15 @@ macro_rules! __impl_message_handler_body {
 /// [`handle`](crate::actor::Message::handle) method. The actual message handling logic
 /// is generated by the internal `__impl_message_handler_body!` helper macro to avoid code
 /// duplication between different implementation patterns.
+#[deprecated(
+    since = "0.9.0",
+    note = "Use the `#[message_handlers]` attribute macro with `#[handler]` method attributes instead. This macro will be removed in version 1.0."
+)]
 #[macro_export]
 macro_rules! impl_message_handler {
     // Generic actor pattern: [generics] for ActorType<T>, [messages]
     ([$($generics:tt)*] for $actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
+        #[allow(deprecated)]
         impl<$($generics)*> $crate::MessageHandler for $actor_type {
             $crate::__impl_message_handler_body!($actor_type, [$($msg_type),*]);
         }
@@ -432,6 +494,7 @@ macro_rules! impl_message_handler {
 
     // Non-generic actor pattern: ActorType, [messages]
     ($actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
+        #[allow(deprecated)]
         impl $crate::MessageHandler for $actor_type {
             $crate::__impl_message_handler_body!($actor_type, [$($msg_type),*]);
         }

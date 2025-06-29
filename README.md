@@ -24,10 +24,11 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
     *   `on_stop`: `async fn on_stop(&mut self, actor_ref: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error>` - Performs cleanup before the actor terminates. The `killed` flag indicates whether the termination was graceful (`false`) or immediate (`true`). This method is optional and has a default implementation.
 *   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
 *   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
-*   **Macro-Assisted Message Handling**: `impl_message_handler!` macro simplifies routing messages.
+*   **Macro-Assisted Message Handling**:
+    *   `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
 *   **Strong Type Safety**: Provides both compile-time (`ActorRef<T>`) and runtime (`UntypedActorRef`) type safety options, ensuring message handling consistency while supporting flexible actor management patterns.
-*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `impl_message_handler!` macro) are also required, but they don't add any additional constraints on the actor's fields.
+*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `#[message_handlers]` macro) are also required, but they don't add any additional constraints on the actor's fields.
 
 ## Getting Started
 
@@ -35,54 +36,50 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
 ```toml
 [dependencies]
-rsactor = "0.8" # Check crates.io for the latest version
+rsactor = "0.9" # Check crates.io for the latest version
 ```
+
+For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
 
 ### 2. Choose Your Implementation Approach
 
-#### Option A: Using the Actor Derive Macro (Recommended for Simple Cases)
+#### Option A: Using the Message Handlers Macro (Recommended)
 
-For simple actors that don't need complex initialization logic:
+The `#[message_handlers]` attribute macro with `#[handler]` method attributes automatically generates Message trait implementations, reducing boilerplate:
 
 ```rust
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+use rsactor::{Actor, ActorRef, message_handlers, spawn};
 
-// 1. Define your actor struct and derive Actor
+// 1. Define message types
+struct Increment;
+struct GetCount;
+
+// 2. Define your actor struct and derive Actor
 #[derive(Actor)]
 struct CounterActor {
     count: u32,
 }
 
-// 2. Define message types
-struct Increment;
-struct GetCount;
-
-// 3. Implement message handlers
-impl Message<Increment> for CounterActor {
-    type Reply = ();
-    async fn handle(&mut self, _: Increment, _: &ActorRef<Self>) -> Self::Reply {
+// 3. Use the #[message_handlers] macro with #[handler] attributes to automatically generate Message trait implementations
+#[message_handlers]
+impl CounterActor {
+    #[handler]
+    async fn handle_increment(&mut self, _msg: Increment, _: &ActorRef<Self>) -> () {
         self.count += 1;
     }
-}
 
-impl Message<GetCount> for CounterActor {
-    type Reply = u32;
-    async fn handle(&mut self, _: GetCount, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_count(&mut self, _msg: GetCount, _: &ActorRef<Self>) -> u32 {
         self.count
     }
 }
 
-// 4. Wire up message handlers
-impl_message_handler!(CounterActor, [Increment, GetCount]);
-
-// 5. Usage
+// 4. Usage
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create actor instance and spawn
     let actor = CounterActor { count: 0 };
-    let (actor_ref, _join_handle) = spawn::<CounterActor>(actor);
+    let (actor_ref, _join_handle) = rsactor::spawn::<CounterActor>(actor);
 
-    // Send messages
     actor_ref.tell(Increment).await?;
     let count = actor_ref.ask(GetCount).await?;
     println!("Count: {}", count); // Prints: Count: 1
@@ -92,12 +89,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### Option B: Manual Implementation (For Complex Initialization)
+#### Option B: Complex Initialization with Custom Actor Implementation
 
-For actors that need complex initialization logic:
+For actors that need complex initialization logic with custom Actor trait implementation:
 
 ```rust
-use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+use rsactor::{Actor, ActorRef, message_handlers, spawn};
 use anyhow::Result;
 use log::info;
 
@@ -125,18 +122,15 @@ impl Actor for CounterActor {
 // Define message types
 struct IncrementMsg(u32);
 
-// Implement Message<T> for IncrementMsg
-impl Message<IncrementMsg> for CounterActor {
-    type Reply = u32; // New count
-
-    async fn handle(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+// Use message_handlers macro for message handling
+#[message_handlers]
+impl CounterActor {
+    #[handler]
+    async fn handle_increment(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef<Self>) -> u32 {
         self.count += msg.0;
         self.count
     }
 }
-
-// Use macro for message handling
-impl_message_handler!(CounterActor, [IncrementMsg]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -164,17 +158,32 @@ async fn main() -> Result<()> {
 }
 ```
 
+## Message Handling with `#[message_handlers]`
+
+rsActor simplifies message handling by using the `#[message_handlers]` attribute macro combined with `#[handler]` attributes on methods. This approach offers several advantages:
+
+- **Selective Processing**: Only methods marked with `#[handler]` are treated as message handlers.
+- **Clean Separation**: Regular methods can coexist with message handlers within the same `impl` block.
+- **Automatic Generation**: The macro automatically generates the necessary `Message` trait implementations and handler registrations.
+- **Type Safety**: Message handler signatures are verified at compile time.
+- **Reduced Boilerplate**: Eliminates the need to manually implement `Message` traits.
+
+This is the recommended way to handle messages in rsActor for most use cases, as it leads to more concise and maintainable code.
+
 ## Examples
 
 rsActor comes with several examples that demonstrate various features and use cases:
 
-* **[basic](./examples/basic.rs)** - Simple counter actor demonstrating core actor model concepts
+* **[basic](./examples/basic.rs)** - Simple counter actor demonstrating core actor model concepts with `#[message_handlers]` macro
+* **[derive_macro_demo](./examples/derive_macro_demo.rs)** - Simple example using `#[message_handlers]` with `#[handler]` attributes
+* **[message_macro_demo](./examples/message_macro_demo.rs)** - Demonstrates various message types with the new macro system
+* **[unified_macro_demo](./examples/unified_macro_demo.rs)** - Combined usage of derive and message handler macros
+* **[advanced_derive_demo](./examples/advanced_derive_demo.rs)** - Advanced usage patterns with derive macros
 * **[actor_with_timeout](./examples/actor_with_timeout.rs)** - Using timeouts for actor communication
 * **[actor_async_worker](./examples/actor_async_worker.rs)** - Inter-actor communication with async tasks
 * **[actor_task](./examples/actor_task.rs)** - Background task communication with actors
 * **[actor_blocking_task](./examples/actor_blocking_task.rs)** - Using blocking APIs with actors
 * **[dining_philosophers](./examples/dining_philosophers.rs)** - Classic concurrency problem implementation
-* **[unified_macro_demo](./examples/unified_macro_demo.rs)** - Message handling with macros
 
 Run any example with:
 ```bash

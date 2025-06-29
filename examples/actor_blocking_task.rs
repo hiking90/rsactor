@@ -14,7 +14,7 @@
 
 use anyhow::Result;
 use log::{debug, info};
-use rsactor::{Actor, ActorRef, Message};
+use rsactor::{message_handlers, Actor, ActorRef};
 use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc; // Using tokio channels for communication
@@ -152,19 +152,19 @@ impl Actor for SyncDataProcessorActor {
 }
 
 // Implement message handlers for our actor
-
-impl Message<GetState> for SyncDataProcessorActor {
-    type Reply = (f64, Option<f64>, Option<std::time::Instant>);
-
-    async fn handle(&mut self, _msg: GetState, _: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl SyncDataProcessorActor {
+    #[handler]
+    async fn handle_get_state(
+        &mut self,
+        _msg: GetState,
+        _: &ActorRef<Self>,
+    ) -> (f64, Option<f64>, Option<std::time::Instant>) {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
-}
 
-impl Message<SetFactor> for SyncDataProcessorActor {
-    type Reply = f64; // Return the new factor
-
-    async fn handle(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_set_factor(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> f64 {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!(
@@ -173,12 +173,9 @@ impl Message<SetFactor> for SyncDataProcessorActor {
         );
         self.factor
     }
-}
 
-impl Message<ProcessedData> for SyncDataProcessorActor {
-    type Reply = (); // No reply needed for data coming from the task
-
-    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_processed_data(&mut self, msg: ProcessedData, _: &ActorRef<Self>) {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -193,13 +190,10 @@ impl Message<ProcessedData> for SyncDataProcessorActor {
             msg.timestamp.elapsed()
         );
     }
-}
 
-// Handler for sending commands to the background task
-impl Message<TaskCommand> for SyncDataProcessorActor {
-    type Reply = bool;
-
-    async fn handle(&mut self, msg: TaskCommand, _: &ActorRef<Self>) -> Self::Reply {
+    // Handler for sending commands to the background task
+    #[handler]
+    async fn handle_task_command(&mut self, msg: TaskCommand, _: &ActorRef<Self>) -> bool {
         // With tokio channels, send is asynchronous
         match self.task_sender.send(msg).await {
             Ok(_) => {
@@ -213,12 +207,6 @@ impl Message<TaskCommand> for SyncDataProcessorActor {
         }
     }
 }
-
-// Implement the message handler trait for our actor
-rsactor::impl_message_handler!(
-    SyncDataProcessorActor,
-    [GetState, SetFactor, ProcessedData, TaskCommand]
-);
 
 #[tokio::main]
 async fn main() -> Result<()> {

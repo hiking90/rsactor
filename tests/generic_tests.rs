@@ -1,4 +1,6 @@
 // filepath: /Volumes/Workspace/rust/rsactor/tests/generic_tests.rs
+#![allow(deprecated)]
+
 use anyhow::Result;
 use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
 use std::fmt::Debug;

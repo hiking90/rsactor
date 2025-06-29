@@ -10,9 +10,7 @@
 //! - Proper cleanup when actors are dropped
 
 use anyhow::Error as AnyError;
-use rsactor::{
-    impl_message_handler, spawn, Actor, ActorRef, ActorWeak, Message, Result, UntypedActorRef,
-};
+use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorWeak, Result, UntypedActorRef};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -66,28 +64,22 @@ struct Status {
 }
 
 // Message implementations
-impl Message<Ping> for PingActor {
-    type Reply = String;
-
-    async fn handle(&mut self, _msg: Ping, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl PingActor {
+    #[handler]
+    async fn handle_ping(&mut self, _msg: Ping, _: &ActorRef<Self>) -> String {
         self.ping_count += 1;
         format!("{} pong! (count: {})", self.name, self.ping_count)
     }
-}
 
-impl Message<GetStatus> for PingActor {
-    type Reply = Status;
-
-    async fn handle(&mut self, _msg: GetStatus, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_status(&mut self, _msg: GetStatus, _: &ActorRef<Self>) -> Status {
         Status {
             name: self.name.clone(),
             ping_count: self.ping_count,
         }
     }
 }
-
-// Wire up message handlers
-impl_message_handler!(PingActor, [Ping, GetStatus]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
