@@ -228,7 +228,7 @@ impl UntypedActorRef {
             });
         }
 
-        let result = match reply_rx.await {
+        match reply_rx.await {
             Ok(Ok(reply_any)) => {
                 // recv was Ok, actor reply was Ok
                 match reply_any.downcast::<R>() {
@@ -263,9 +263,7 @@ impl UntypedActorRef {
                     details: "Reply channel closed unexpectedly".to_string(),
                 })
             }
-        };
-
-        result
+        }
     }
 
     /// Sends a message to the actor and awaits a reply with a timeout.
@@ -331,7 +329,7 @@ impl UntypedActorRef {
             self.identity
         );
         // Use the dedicated terminate_sender with try_send
-        let result = match self.terminate_sender.try_send(ControlSignal::Terminate) {
+        match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
                 // Successfully sent the terminate message.
                 #[cfg(feature = "tracing")]
@@ -359,9 +357,7 @@ impl UntypedActorRef {
                 // Considered Ok as the desired state (stopped) is met.
                 Ok(())
             }
-        };
-
-        result
+        }
     }
 
     /// Sends a graceful stop signal to the actor.
@@ -375,7 +371,7 @@ impl UntypedActorRef {
         tracing::instrument(level = "info", name = "actor_stop", skip(self))
     )]
     pub async fn stop(&self) -> Result<()> {
-        let result = match self
+        match self
             .sender
             .send(MailboxMessage::StopGracefully(self.clone()))
             .await
@@ -396,9 +392,7 @@ impl UntypedActorRef {
                 // Considered Ok as the desired state (stopped/stopping) is met.
                 Ok(())
             }
-        };
-
-        result
+        }
     }
 
     /// Creates a weak reference to this actor.
