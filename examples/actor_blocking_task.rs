@@ -226,9 +226,7 @@ async fn main() -> Result<()> {
     // Get the current state
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
-    println!(
-        "Current state: factor={factor:.2}, latest_value={latest_value:?}"
-    );
+    println!("Current state: factor={factor:.2}, latest_value={latest_value:?}");
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());
@@ -258,9 +256,7 @@ async fn main() -> Result<()> {
     // Get the updated state
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
-    println!(
-        "Updated state: factor={factor:.2}, latest_value={latest_value:?}"
-    );
+    println!("Updated state: factor={factor:.2}, latest_value={latest_value:?}");
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());

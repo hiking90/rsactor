@@ -127,15 +127,12 @@ impl WorkerActor {
         tokio::spawn(async move {
             // Simulate some processing time
             let processing_time = (task_id % 3 + 1) as u64;
-            println!(
-                "Processing task {task_id} will take {processing_time} seconds"
-            );
+            println!("Processing task {task_id} will take {processing_time} seconds");
             tokio::time::sleep(Duration::from_secs(processing_time)).await;
 
             // Generate a result
-            let result = format!(
-                "Result of task {task_id} with data '{data}' (took {processing_time}s)"
-            );
+            let result =
+                format!("Result of task {task_id} with data '{data}' (took {processing_time}s)");
 
             // Send the result back to the requester
             match requester.tell(WorkCompleted { task_id, result }).await {

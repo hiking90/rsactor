@@ -88,9 +88,7 @@ async fn demonstrate_ask_with_timeout(
     match result {
         Ok(response) => {
             let elapsed = timer.elapsed().as_millis();
-            info!(
-                "✅ Success! Response received in {elapsed}ms: {response}"
-            );
+            info!("✅ Success! Response received in {elapsed}ms: {response}");
         }
         Err(e) => {
             let elapsed = timer.elapsed().as_millis();
@@ -236,9 +234,7 @@ async fn main() -> Result<()> {
             phase,
             ..
         } => {
-            info!(
-                "Actor stop failed: {error}. Killed: {killed}, Phase: {phase}"
-            );
+            info!("Actor stop failed: {error}. Killed: {killed}, Phase: {phase}");
         }
     }
     info!("Example finished successfully");

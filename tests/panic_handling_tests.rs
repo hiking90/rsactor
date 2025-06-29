@@ -53,9 +53,7 @@ impl Actor for PanicTestActor {
     async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         if let Some(threshold) = self.panic_threshold {
             if self.counter >= threshold {
-                panic!(
-                    "Counter reached threshold {threshold} - intentional panic in on_run!"
-                );
+                panic!("Counter reached threshold {threshold} - intentional panic in on_run!");
             }
         }
 
@@ -647,9 +645,7 @@ mod stress_tests {
 
         // At least some messages should have been processed
         assert!(success_count > 0);
-        println!(
-            "Processed {success_count} messages before panic, {error_count} failed"
-        );
+        println!("Processed {success_count} messages before panic, {error_count} failed");
 
         // Actor should have panicked
         let join_result = join_handle.await;

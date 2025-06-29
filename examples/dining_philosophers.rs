@@ -86,16 +86,12 @@ impl Actor for Philosopher {
             philosopher_ref: actor_ref.clone(),
         };
         if let Err(e) = table_ref.tell(register_msg).await {
-            eprintln!(
-                "Philosopher {id} ({name}): Failed to send registration to table: {e:?}"
-            );
+            eprintln!("Philosopher {id} ({name}): Failed to send registration to table: {e:?}");
         }
 
         // Start the initial thinking cycle
         if let Err(e) = actor_ref.tell(StartThinking).await {
-            eprintln!(
-                "Philosopher {id} ({name}): Failed to send StartThinking to self: {e:?}"
-            );
+            eprintln!("Philosopher {id} ({name}): Failed to send StartThinking to self: {e:?}");
         }
         Ok(philosopher)
     }
@@ -474,9 +470,7 @@ async fn main() -> Result<()> {
         philosopher_join_handles.push(p_join);
     }
 
-    println!(
-        "All philosophers are at the table. Simulation will run for {SIMULATION_TIME_MS}ms."
-    );
+    println!("All philosophers are at the table. Simulation will run for {SIMULATION_TIME_MS}ms.");
     sleep(Duration::from_millis(SIMULATION_TIME_MS)).await;
     println!("Simulation time ended.");
 
