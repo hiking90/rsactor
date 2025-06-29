@@ -102,17 +102,17 @@ async fn main() -> Result<()> {
     println!("Sending Increment message...");
     // Send an Increment message and await the reply using `ask`.
     let count_after_inc: u32 = actor_ref.ask(Increment).await?;
-    println!("Reply after Increment: {}", count_after_inc);
+    println!("Reply after Increment: {count_after_inc}");
 
     println!("Sending Decrement message...");
     // Send a Decrement message and await the reply.
     let count_after_dec: u32 = actor_ref.ask(Decrement).await?;
-    println!("Reply after Decrement: {}", count_after_dec);
+    println!("Reply after Decrement: {count_after_dec}");
 
     println!("Sending Increment message again...");
     // Send another Increment message.
     let count_after_inc_2: u32 = actor_ref.ask(Increment).await?;
-    println!("Reply after Increment again: {}", count_after_inc_2);
+    println!("Reply after Increment again: {count_after_inc_2}");
 
     tokio::time::sleep(Duration::from_millis(700)).await;
 

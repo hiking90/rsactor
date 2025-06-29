@@ -132,7 +132,7 @@ impl std::fmt::Display for Error {
                 write!(f, "Runtime error in actor {}: {}", actor_id.name(), details)
             }
             Error::MailboxCapacity { message } => {
-                write!(f, "Mailbox capacity error: {}", message)
+                write!(f, "Mailbox capacity error: {message}")
             }
         }
     }

@@ -65,21 +65,21 @@ async fn main() -> Result<()> {
 
     println!("➕ Adding 10...");
     let result = actor_ref.ask(Add(10)).await?;
-    println!("   Result: {}", result);
+    println!("   Result: {result}");
 
     println!("✖️  Multiplying by 3...");
     let result = actor_ref.ask(Multiply(3)).await?;
-    println!("   Result: {}", result);
+    println!("   Result: {result}");
 
     println!("📝 Setting to 100...");
     let result = actor_ref.ask(SetCount(100)).await?;
-    println!("   Result: {}", result);
+    println!("   Result: {result}");
 
     println!("📊 Current count: {}", actor_ref.ask(GetCount).await?);
 
     println!("🔄 Resetting...");
     let reset_msg: String = actor_ref.ask(Reset).await?;
-    println!("   {}", reset_msg);
+    println!("   {reset_msg}");
 
     println!("📊 Final count: {}", actor_ref.ask(GetCount).await?);
 
@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
             );
         }
         rsactor::ActorResult::Failed { error, .. } => {
-            println!("❌ Calculator failed: {}", error);
+            println!("❌ Calculator failed: {error}");
         }
     }
 

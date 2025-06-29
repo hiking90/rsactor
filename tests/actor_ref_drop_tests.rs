@@ -166,7 +166,7 @@ async fn test_actor_ref_drop_terminates_actor_after_processing_messages() {
     assert!(final_messages.contains(&"on_stop_called".to_string()));
 
     debug!("Processed messages: {:?}", *final_messages);
-    debug!("Total messages processed: {}", final_count);
+    debug!("Total messages processed: {final_count}");
 }
 
 #[tokio::test]
@@ -223,8 +223,7 @@ async fn test_actor_ref_drop_with_slow_messages() {
     // Verify the actor took time to process all messages before terminating
     assert!(
         elapsed >= std::time::Duration::from_millis(140),
-        "Actor should have taken time to process slow messages, elapsed: {:?}",
-        elapsed
+        "Actor should have taken time to process slow messages, elapsed: {elapsed:?}"
     );
 
     // Verify the actor completed normally
@@ -250,8 +249,8 @@ async fn test_actor_ref_drop_with_slow_messages() {
     assert!(final_messages.contains(&"on_stop_called".to_string()));
 
     debug!("Processed slow messages: {:?}", *final_messages);
-    debug!("Total slow messages processed: {}", final_count);
-    debug!("Processing time: {:?}", elapsed);
+    debug!("Total slow messages processed: {final_count}");
+    debug!("Processing time: {elapsed:?}");
 }
 
 #[tokio::test]
@@ -380,7 +379,7 @@ async fn test_multiple_actor_refs_drop_behavior() {
         "Processed messages from multiple refs: {:?}",
         *final_messages
     );
-    debug!("Total messages processed: {}", final_count);
+    debug!("Total messages processed: {final_count}");
 }
 
 #[tokio::test]
@@ -461,7 +460,7 @@ async fn test_actor_ref_clone_drop_behavior() {
     assert!(final_messages.contains(&"on_stop_called".to_string()));
 
     debug!("Processed messages from clone test: {:?}", *final_messages);
-    debug!("Total messages processed: {}", final_count);
+    debug!("Total messages processed: {final_count}");
 }
 
 #[tokio::test]
@@ -486,7 +485,7 @@ async fn test_actor_ref_drop_vs_explicit_stop() {
         for i in 1..=3 {
             actor_ref
                 .tell(TestMessage {
-                    content: format!("explicit_stop_{}", i),
+                    content: format!("explicit_stop_{i}"),
                     delay_ms: 10,
                 })
                 .await
@@ -527,7 +526,7 @@ async fn test_actor_ref_drop_vs_explicit_stop() {
         for i in 1..=3 {
             actor_ref
                 .tell(TestMessage {
-                    content: format!("drop_behavior_{}", i),
+                    content: format!("drop_behavior_{i}"),
                     delay_ms: 10,
                 })
                 .await

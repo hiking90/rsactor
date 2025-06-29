@@ -89,13 +89,12 @@ async fn demonstrate_ask_with_timeout(
         Ok(response) => {
             let elapsed = timer.elapsed().as_millis();
             info!(
-                "✅ Success! Response received in {}ms: {}",
-                elapsed, response
+                "✅ Success! Response received in {elapsed}ms: {response}"
             );
         }
         Err(e) => {
             let elapsed = timer.elapsed().as_millis();
-            info!("❌ Failed after {}ms. Error: {}", elapsed, e);
+            info!("❌ Failed after {elapsed}ms. Error: {e}");
         }
     }
 }
@@ -119,11 +118,11 @@ async fn demonstrate_tell_with_timeout(
     match result {
         Ok(_) => {
             let elapsed = timer.elapsed().as_millis();
-            info!("✅ Success! Message sent in {}ms", elapsed);
+            info!("✅ Success! Message sent in {elapsed}ms");
         }
         Err(e) => {
             let elapsed = timer.elapsed().as_millis();
-            info!("❌ Failed to send after {}ms. Error: {}", elapsed, e);
+            info!("❌ Failed to send after {elapsed}ms. Error: {e}");
         }
     }
 }
@@ -149,8 +148,8 @@ async fn main() -> Result<()> {
         )
         .await;
     match &result1 {
-        Ok(response) => info!("✅ Success: {}", response),
-        Err(e) => info!("❌ Failed: {}", e),
+        Ok(response) => info!("✅ Success: {response}"),
+        Err(e) => info!("❌ Failed: {e}"),
     }
     assert!(
         result1.is_ok(),
@@ -166,8 +165,8 @@ async fn main() -> Result<()> {
         )
         .await;
     match &result2 {
-        Ok(response) => info!("✅ Success: {}", response),
-        Err(e) => info!("❌ Failed: {}", e),
+        Ok(response) => info!("✅ Success: {response}"),
+        Err(e) => info!("❌ Failed: {e}"),
     }
     assert!(
         result2.is_err(),
@@ -183,8 +182,8 @@ async fn main() -> Result<()> {
         )
         .await;
     match &result3 {
-        Ok(response) => info!("✅ Success: {}", response),
-        Err(e) => info!("❌ Failed: {}", e),
+        Ok(response) => info!("✅ Success: {response}"),
+        Err(e) => info!("❌ Failed: {e}"),
     }
     assert!(
         result3.is_ok(),
@@ -229,7 +228,7 @@ async fn main() -> Result<()> {
 
     match result {
         rsactor::ActorResult::Completed { actor: _, killed } => {
-            info!("Actor stopped successfully. Killed: {}", killed);
+            info!("Actor stopped successfully. Killed: {killed}");
         }
         rsactor::ActorResult::Failed {
             error,
@@ -238,8 +237,7 @@ async fn main() -> Result<()> {
             ..
         } => {
             info!(
-                "Actor stop failed: {}. Killed: {}, Phase: {}",
-                error, killed, phase
+                "Actor stop failed: {error}. Killed: {killed}, Phase: {phase}"
             );
         }
     }

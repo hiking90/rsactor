@@ -69,7 +69,7 @@ impl Actor for Philosopher {
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let (id, name, table_ref) = args;
-        println!("Philosopher {} ({}) is joining the table.", id, name);
+        println!("Philosopher {id} ({name}) is joining the table.");
 
         let philosopher = Self {
             id,
@@ -87,16 +87,14 @@ impl Actor for Philosopher {
         };
         if let Err(e) = table_ref.tell(register_msg).await {
             eprintln!(
-                "Philosopher {} ({}): Failed to send registration to table: {:?}",
-                id, name, e
+                "Philosopher {id} ({name}): Failed to send registration to table: {e:?}"
             );
         }
 
         // Start the initial thinking cycle
         if let Err(e) = actor_ref.tell(StartThinking).await {
             eprintln!(
-                "Philosopher {} ({}): Failed to send StartThinking to self: {:?}",
-                id, name, e
+                "Philosopher {id} ({name}): Failed to send StartThinking to self: {e:?}"
             );
         }
         Ok(philosopher)
@@ -346,7 +344,7 @@ impl Actor for Table {
     type Error = anyhow::Error;
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        println!("Table actor is ready with {} forks.", args);
+        println!("Table actor is ready with {args} forks.");
         Ok(Self {
             forks: vec![true; args], // All forks initially available
             philosophers: HashMap::new(),
@@ -438,8 +436,7 @@ impl Table {
 #[tokio::main]
 async fn main() -> Result<()> {
     println!(
-        "Starting Dining Philosophers simulation ({} philosophers, {}ms)...",
-        NUM_PHILOSOPHERS, SIMULATION_TIME_MS
+        "Starting Dining Philosophers simulation ({NUM_PHILOSOPHERS} philosophers, {SIMULATION_TIME_MS}ms)..."
     );
 
     // Spawn the Table actor
@@ -466,7 +463,7 @@ async fn main() -> Result<()> {
             "Philosopher"
         }
         .to_string();
-        let name = format!("{} #{}", philosopher_name, i);
+        let name = format!("{philosopher_name} #{i}");
         let (p_ref, p_join) = spawn::<Philosopher>((i, name, table_ref.clone()));
         println!(
             "Philosopher {} spawned with Actor ID: {}",
@@ -478,8 +475,7 @@ async fn main() -> Result<()> {
     }
 
     println!(
-        "All philosophers are at the table. Simulation will run for {}ms.",
-        SIMULATION_TIME_MS
+        "All philosophers are at the table. Simulation will run for {SIMULATION_TIME_MS}ms."
     );
     sleep(Duration::from_millis(SIMULATION_TIME_MS)).await;
     println!("Simulation time ended.");
@@ -488,7 +484,7 @@ async fn main() -> Result<()> {
     println!("\nShutting down philosophers...");
     for p_ref in philosopher_refs.iter() {
         p_ref.stop().await.unwrap_or_else(|e| {
-            eprintln!("Error stopping philosopher: {:?}", e);
+            eprintln!("Error stopping philosopher: {e:?}");
         });
     }
 
@@ -498,7 +494,7 @@ async fn main() -> Result<()> {
 
     println!("\nShutting down table...");
     if let Err(e) = table_ref.stop().await {
-        eprintln!("Error stopping table: {:?}", e);
+        eprintln!("Error stopping table: {e:?}");
     }
 
     println!("\nWaiting for table to terminate...");
@@ -511,10 +507,10 @@ async fn main() -> Result<()> {
                 );
             }
             ActorResult::Failed { error, .. } => {
-                eprintln!("Table failed to start: {:?}", error);
+                eprintln!("Table failed to start: {error:?}");
             }
         },
-        Err(e) => eprintln!("Error joining table task: {:?}", e),
+        Err(e) => eprintln!("Error joining table task: {e:?}"),
     }
 
     println!("\n--- Final Eat Counts ---");
@@ -527,10 +523,10 @@ async fn main() -> Result<()> {
                 );
             }
             Ok(ActorResult::Failed { error, phase, .. }) => {
-                eprintln!("Philosopher failed to phase({phase}): {:?}", error);
+                eprintln!("Philosopher failed to phase({phase}): {error:?}");
             }
             Err(e) => {
-                eprintln!("Error joining philosopher task: {:?}", e);
+                eprintln!("Error joining philosopher task: {e:?}");
             }
         }
     }

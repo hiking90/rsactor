@@ -54,8 +54,7 @@ impl Actor for PanicTestActor {
         if let Some(threshold) = self.panic_threshold {
             if self.counter >= threshold {
                 panic!(
-                    "Counter reached threshold {} - intentional panic in on_run!",
-                    threshold
+                    "Counter reached threshold {threshold} - intentional panic in on_run!"
                 );
             }
         }
@@ -649,8 +648,7 @@ mod stress_tests {
         // At least some messages should have been processed
         assert!(success_count > 0);
         println!(
-            "Processed {} messages before panic, {} failed",
-            success_count, error_count
+            "Processed {success_count} messages before panic, {error_count} failed"
         );
 
         // Actor should have panicked
@@ -774,8 +772,8 @@ mod integration_tests {
             } else {
                 let result = actor_ref.ask(WorkItem(i)).await?;
                 match result {
-                    Ok(msg) => println!("Success: {}", msg),
-                    Err(err) => println!("Expected error: {}", err),
+                    Ok(msg) => println!("Success: {msg}"),
+                    Err(err) => println!("Expected error: {err}"),
                 }
             }
         }

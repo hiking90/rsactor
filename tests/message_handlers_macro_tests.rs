@@ -461,7 +461,7 @@ impl MessageHandlerTestActor {
             self.data_store.insert(key, value);
         }
         self.messages_log
-            .push(format!("Batch updated {} items", count));
+            .push(format!("Batch updated {count} items"));
         count
     }
 
@@ -476,7 +476,7 @@ impl MessageHandlerTestActor {
             None => format!("{}: no value", msg.required_field),
         };
         self.messages_log
-            .push(format!("Optional message: {}", response));
+            .push(format!("Optional message: {response}"));
         response
     }
 
@@ -653,15 +653,15 @@ impl MessageHandlerTestActor {
         _: &ActorRef<Self>,
     ) -> String {
         let result = match msg {
-            GenericOperation::Process(s) => format!("Processed: {}", s),
+            GenericOperation::Process(s) => format!("Processed: {s}"),
             GenericOperation::Transform { input, factor } => {
-                format!("Transformed: {} (factor: {})", input, factor)
+                format!("Transformed: {input} (factor: {factor})")
             }
             GenericOperation::Batch(items) => format!("Batch: {} items", items.len()),
             GenericOperation::None => "None operation".to_string(),
         };
         self.messages_log
-            .push(format!("Generic operation result: {}", result));
+            .push(format!("Generic operation result: {result}"));
         result
     }
 
@@ -678,7 +678,7 @@ impl MessageHandlerTestActor {
             GenericOperation::None => 0,
         };
         self.messages_log
-            .push(format!("Generic operation number result: {}", result));
+            .push(format!("Generic operation number result: {result}"));
         result
     }
 
@@ -836,7 +836,7 @@ impl MessageHandlerTestActor {
             cache_size,
             msg.error_log.len()
         ));
-        format!("processed_with_cache_size_{}", cache_size)
+        format!("processed_with_cache_size_{cache_size}")
     }
 
     #[handler]
@@ -850,8 +850,7 @@ impl MessageHandlerTestActor {
             .final_result
             .unwrap_or_else(|| msg.intermediate.unwrap_or(msg.original));
         self.messages_log.push(format!(
-            "Nested trait bound: original='{}', final='{}'",
-            original, result
+            "Nested trait bound: original='{original}', final='{result}'"
         ));
         result
     }
@@ -1127,7 +1126,7 @@ async fn test_large_batch_processing() {
     let (actor_ref, _join_handle) = spawn::<MessageHandlerTestActor>(());
 
     // Create a large batch of updates
-    let updates: Vec<(String, i32)> = (0..1000).map(|i| (format!("key_{}", i), i)).collect();
+    let updates: Vec<(String, i32)> = (0..1000).map(|i| (format!("key_{i}"), i)).collect();
 
     let count: usize = actor_ref.ask(BatchUpdate { updates }).await.unwrap();
     assert_eq!(count, 1000);

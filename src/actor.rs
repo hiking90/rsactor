@@ -386,11 +386,11 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
 
     let mut actor = match T::on_start(args, &actor_ref).await {
         Ok(actor) => {
-            debug!("Actor {} on_start completed successfully.", actor_id);
+            debug!("Actor {actor_id} on_start completed successfully.");
             actor
         }
         Err(e) => {
-            error!("Actor {} on_start failed: {:?}", actor_id, e);
+            error!("Actor {actor_id} on_start failed: {e:?}");
             return ActorResult::Failed {
                 actor: None,
                 error: e,
@@ -400,7 +400,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
         }
     };
 
-    debug!("Runtime for actor {} is running.", actor_id);
+    debug!("Runtime for actor {actor_id} is running.");
 
     let actor_weak = ActorRef::downgrade(&actor_ref);
     drop(actor_ref); // Drop the strong reference to allow graceful shutdown
@@ -414,13 +414,13 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
             biased; // Ensure Terminate is checked first if multiple conditions are ready
 
             maybe_terminate = terminate_receiver.recv() => {
-                info!("Actor {} received Terminate signal. Stopping immediately.", actor_id);
+                info!("Actor {actor_id} received Terminate signal. Stopping immediately.");
 
                 killed = maybe_terminate.is_some(); // Mark as killed
 
                 // Call on_stop for kill scenario
                 if let Err(e) = actor.on_stop(&actor_weak, true).await {
-                    error!("Actor {} on_stop failed during kill: {:?}", actor_id, e);
+                    error!("Actor {actor_id} on_stop failed during kill: {e:?}");
                     return ActorResult::Failed {
                         actor: Some(actor),
                         error: e,
@@ -435,7 +435,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
             maybe_message = receiver.recv() => {
                 match maybe_message {
                     Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
-                        trace!("Actor {} received message: {:?}", actor_id, payload);
+                        trace!("Actor {actor_id} received message: {payload:?}");
 
                         assert_eq!(actor_ref.identity().name(), std::any::type_name::<T>());
 
@@ -445,7 +445,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                             Ok(reply) => {
                                 if let Some(tx) = reply_channel {
                                     if tx.send(Ok(reply)).is_err() {
-                                        debug!("Actor {} failed to send reply: receiver dropped.", actor_id);
+                                        debug!("Actor {actor_id} failed to send reply: receiver dropped.");
                                     }
                                 }
                             }
@@ -455,29 +455,29 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                                 if let Some(tx) = reply_channel {
                                     // Send the error back to the asker
                                     if tx.send(Err(e)).is_err() {
-                                        error!("Actor {} failed to send error reply: receiver dropped.", actor_id);
+                                        error!("Actor {actor_id} failed to send error reply: receiver dropped.");
                                     }
                                 } else {
                                     // If no reply channel, we can't send an error back.
                                     // This is a design choice: if the message was sent with 'tell',
                                     // we don't have a reply channel to send errors back.
-                                    error!("Actor {} received message without reply channel, cannot send error reply.", actor_id);
+                                    error!("Actor {actor_id} received message without reply channel, cannot send error reply.");
                                 }
                                 // User send a wrong message type. So, we don't stop the actor in release mode.
                                 // In debug mode, we can panic to help the developer.
                                 #[cfg(debug_assertions)]
                                 {
-                                    panic!("Actor {} error handling message", actor_id);
+                                    panic!("Actor {actor_id} error handling message");
                                 }
                             }
                         }
                     }
                     Some(MailboxMessage::StopGracefully(_)) | None => {
-                        info!("Actor {} received StopGracefully. Will stop after processing current messages.", actor_id);
+                        info!("Actor {actor_id} received StopGracefully. Will stop after processing current messages.");
 
                         // Call on_stop for graceful stop scenario
                         if let Err(e) = actor.on_stop(&actor_weak, false).await {
-                            error!("Actor {} on_stop failed during graceful stop: {:?}", actor_id, e);
+                            error!("Actor {actor_id} on_stop failed during graceful stop: {e:?}");
                             return ActorResult::Failed {
                                 actor: Some(actor),
                                 error: e,
@@ -497,8 +497,8 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                         // on_run completed successfully, continue processing messages.
                     }
                     Err(e) => { // e is A::Error
-                        let error_msg = format!("Actor {} on_run error: {:?}", actor_id, e);
-                        error!("{}", error_msg);
+                        let error_msg = format!("Actor {actor_id} on_run error: {e:?}");
+                        error!("{error_msg}");
                         return ActorResult::Failed {
                             actor: Some(actor),
                             error: e,
@@ -514,7 +514,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
     receiver.close(); // Close the main mailbox
     terminate_receiver.close(); // Close its own channel
 
-    debug!("Actor {} message loop ended.", actor_id);
+    debug!("Actor {actor_id} message loop ended.");
 
     // Return completed actor result
     ActorResult::Completed { actor, killed }

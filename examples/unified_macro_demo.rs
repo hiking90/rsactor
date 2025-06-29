@@ -11,7 +11,7 @@ impl Actor for SimpleActor {
     type Args = i32;
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        println!("SimpleActor started with counter: {}", args);
+        println!("SimpleActor started with counter: {args}");
         Ok(SimpleActor { counter: args })
     }
 }
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_ref.tell(Increment).await?;
     simple_ref.tell(Increment).await?;
     let count: i32 = simple_ref.ask(GetCount).await?;
-    println!("Final count: {}", count);
+    println!("Final count: {count}");
 
     simple_ref.stop().await?;
 
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     string_ref.tell(SetValue("Hello World".to_string())).await?;
     let string_value: Option<String> = string_ref.ask(GetValue).await?;
-    println!("String value: {:?}", string_value);
+    println!("String value: {string_value:?}");
 
     string_ref.stop().await?;
 
@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     int_ref.tell(SetValue(42)).await?;
     let int_value: Option<i32> = int_ref.ask(GetValue).await?;
-    println!("Integer value: {:?}", int_value);
+    println!("Integer value: {int_value:?}");
 
     int_ref.stop().await?;
 

@@ -94,7 +94,7 @@ impl Actor for SyncDataProcessorActor {
                 let raw_value = rand::random::<f64>() * 100.0;
 
                 // Send the data to our actor using tell_blocking
-                debug!("Sync task sending value {:.2} to actor", raw_value);
+                debug!("Sync task sending value {raw_value:.2} to actor");
 
                 // Use tell_blocking which is designed for tokio blocking contexts
                 // Note: This requires access to a tokio runtime, which is available inside spawn_blocking
@@ -105,7 +105,7 @@ impl Actor for SyncDataProcessorActor {
                     },
                     None,
                 ) {
-                    info!("Failed to send data to actor: {}", e);
+                    info!("Failed to send data to actor: {e}");
                     running = false;
                 }
 
@@ -115,7 +115,7 @@ impl Actor for SyncDataProcessorActor {
                     // Command received
                     Ok(cmd) => match cmd {
                         TaskCommand::ChangeInterval(new_interval) => {
-                            info!("Sync task changing interval to {:?}", new_interval);
+                            info!("Sync task changing interval to {new_interval:?}");
                             interval = new_interval;
                         }
                         TaskCommand::Stop => {
@@ -227,8 +227,7 @@ async fn main() -> Result<()> {
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
     println!(
-        "Current state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
+        "Current state: factor={factor:.2}, latest_value={latest_value:?}"
     );
 
     if let Some(ts) = timestamp {
@@ -238,7 +237,7 @@ async fn main() -> Result<()> {
     // Change the processing factor
     println!("Changing processing factor to 2.5...");
     let new_factor: f64 = actor_ref.ask(SetFactor(2.5)).await?;
-    println!("Factor changed to: {:.2}", new_factor);
+    println!("Factor changed to: {new_factor:.2}");
 
     // Change the task's data generation interval
     println!("Changing the sync task's data generation interval...");
@@ -260,8 +259,7 @@ async fn main() -> Result<()> {
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
     println!(
-        "Updated state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
+        "Updated state: factor={factor:.2}, latest_value={latest_value:?}"
     );
 
     if let Some(ts) = timestamp {
@@ -279,7 +277,7 @@ async fn main() -> Result<()> {
 
     match result {
         rsactor::ActorResult::Completed { actor, killed } => {
-            println!("Actor completed successfully. Killed: {}", killed);
+            println!("Actor completed successfully. Killed: {killed}");
             println!(
                 "Final state: factor={:.2}, latest_value={:?}",
                 actor.factor, actor.latest_value

@@ -511,7 +511,7 @@ async fn test_actor_result_debug_format() {
         },
         killed: false,
     };
-    let debug_str = format!("{:?}", completed_result);
+    let debug_str = format!("{completed_result:?}");
     assert!(
         debug_str.contains("Completed"),
         "Debug should contain variant name"
@@ -523,7 +523,7 @@ async fn test_actor_result_debug_format() {
         phase: FailurePhase::OnStart,
         killed: false,
     };
-    let debug_str = format!("{:?}", failed_result);
+    let debug_str = format!("{failed_result:?}");
     assert!(
         debug_str.contains("Failed"),
         "Debug should contain variant name"
@@ -632,11 +632,10 @@ async fn test_error_runtime_tell_blocking_outside_runtime() {
             );
             assert!(
                 details.contains("Failed to get Tokio runtime handle for tell_blocking"),
-                "Error should mention runtime handle failure, got: {}",
-                details
+                "Error should mention runtime handle failure, got: {details}"
             );
         } else {
-            panic!("Expected Error::Runtime, got: {:?}", result);
+            panic!("Expected Error::Runtime, got: {result:?}");
         }
     });
 
@@ -678,11 +677,10 @@ async fn test_error_runtime_ask_blocking_outside_runtime() {
             );
             assert!(
                 details.contains("Failed to get Tokio runtime handle for ask_blocking"),
-                "Error should mention runtime handle failure, got: {}",
-                details
+                "Error should mention runtime handle failure, got: {details}"
             );
         } else {
-            panic!("Expected Error::Runtime, got: {:?}", result);
+            panic!("Expected Error::Runtime, got: {result:?}");
         }
     });
 
@@ -703,7 +701,7 @@ async fn test_error_runtime_display_format() {
         details: "Test runtime error details".to_string(),
     };
 
-    let display_str = format!("{}", error);
+    let display_str = format!("{error}");
     assert!(
         display_str.contains("Runtime error in actor"),
         "Display should mention runtime error"

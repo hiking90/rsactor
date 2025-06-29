@@ -116,11 +116,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (simple_ref, _simple_handle) = spawn::<SimpleActor>(simple_actor);
 
     let name = simple_ref.ask(GetName).await?;
-    println!("Initial name: {}", name);
+    println!("Initial name: {name}");
 
     simple_ref.tell(SetName("Bob".to_string())).await?;
     let new_name = simple_ref.ask(GetName).await?;
-    println!("Updated name: {}", new_name);
+    println!("Updated name: {new_name}");
 
     // Example 2: Counter Actor
     println!("\n🔢 Example 2: Counter Actor");
@@ -136,12 +136,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 1..=7 {
         let count = counter_ref.ask(Increment).await?;
         let at_max = counter_ref.ask(IsAtMax).await?;
-        println!("Increment {}: count = {}, at_max = {}", i, count, at_max);
+        println!("Increment {i}: count = {count}, at_max = {at_max}");
     }
 
     // Decrement
     let count = counter_ref.ask(Decrement).await?;
-    println!("After decrement: {}", count);
+    println!("After decrement: {count}");
 
     // Example 3: Worker Actor
     println!("\n⚙️  Example 3: Worker Actor");
@@ -152,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (worker_ref, _worker_handle) = spawn::<WorkerActor>(worker_actor);
 
     let worker_id = worker_ref.ask(GetWorkerId).await?;
-    println!("Worker ID: {}", worker_id);
+    println!("Worker ID: {worker_id}");
 
     // Assign some tasks
     let tasks = vec![
@@ -164,11 +164,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for task in tasks {
         let result = worker_ref.ask(DoWork(task.to_string())).await?;
-        println!("Result: {}", result);
+        println!("Result: {result}");
     }
 
     let total_tasks = worker_ref.ask(GetTasksCompleted).await?;
-    println!("Total tasks completed: {}", total_tasks);
+    println!("Total tasks completed: {total_tasks}");
 
     // Cleanup
     simple_ref.stop().await?;

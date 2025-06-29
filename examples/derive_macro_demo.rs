@@ -45,16 +45,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test the actor
     let name = actor_ref.ask(GetName).await?;
-    println!("Actor name: {}", name);
+    println!("Actor name: {name}");
 
     let initial_count = actor_ref.ask(GetCount).await?;
-    println!("Initial count: {}", initial_count);
+    println!("Initial count: {initial_count}");
 
     actor_ref.tell(Increment).await?;
     actor_ref.tell(Increment).await?;
 
     let final_count = actor_ref.ask(GetCount).await?;
-    println!("Final count: {}", final_count);
+    println!("Final count: {final_count}");
 
     // Stop the actor
     actor_ref.stop().await?;

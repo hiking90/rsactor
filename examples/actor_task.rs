@@ -91,8 +91,7 @@ impl Actor for DataProcessorActor {
             self.latest_timestamp = Some(std::time::Instant::now());
 
             debug!(
-                "Generated data: original={:.2}, processed={:.2}",
-                raw_value, processed_value
+                "Generated data: original={raw_value:.2}, processed={processed_value:.2}"
             );
         }
     }
@@ -173,8 +172,7 @@ async fn main() -> Result<()> {
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
     println!(
-        "Current state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
+        "Current state: factor={factor:.2}, latest_value={latest_value:?}"
     );
 
     if let Some(ts) = timestamp {
@@ -184,7 +182,7 @@ async fn main() -> Result<()> {
     // Change the processing factor
     println!("Changing processing factor to 2.5...");
     let new_factor: f64 = actor_ref.ask(SetFactor(2.5)).await?;
-    println!("Factor changed to: {:.2}", new_factor);
+    println!("Factor changed to: {new_factor:.2}");
 
     // Change the task's data generation interval
     println!("Changing the task's data generation interval...");
@@ -209,8 +207,7 @@ async fn main() -> Result<()> {
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
     println!(
-        "Updated state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
+        "Updated state: factor={factor:.2}, latest_value={latest_value:?}"
     );
 
     if let Some(ts) = timestamp {
@@ -226,7 +223,7 @@ async fn main() -> Result<()> {
 
     match result {
         rsactor::ActorResult::Completed { actor, killed } => {
-            println!("Actor completed successfully. Killed: {}", killed);
+            println!("Actor completed successfully. Killed: {killed}");
             println!(
                 "Final state: factor={:.2}, latest_value={:?}",
                 actor.factor, actor.latest_value

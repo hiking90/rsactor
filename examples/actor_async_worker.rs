@@ -121,28 +121,26 @@ impl WorkerActor {
         let data = msg.data;
         let requester = msg.requester;
 
-        println!("WorkerActor received task {}: {}", task_id, data);
+        println!("WorkerActor received task {task_id}: {data}");
 
         // Spawn a task to do the processing asynchronously
         tokio::spawn(async move {
             // Simulate some processing time
             let processing_time = (task_id % 3 + 1) as u64;
             println!(
-                "Processing task {} will take {} seconds",
-                task_id, processing_time
+                "Processing task {task_id} will take {processing_time} seconds"
             );
             tokio::time::sleep(Duration::from_secs(processing_time)).await;
 
             // Generate a result
             let result = format!(
-                "Result of task {} with data '{}' (took {}s)",
-                task_id, data, processing_time
+                "Result of task {task_id} with data '{data}' (took {processing_time}s)"
             );
 
             // Send the result back to the requester
             match requester.tell(WorkCompleted { task_id, result }).await {
-                Ok(_) => println!("Worker sent back result for task {}", task_id),
-                Err(e) => eprintln!("Failed to send result for task {}: {:?}", task_id, e),
+                Ok(_) => println!("Worker sent back result for task {task_id}"),
+                Err(e) => eprintln!("Failed to send result for task {task_id}: {e:?}"),
             }
         });
     }
@@ -162,7 +160,7 @@ async fn main() -> Result<()> {
         requester_ref
             .tell(RequestWork {
                 task_id: i,
-                data: format!("Task data {}", i),
+                data: format!("Task data {i}"),
             })
             .await?;
     }
