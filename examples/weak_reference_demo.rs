@@ -10,6 +10,7 @@
 //! - Proper cleanup when actors are dropped
 
 use anyhow::Error as AnyError;
+use log::info;
 use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorWeak, Result, UntypedActorRef};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -27,9 +28,13 @@ impl Actor for PingActor {
 
     async fn on_start(
         args: Self::Args,
-        _actor_ref: &ActorRef<Self>,
+        actor_ref: &ActorRef<Self>,
     ) -> std::result::Result<Self, Self::Error> {
-        println!("PingActor '{args}' started!");
+        info!(
+            "PingActor '{}' (id: {}) started!",
+            args,
+            actor_ref.identity()
+        );
         Ok(PingActor {
             name: args,
             ping_count: 0,
@@ -38,13 +43,16 @@ impl Actor for PingActor {
 
     async fn on_stop(
         &mut self,
-        _actor_ref: &ActorWeak<Self>,
+        actor_ref: &ActorWeak<Self>,
         killed: bool,
     ) -> std::result::Result<(), Self::Error> {
         let status = if killed { "killed" } else { "stopped" };
-        println!(
-            "PingActor '{}' {} after {} pings",
-            self.name, status, self.ping_count
+        info!(
+            "PingActor '{}' (id: {}) {} after {} pings",
+            self.name,
+            actor_ref.identity(),
+            status,
+            self.ping_count
         );
         Ok(())
     }
@@ -83,6 +91,23 @@ impl PingActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize tracing if the feature is enabled
+    #[cfg(feature = "tracing")]
+    {
+        use tracing_subscriber;
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .init();
+        println!("🚀 Weak Reference Demo: Tracing is ENABLED (TRACE level)");
+        println!("You should see detailed trace logs for all actor operations");
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+        env_logger::init(); // Initialize the logger only when tracing is disabled
+        println!("📝 Weak Reference Demo: Tracing is DISABLED");
+    }
+
     println!("=== UntypedActorWeak Demo ===\n");
 
     // Spawn an actor

@@ -29,6 +29,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
 *   **Strong Type Safety**: Provides both compile-time (`ActorRef<T>`) and runtime (`UntypedActorRef`) type safety options, ensuring message handling consistency while supporting flexible actor management patterns.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `#[message_handlers]` macro) are also required, but they don't add any additional constraints on the actor's fields.
+*   **Optional Tracing Support**: Built-in support for detailed observability using the `tracing` crate. When enabled via the `tracing` feature flag, provides comprehensive logging of actor lifecycle events, message handling, and performance metrics.
 
 ## Getting Started
 
@@ -37,9 +38,63 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 ```toml
 [dependencies]
 rsactor = "0.9" # Check crates.io for the latest version
+
+# Optional: Enable tracing support for detailed observability
+# rsactor = { version = "0.9", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
+
+### Optional Features
+
+#### Tracing Support
+
+rsActor provides optional tracing support for comprehensive observability into actor behavior. When enabled, the framework emits structured trace events for:
+
+- Actor lifecycle events (start, stop, termination scenarios)
+- Message sending and handling with timing information
+- Reply processing and error handling
+- Performance metrics (message processing duration)
+
+To enable tracing support, add the `tracing` feature to your dependencies:
+
+```toml
+[dependencies]
+rsactor = { version = "0.9", features = ["tracing"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+All examples include tracing support with feature detection. Here's the pattern used:
+
+```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing if the feature is enabled
+    #[cfg(feature = "tracing")]
+    {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_target(false)
+            .init();
+        println!("🚀 Demo: Tracing is ENABLED");
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+        env_logger::init();
+        println!("📝 Demo: Tracing is DISABLED");
+    }
+
+    // Your actor code here...
+    Ok(())
+}
+```
+
+Run any example with tracing enabled:
+```bash
+RUST_LOG=debug cargo run --example basic --features tracing
+```
 
 ### 2. Choose Your Implementation Approach
 
@@ -184,10 +239,16 @@ rsActor comes with several examples that demonstrate various features and use ca
 * **[actor_task](./examples/actor_task.rs)** - Background task communication with actors
 * **[actor_blocking_task](./examples/actor_blocking_task.rs)** - Using blocking APIs with actors
 * **[dining_philosophers](./examples/dining_philosophers.rs)** - Classic concurrency problem implementation
+* **[weak_reference_demo](./examples/weak_reference_demo.rs)** - Working with weak actor references and lifecycle management
 
 Run any example with:
 ```bash
 cargo run --example <example_name>
+```
+
+All examples support tracing when enabled with the `tracing` feature:
+```bash
+RUST_LOG=debug cargo run --example <example_name> --features tracing
 ```
 
 ## Further Information

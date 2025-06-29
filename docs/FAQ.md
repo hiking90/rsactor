@@ -18,14 +18,23 @@ A2: The primary goal is simplicity and ease of use for in-process actor systems.
 A3:
 *   **Scope:** `rsActor` is designed for local, in-process actors only and does not support remote actors or clustering, unlike some more comprehensive frameworks.
 *   **Simplicity:** It aims for a smaller API surface and less complexity compared to frameworks like Actix.
-*   **Features:** As mentioned in the `README.md`, compared to Kameo, `rsActor` uses a concrete `ActorRef` with runtime type checking for replies, does not include built-in actor linking or supervision, is tightly coupled with Tokio, and uses the `impl_message_handler!` macro to simplify message handler boilerplate.
+*   **Features:** As mentioned in the `README.md`, compared to Kameo, `rsActor` uses a concrete `ActorRef` with runtime type checking for replies, does not include built-in actor linking or supervision, is tightly coupled with Tokio, and provides both `#[message_handlers]` macro and deprecated `impl_message_handler!` macro to simplify message handler boilerplate.
 *   **Error Handling:** Error handling is primarily through the framework's own `Result<T>` type (which uses `rsactor::Error`) and the `ActorResult` enum which indicates startup or runtime failures.
 
 ## Actor Definition and Usage
 
 **Q4: How do I define an actor?**
 
-A4: To define an actor, you need to:
+A4: To define an actor, you can choose between two approaches:
+
+### Option A: Using the Actor Derive Macro and Message Handlers Macro (Recommended)
+
+1.  Create a struct for your actor's state and derive `Actor`.
+2.  Define the message types your actor will handle.
+3.  Use the `#[message_handlers]` attribute macro with `#[handler]` method attributes to automatically implement message handling.
+
+### Option B: Manual Implementation (for complex initialization)
+
 1.  Create a struct for your actor's state.
 2.  Define a struct or tuple for your actor's initialization arguments (this will be `Actor::Args`).
 3.  Implement the `Actor` trait for your state struct. This involves:
@@ -35,11 +44,62 @@ A4: To define an actor, you need to:
     *   Implementing `on_run` and `on_stop` methods, which are optional and have default implementations.
 4.  Define the message types your actor will handle.
 5.  For each message type, implement the `Message<MessageType>` trait for your actor struct.
-6.  Use the `impl_message_handler!` macro to implement the `MessageHandler` trait, making your actor able to process messages.
+6.  Use the `#[message_handlers]` macro to implement message handling, or the deprecated `impl_message_handler!` macro.
 
 **Q5: Is there a simple example of an actor?**
 
-A5: Here's a minimalist actor example:
+A5: Here are examples using both approaches:
+
+### Recommended Approach (Using Derive and Message Handlers Macros)
+
+```rust
+use rsactor::{Actor, ActorRef, message_handlers, spawn};
+
+// Define actor struct with derive macro
+#[derive(Actor)]
+struct SimpleActor {
+    counter: u32,
+}
+
+// Define message types
+struct Increment(u32);
+struct GetCount;
+
+// Use message_handlers macro with handler attributes
+#[message_handlers]
+impl SimpleActor {
+    #[handler]
+    async fn handle_increment(&mut self, msg: Increment, _: &ActorRef<Self>) -> u32 {
+        self.counter += msg.0;
+        self.counter
+    }
+
+    #[handler]
+    async fn handle_get_count(&mut self, _msg: GetCount, _: &ActorRef<Self>) -> u32 {
+        self.counter
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create and spawn actor
+    let actor = SimpleActor { counter: 0 };
+    let (actor_ref, _handle) = spawn(actor);
+
+    // Send messages
+    let new_count = actor_ref.ask(Increment(5)).await?;
+    println!("New count: {}", new_count);
+
+    let current_count = actor_ref.ask(GetCount).await?;
+    println!("Current count: {}", current_count);
+
+    // Gracefully stop the actor
+    actor_ref.stop().await?;
+    Ok(())
+}
+```
+
+### Manual Implementation Approach
 
 ```rust
 use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
@@ -73,7 +133,7 @@ impl Message<Increment> for SimpleActor {
     }
 }
 
-// Use macro to implement MessageHandler trait
+// Use macro to implement MessageHandler trait (deprecated approach)
 impl_message_handler!(SimpleActor, [Increment]);
 
 #[tokio::main]
@@ -129,12 +189,12 @@ A7: `rsActor` provides several methods for sending messages to actors:
 
 5.  **`ask_blocking`**: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
     ```rust
-    let result = actor_ref.ask_blocking::<MyMessage, ResponseType>(MyMessage, Some(timeout));
+    let result = actor_ref.ask_blocking(MyMessage, Some(timeout))?;
     ```
 
 6.  **`tell_blocking`**: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
     ```rust
-    actor_ref.tell_blocking(MyMessage, Some(timeout));
+    actor_ref.tell_blocking(MyMessage, Some(timeout))?;
     ```
 
 **Q8: How do I stop an actor?**
@@ -181,7 +241,43 @@ enum DatabaseCommand {
 
 **Q10: How do I handle messages in an actor?**
 
-A10: To handle messages, you implement the `Message<T>` trait for your actor struct, where `T` is the message type:
+A10: There are two approaches to handle messages:
+
+### Recommended Approach: Using `#[message_handlers]` Macro
+
+```rust
+use rsactor::{Actor, ActorRef, message_handlers};
+
+#[derive(Actor)]
+struct UserManagerActor {
+    users: std::collections::HashMap<u64, User>,
+    next_id: u64,
+}
+
+#[message_handlers]
+impl UserManagerActor {
+    #[handler]
+    async fn handle_add_user(&mut self, msg: AddUser, _: &ActorRef<Self>) -> Result<UserId, UserError> {
+        let user = User {
+            id: self.next_id,
+            name: msg.name,
+            email: msg.email,
+        };
+
+        self.next_id += 1;
+        self.users.insert(user.id, user.clone());
+
+        Ok(user.id)
+    }
+
+    #[handler]
+    async fn handle_ping(&mut self, _msg: Ping, _: &ActorRef<Self>) -> String {
+        "Pong".to_string()
+    }
+}
+```
+
+### Manual Implementation: Using `Message<T>` Trait
 
 ```rust
 impl Message<AddUser> for UserManagerActor {
@@ -211,6 +307,8 @@ impl_message_handler!(UserManagerActor, [Ping, AddUser, RemoveUser, GetUser]);
 ```
 
 This macro implements the `MessageHandler` trait, which is what allows the actor runtime to dispatch messages to the appropriate handler methods.
+
+**Note:** The `#[message_handlers]` approach is recommended as it automatically generates the `Message<T>` implementations and `MessageHandler` trait implementation, reducing boilerplate and potential errors.
 
 ## Actor Lifecycle
 
@@ -611,7 +709,78 @@ A21: Actor references can be shared by passing them during actor creation or via
 
 **Q22: Can I use generics with actors?**
 
-A22: Yes, you can define generic actors. The `impl_message_handler!` macro now supports a unified syntax that can handle all generic instantiations with a single macro call. Here's an example of a generic actor that can store an optional value of any type `T` that meets the necessary trait bounds.
+A22: Yes, you can define generic actors. Here's an example using both the recommended `#[message_handlers]` approach and the manual approach:
+
+### Recommended Approach: Using `#[message_handlers]` Macro
+
+```rust
+use rsactor::{Actor, ActorRef, message_handlers};
+use std::fmt::Debug;
+
+// Define a generic actor struct
+#[derive(Debug)]
+struct GenericActor<T: Send + Debug + Clone + 'static> {
+    data: Option<T>,
+}
+
+// Implement the Actor trait for the generic actor
+impl<T: Send + Debug + Clone + 'static> Actor for GenericActor<T> {
+    type Args = Option<T>; // Initial value for data
+    type Error = anyhow::Error;
+
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(GenericActor { data: args })
+    }
+}
+
+// Define message types
+#[derive(Debug)]
+struct SetValue<T: Send + Debug + 'static>(pub T);
+
+#[derive(Debug, Clone, Copy)]
+struct GetValue;
+
+#[derive(Debug, Clone, Copy)]
+struct ClearValue;
+
+// Use message_handlers macro for generic actors
+#[message_handlers]
+impl<T: Send + Debug + Clone + 'static> GenericActor<T> {
+    #[handler]
+    async fn handle_set_value(&mut self, msg: SetValue<T>, _: &ActorRef<Self>) -> () {
+        self.data = Some(msg.0);
+    }
+
+    #[handler]
+    async fn handle_get_value(&mut self, _msg: GetValue, _: &ActorRef<Self>) -> Option<T> {
+        self.data.clone()
+    }
+
+    #[handler]
+    async fn handle_clear_value(&mut self, _msg: ClearValue, _: &ActorRef<Self>) -> () {
+        self.data = None;
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Usage with String - works automatically!
+    let (string_actor_ref, _s_handle) = spawn::<GenericActor<String>>(Some("hello".to_string()));
+    string_actor_ref.tell(SetValue("world".to_string())).await?;
+    let val_s: Option<String> = string_actor_ref.ask(GetValue).await?;
+    println!("String actor value: {:?}", val_s); // Should be Some("world")
+
+    // Usage with i32 - works automatically!
+    let (int_actor_ref, _i_handle) = spawn::<GenericActor<i32>>(Some(42));
+    int_actor_ref.tell(SetValue(100)).await?;
+    let val_i: Option<i32> = int_actor_ref.ask(GetValue).await?;
+    println!("Integer actor value: {:?}", val_i); // Should be Some(100)
+
+    Ok(())
+}
+```
+
+### Manual Implementation: Using `impl_message_handler!` Macro
 
 ```rust
 use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
@@ -704,11 +873,13 @@ async fn main() -> Result<()> {
 */
 ```
 
-The unified `impl_message_handler!` macro supports two syntax patterns:
+The `#[message_handlers]` macro automatically handles this for you, or you can use the deprecated `impl_message_handler!` macro which supports two syntax patterns:
 - **Generic actors**: `impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue, ClearValue]);`
 - **Non-generic actors**: `impl_message_handler!(MyActor, [MessageType1, MessageType2]);`
 
 With the generic syntax, you specify the generic constraints in square brackets, followed by `for` and the generic actor type, then the list of message types. This single macro call generates message handling for all possible instantiations of the generic actor, eliminating the need for separate macro calls for each concrete type.
+
+**Note:** The `#[message_handlers]` macro approach is recommended over `impl_message_handler!` as it provides better ergonomics and reduces boilerplate.
 
 **Q23: How can I effectively use the `on_run` method in my actors?**
 

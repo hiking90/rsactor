@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `#[message_handlers]` attribute macro with `#[handler]` method attributes for simplified message handling
+- **Tracing Support**: Optional `tracing` feature for comprehensive actor observability
+  - Full lifecycle tracing for actor events (start, stop, termination scenarios)
+  - Message sending and handling with detailed timing information
+  - Reply processing and error handling tracing
+  - Performance metrics including message processing duration
+  - Clear distinction between different termination scenarios (kill, graceful stop, reference drop)
+- New examples: `tracing_demo.rs`, `weak_reference_demo.rs`, `kill_demo.rs` demonstrating tracing capabilities
 - Comprehensive migration guide for moving from `impl_message_handler!` to the new macro approach
 - Better documentation showcasing the recommended patterns
 

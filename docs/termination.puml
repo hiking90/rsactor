@@ -17,25 +17,25 @@ box "Actor Task" #LightCoral
 end box
 
 == Normal Operation ==
-Lifecycle -> on_run_method: Calls actor.on_run(actor_ref) continuously
+Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await continuously
 activate on_run_method
-note right of on_run_method: on_run() runs in a loop\nuntil stop/kill signal received
+note right of on_run_method: on_run() is called repeatedly\nuntil it returns Err() or stop/kill signal received
 on_run_method --> Lifecycle: Returns Ok(()) or Err(error)
-note right of Lifecycle: If Ok(()), on_run is called again\nIf Err(), actor fails
+note right of Lifecycle: If Ok(()), on_run is called again\nIf Err(), actor terminates with failure
 
 == Stop Operation (Graceful) ==
 Client -> ActorRef_obj: actor_ref.stop().await
 activate ActorRef_obj
-ActorRef_obj -> MailboxChannel: sender.send(MailboxMessage::StopGracefully).await
+ActorRef_obj -> MailboxChannel: sender.send(MailboxMessage::StopGracefully(actor_ref)).await
 deactivate ActorRef_obj
 note right of Client: Client awaits JoinHandle or stop() completion
 
 MailboxChannel -> Lifecycle: receiver.recv() gets StopGracefully
 activate Lifecycle
-Lifecycle -> Lifecycle: Sets was_killed = false
-Lifecycle -> on_run_method: Signals to exit current on_run
+Lifecycle -> Lifecycle: Sets termination flag
+Lifecycle -> on_run_method: Current on_run continues until completion or next iteration
 deactivate on_run_method
-Lifecycle -> on_stop_method: Calls actor.on_stop(StopReason::Graceful)
+Lifecycle -> on_stop_method: Calls actor.on_stop(&actor_weak, killed = false).await
 activate on_stop_method
 on_stop_method --> Lifecycle: Returns Ok(()) or Err(error)
 deactivate on_stop_method
@@ -53,10 +53,10 @@ deactivate ActorRef_obj
 
 TerminateChannel -> Lifecycle: terminate_receiver.recv() gets Terminate (prioritized via biased select!)
 activate Lifecycle
-Lifecycle -> Lifecycle: Sets was_killed = true
-Lifecycle -> on_run_method: Aborts current on_run immediately
+Lifecycle -> Lifecycle: Sets killed = true
+Lifecycle -> on_run_method: Current on_run may continue briefly, then terminates
 deactivate on_run_method
-Lifecycle -> on_stop_method: Calls actor.on_stop(StopReason::Killed)
+Lifecycle -> on_stop_method: Calls actor.on_stop(&actor_weak, killed = true).await
 activate on_stop_method
 on_stop_method --> Lifecycle: Returns Ok(()) or Err(error)
 deactivate on_stop_method
@@ -67,17 +67,14 @@ Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResul
 deactivate Lifecycle
 
 == Termination via on_run Error ==
-Lifecycle -> on_run_method: Calls actor.on_run(actor_ref)
+Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await
 activate on_run_method
 on_run_method --> Lifecycle: Returns Err(error)
 deactivate on_run_method
-Lifecycle -> Lifecycle: Sets was_killed = false
-Lifecycle -> on_stop_method: Calls actor.on_stop(StopReason::Error(error))
-activate on_stop_method
-on_stop_method --> Lifecycle: Returns Ok(()) or Err(cleanup_error)
-deactivate on_stop_method
+Lifecycle -> Lifecycle: Actor terminates due to on_run error
+note right of Lifecycle: on_stop is NOT called when on_run fails\nActor terminates immediately with ActorResult::Failed
 Lifecycle -> Lifecycle: Breaks message loop
-Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Failed { cause, .. }
+Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Failed { cause, phase: OnRun, .. }
 deactivate Lifecycle
 
 @enduml

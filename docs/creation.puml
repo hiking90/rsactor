@@ -13,38 +13,39 @@ participant "run_actor_lifecycle()" as run_lifecycle
 participant "Actor::on_start(Args)" as on_start_method
 participant "Actor::on_run()" as on_run_method
 
-User -> UserActor: Defines struct & impl Actor (with Args), Message<M>
+User -> UserActor: Defines struct & impl Actor (with Args)
+User -> UserActor: Uses #[message_handlers] macro for message handling
 User -> spawn_func: Calls spawn(actor_args)
 activate spawn_func
 
 spawn_func -> MailboxChannel: Creates (mailbox_tx, mailbox_rx)
 spawn_func -> TerminateChannel: Creates (terminate_tx, terminate_rx)
 spawn_func -> ActorRef_type: Creates ActorRef (with id, mailbox_tx, terminate_tx)
-spawn_func -> tokio_spawn: Spawns run_actor_lifecycle(args, actor_ref, ...)\nactivate tokio_spawn
+spawn_func -> tokio_spawn: Spawns run_actor_lifecycle(args, actor_ref, mailbox_rx, terminate_rx)\nactivate tokio_spawn
 spawn_func --> User: Returns (ActorRef, JoinHandle)
 deactivate spawn_func
 
 tokio_spawn -> run_lifecycle: Executes
 activate run_lifecycle
-run_lifecycle -> on_start_method: Calls T::on_start(args, actor_ref)
+run_lifecycle -> on_start_method: Calls T::on_start(args, &actor_ref).await
 activate on_start_method
 on_start_method --> run_lifecycle: Returns Result<ActorInstance, Error>
 deactivate on_start_method
 
 note right of run_lifecycle
   If on_start is Ok, actor instance is created.
-  The runtime then repeatedly calls actor.on_run()
-  which implements the actor's primary processing loop.
-  Message processing happens concurrently.
+  The runtime enters a tokio::select! loop that
+  concurrently handles: terminate signals, mailbox messages,
+  and periodic on_run() calls.
 end note
-run_lifecycle -> on_run_method: Calls actor.on_run(actor_ref)
+run_lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await (in select! loop)
 activate on_run_method
-on_run_method --> run_lifecycle: Returns Future<Output = Result<(), Error>>
+on_run_method --> run_lifecycle: Returns Result<(), Error>
 deactivate on_run_method
 note right of run_lifecycle
-  If Future returns Ok(()), on_run may be called again.
-  If Err, actor stops.
-  The outcome is ActorResult.
+  If on_run returns Ok(()), it will be called again.
+  If Err, actor terminates with ActorResult::Failed.
+  The select! loop also processes messages concurrently.
 end note
 
 run_lifecycle --> tokio_spawn: (Eventually completes with ActorResult)

@@ -458,8 +458,21 @@ fn generate_message_handler_body(message_types: &[Type]) -> TokenStream2 {
             let mut _msg_any = _msg_any;
             #(
                 match _msg_any.downcast::<#message_types>() {
-                    Ok(concrete_msg_box) => {
-                        let reply = <Self as rsactor::Message<#message_types>>::handle(self, *concrete_msg_box, &actor_ref).await;
+                    Ok(concrete_msg_box) => {                        // Add tracing support for the derive macro generated handler
+                        #[cfg(feature = "tracing")]
+                        {
+                            // Update the current span with the actual message type
+                            let current_span = tracing::Span::current();
+                            current_span.record("message_type", std::any::type_name::<#message_types>());
+
+                            tracing::debug!(
+                                target: "rsactor::actor",
+                                message_type = %std::any::type_name::<#message_types>(),
+                                actor_id = %actor_ref.identity(),
+                                "Actor processing message"
+                            );
+                        }                        let reply = <Self as rsactor::Message<#message_types>>::handle(self, *concrete_msg_box, &actor_ref).await;
+
                         return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
                     }
                     Err(original_box_back) => {
@@ -468,6 +481,15 @@ fn generate_message_handler_body(message_types: &[Type]) -> TokenStream2 {
                 }
             )*
             let expected_msg_types: Vec<&'static str> = vec![#(stringify!(#message_types)),*];
+
+            #[cfg(feature = "tracing")]
+            tracing::warn!(
+                target: "rsactor::actor",
+                expected_types = ?expected_msg_types,
+                actual_type_id = ?_msg_any.type_id(),
+                "Unhandled message type"
+            );
+
             return Err(rsactor::Error::UnhandledMessageType {
                 identity: actor_ref.identity(),
                 expected_types: expected_msg_types,

@@ -83,7 +83,7 @@ impl Message<SlowMsg> for TestActor {
     async fn handle(&mut self, _msg: SlowMsg, _: &ActorRef<Self>) -> Self::Reply {
         let mut lpmt = self.last_processed_message_type.lock().await;
         *lpmt = Some("SlowMsg".to_string());
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await // Sleep for 100ms
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await // Sleep for 100ms
     }
 }
 

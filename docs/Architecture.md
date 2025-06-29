@@ -44,7 +44,7 @@ This section explains how messages are sent to an actor using `ActorRef::tell` (
 *   **`MailboxMessage::Envelope`:** Wraps the user's message and an optional `oneshot::Sender` for replies (used by `ask`).
 *   **Mailbox Channel (`mpsc::channel`):** The primary channel for delivering messages to the actor.
 *   **`Runtime`:** Receives messages from the mailbox and dispatches them.
-*   **`MessageHandler` trait (via `impl_message_handler!` macro):** Dynamically dispatches the type-erased message to the actor's specific `Message<M>::handle` method.
+*   **`MessageHandler` trait (via `#[message_handlers]` macro):** Dynamically dispatches the type-erased message to the actor's specific `Message<M>::handle` method.
 *   **`Message<M>::handle()`:** The user-defined method that processes the message.
 *   **`oneshot::channel`:** Used by `ask` to receive a reply from the actor.
 
@@ -58,7 +58,7 @@ This section explains how messages are sent to an actor using `ActorRef::tell` (
     b.  `ActorRef::tell` wraps the `message` into a `MailboxMessage::Envelope` with the `reply_channel` field set to `None`.
     c.  The envelope is sent asynchronously to the actor's mailbox via the `mpsc::Sender` held by the `ActorRef`.
     d.  The `Runtime`, in its message loop, receives the `MailboxMessage::Envelope` from its `mpsc::Receiver`.
-    e.  The `Runtime` uses the `MessageHandler` trait (implemented for the actor by the `impl_message_handler!` macro) to downcast the type-erased message payload and call the appropriate `Message<M>::handle` method on the actor instance.
+    e.  The `Runtime` uses the `MessageHandler` trait (implemented for the actor by the `#[message_handlers]` macro) to downcast the type-erased message payload and call the appropriate `Message<M>::handle` method on the actor instance.
     f.  The actor processes the message. Since it was a `tell`, no reply is sent back through a dedicated channel.
 
 2.  **`ask(message)` (Request-Reply):**
@@ -92,10 +92,10 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
 **Description:**
 1.  **`stop()` (Graceful Shutdown):**
     a.  The client calls `actor_ref.stop().await`.
-    b.  `ActorRef::stop` sends a `MailboxMessage::StopGracefully` message to the actor via its main mailbox channel.
-    c.  The `Runtime`, in its message loop, receives `StopGracefully`.
-    d.  The message loop is broken. The `on_run` method is expected to detect the shutdown signal (e.g., by checking a flag or if its communication channels close) and return.
-    e.  Once `on_run` returns (typically `Ok(())` if it was just processing messages and the mailbox closes), the actor's task prepares to finish.
+    b.  `ActorRef::stop` sends a `MailboxMessage::StopGracefully(actor_ref)` message to the actor via its main mailbox channel.
+    c.  The `Runtime`, in its message loop, receives `StopGracefully` or `None` (when the mailbox is closed).
+    d.  The runtime calls the actor's `on_stop(&actor_weak, false)` method to allow cleanup.
+    e.  The message loop is terminated, and the actor task prepares to finish.
     f.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: false }`.
 
 2.  **`kill()` (Immediate Termination):**
@@ -104,16 +104,16 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
     c.  The `Runtime`'s `tokio::select!` loop is `biased` to prioritize checking the `terminate_receiver`.
     d.  Upon receiving `ControlSignal::Terminate`:
         i.  The `Runtime` immediately breaks out of the message processing loop, effectively ignoring any unprocessed messages in the main mailbox.
-        ii. It calls `on_stop` with `killed: true`.
+        ii. It calls `on_stop(&actor_weak, true)` with `killed: true`.
     e.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: true }`.
 
 3.  **`on_run` returning `Err(_)`:**
-    a.  If `on_run` returns `Err(e)`, it signals a runtime failure. The `JoinHandle` resolves with `ActorResult::Failed { actor: Some(final_actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`.
+    a.  If `on_run` returns `Err(e)`, it signals a runtime failure. The runtime calls `on_stop(&actor_weak, false)` and the `JoinHandle` resolves with `ActorResult::Failed { actor: Some(final_actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`.
 
 4.  **All `ActorRef`s dropped:**
     a.  If all `ActorRef` instances for an actor are dropped, its mailbox channel will close.
-    b.  The `Runtime`'s message receiving loop (`self.receiver.recv().await`) will eventually return `None`.
-    c.  This triggers the actor termination sequence with `on_stop` being called.
+    b.  The `Runtime`'s message receiving loop (`receiver.recv().await`) will eventually return `None`.
+    c.  This triggers the actor termination sequence with `on_stop(&actor_weak, false)` being called.
     d.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: false }`.
 
 In all scenarios, the `ActorResult` provides the final state of the actor if it completed or failed at runtime, allowing for potential recovery or inspection. The `on_stop` hook is called before the actor terminates to allow for cleanup.
@@ -125,7 +125,7 @@ rsActor implements a comprehensive type safety system through two complementary 
 **Key Components:**
 *   **`ActorRef<T>`:** The primary reference type providing compile-time type safety.
 *   **`UntypedActorRef`:** A type-erased reference allowing for runtime type checking and heterogeneous collections.
-*   **`MessageHandler` trait:** Implemented by the `impl_message_handler!` macro, enables efficient message dispatch.
+*   **`MessageHandler` trait:** Implemented by the `#[message_handlers]` macro, enables efficient message dispatch.
 *   **`Message<M>` trait:** Defines the handler method for a specific message type along with its reply type.
 
 **Description:**

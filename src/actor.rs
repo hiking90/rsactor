@@ -3,9 +3,12 @@
 
 use crate::actor_ref::ActorRef;
 use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage, Result};
-use log::{debug, error, info, trace};
+use log::{debug, error};
 use std::{any::Any, fmt::Debug, future::Future, time::Duration};
 use tokio::sync::mpsc;
+
+#[cfg(feature = "tracing")]
+use tracing::{debug as trace_debug, warn as trace_warn};
 
 /// Defines the behavior of an actor.
 ///
@@ -414,13 +417,24 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
             biased; // Ensure Terminate is checked first if multiple conditions are ready
 
             maybe_terminate = terminate_receiver.recv() => {
-                info!("Actor {actor_id} received Terminate signal. Stopping immediately.");
+                match maybe_terminate {
+                    Some(_) => {
+                        // Explicit kill() was called
+                        #[cfg(feature = "tracing")]
+                        trace_debug!("Actor termination via kill() method");
+                        killed = true;
+                    }
+                    None => {
+                        // All actor_ref instances were dropped
+                        #[cfg(feature = "tracing")]
+                        trace_debug!("Actor termination due to all actor_ref instances being dropped");
+                        killed = false;
+                    }
+                }
 
-                killed = maybe_terminate.is_some(); // Mark as killed
-
-                // Call on_stop for kill scenario
-                if let Err(e) = actor.on_stop(&actor_weak, true).await {
-                    error!("Actor {actor_id} on_stop failed during kill: {e:?}");
+                // Call on_stop for termination scenario
+                if let Err(e) = actor.on_stop(&actor_weak, killed).await {
+                    error!("Actor {actor_id} on_stop failed during termination: {e:?}");
                     return ActorResult::Failed {
                         actor: Some(actor),
                         error: e,
@@ -435,33 +449,68 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
             maybe_message = receiver.recv() => {
                 match maybe_message {
                     Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
-                        trace!("Actor {actor_id} received message: {payload:?}");
-
                         assert_eq!(actor_ref.identity().name(), std::any::type_name::<T>());
 
                         let actor_ref = ActorRef::new(actor_ref);
 
+                        #[cfg(feature = "tracing")]
+                        let start_time = std::time::Instant::now();
+
                         match actor.handle(payload, &actor_ref).await {
                             Ok(reply) => {
+                                #[cfg(feature = "tracing")]
+                                let processing_duration = start_time.elapsed();
+
+                                #[cfg(feature = "tracing")]
+                                trace_debug!(
+                                    processing_duration_ms = processing_duration.as_millis(),
+                                    "Actor completed message processing successfully"
+                                );
+
                                 if let Some(tx) = reply_channel {
                                     if tx.send(Ok(reply)).is_err() {
                                         debug!("Actor {actor_id} failed to send reply: receiver dropped.");
+                                        #[cfg(feature = "tracing")]
+                                        trace_warn!("Failed to send reply: receiver dropped");
+                                    } else {
+                                        #[cfg(feature = "tracing")]
+                                        trace_debug!("Reply sent successfully");
                                     }
+                                } else {
+                                    #[cfg(feature = "tracing")]
+                                    trace_debug!("No reply channel - tell message completed");
                                 }
                             }
                             Err(e) => { // e is crate::Error
+                                #[cfg(feature = "tracing")]
+                                let processing_duration = start_time.elapsed();
+
                                 error!("Actor {} error handling message: {:?}", actor_id, &e); // Log with a reference
+
+                                #[cfg(feature = "tracing")]
+                                trace_warn!(
+                                    error = %e,
+                                    processing_duration_ms = processing_duration.as_millis(),
+                                    "Actor error while processing message"
+                                );
 
                                 if let Some(tx) = reply_channel {
                                     // Send the error back to the asker
                                     if tx.send(Err(e)).is_err() {
                                         error!("Actor {actor_id} failed to send error reply: receiver dropped.");
+                                        #[cfg(feature = "tracing")]
+                                        trace_warn!("Failed to send error reply: receiver dropped");
+                                    } else {
+                                        #[cfg(feature = "tracing")]
+                                        trace_debug!("Error reply sent successfully");
                                     }
                                 } else {
                                     // If no reply channel, we can't send an error back.
                                     // This is a design choice: if the message was sent with 'tell',
                                     // we don't have a reply channel to send errors back.
                                     error!("Actor {actor_id} received message without reply channel, cannot send error reply.");
+                                    #[cfg(feature = "tracing")]
+                                    trace_warn!("Error in tell message - no reply channel to send error back");
                                 }
                                 // User send a wrong message type. So, we don't stop the actor in release mode.
                                 // In debug mode, we can panic to help the developer.
@@ -473,7 +522,8 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                         }
                     }
                     Some(MailboxMessage::StopGracefully(_)) | None => {
-                        info!("Actor {actor_id} received StopGracefully. Will stop after processing current messages.");
+                        #[cfg(feature = "tracing")]
+                        trace_debug!("Actor termination due to graceful stop");
 
                         // Call on_stop for graceful stop scenario
                         if let Err(e) = actor.on_stop(&actor_weak, false).await {
