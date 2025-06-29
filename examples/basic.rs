@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use log::{debug, info}; // ADDED
-use rsactor::{Actor, ActorRef, ActorWeak, Message}; // MODIFIED: Removed ActorStopReason
+use log::info; // ADDED
+use rsactor::{message_handlers, Actor, ActorRef, ActorWeak}; // MODIFIED: Added message macro, removed Message
 use tokio::time::{interval, Duration}; // MODIFIED: Added MissedTickBehavior
 
 // Message types
@@ -52,44 +52,32 @@ impl Actor for MyActor {
     }
 }
 
-// Implement message handling for Increment
-impl Message<Increment> for MyActor {
-    type Reply = u32; // Define the reply type for Increment messages
-
-    // Handle the Increment message
-    async fn handle(&mut self, _msg: Increment, _: &ActorRef<Self>) -> Self::Reply {
-        self.count += 1;
-        debug!("MyActor handled Increment. Count is now {}.", self.count); // Changed to debug!
-        self.count // Return the new count
-    }
-}
-
-// Implement message handling for Decrement
-impl Message<Decrement> for MyActor {
-    type Reply = u32; // Define the reply type for Decrement messages
-
-    // Handle the Decrement message
-    async fn handle(&mut self, _msg: Decrement, _: &ActorRef<Self>) -> Self::Reply {
-        self.count -= 1;
-        debug!("MyActor handled Decrement. Count is now {}.", self.count); // Changed to debug!
-        self.count // Return the new count
-    }
-}
-
 // A dummy message type for demonstration
 struct DummyMessage;
-impl Message<DummyMessage> for MyActor {
-    type Reply = u32;
 
-    async fn handle(&mut self, _msg: DummyMessage, _: &ActorRef<Self>) -> Self::Reply {
-        debug!("MyActor handled DummyMessage. Count is now {}.", self.count);
+// Message handling using the #[message_handlers] macro with #[handler] attributes
+#[message_handlers]
+impl MyActor {
+    #[handler]
+    async fn handle_increment(&mut self, _msg: Increment, _: &ActorRef<Self>) -> u32 {
+        self.count += 1;
+        println!("MyActor handled Increment. Count is now {}.", self.count);
+        self.count
+    }
+
+    #[handler]
+    async fn handle_decrement(&mut self, _msg: Decrement, _: &ActorRef<Self>) -> u32 {
+        self.count -= 1;
+        println!("MyActor handled Decrement. Count is now {}.", self.count);
+        self.count
+    }
+
+    #[handler]
+    async fn handle_dummy_message(&mut self, _msg: DummyMessage, _: &ActorRef<Self>) -> u32 {
+        println!("MyActor handled DummyMessage. Count is now {}.", self.count);
         self.count
     }
 }
-
-// Use the macro to implement ErasedMessageHandler for MyActor,
-// enabling it to handle the specified message types.
-rsactor::impl_message_handler!(MyActor, [Increment, Decrement, DummyMessage]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -114,17 +102,17 @@ async fn main() -> Result<()> {
     println!("Sending Increment message...");
     // Send an Increment message and await the reply using `ask`.
     let count_after_inc: u32 = actor_ref.ask(Increment).await?;
-    println!("Reply after Increment: {}", count_after_inc);
+    println!("Reply after Increment: {count_after_inc}");
 
     println!("Sending Decrement message...");
     // Send a Decrement message and await the reply.
     let count_after_dec: u32 = actor_ref.ask(Decrement).await?;
-    println!("Reply after Decrement: {}", count_after_dec);
+    println!("Reply after Decrement: {count_after_dec}");
 
     println!("Sending Increment message again...");
     // Send another Increment message.
     let count_after_inc_2: u32 = actor_ref.ask(Increment).await?;
-    println!("Reply after Increment again: {}", count_after_inc_2);
+    println!("Reply after Increment again: {count_after_inc_2}");
 
     tokio::time::sleep(Duration::from_millis(700)).await;
 

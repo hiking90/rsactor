@@ -345,10 +345,7 @@ impl UntypedActorRef {
     {
         let rt = Handle::try_current().map_err(|e| Error::Runtime {
             identity: self.identity,
-            details: format!(
-                "Failed to get Tokio runtime handle for tell_blocking: {}",
-                e
-            ),
+            details: format!("Failed to get Tokio runtime handle for tell_blocking: {e}"),
         })?;
 
         match timeout {
@@ -414,7 +411,7 @@ impl UntypedActorRef {
     {
         let rt = Handle::try_current().map_err(|e| Error::Runtime {
             identity: self.identity,
-            details: format!("Failed to get Tokio runtime handle for ask_blocking: {}", e),
+            details: format!("Failed to get Tokio runtime handle for ask_blocking: {e}"),
         })?;
 
         match timeout {

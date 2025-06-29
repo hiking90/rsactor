@@ -1,6 +1,6 @@
 // Advanced example showing different ways to use the Actor derive macro
 
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
+use rsactor::{message_handlers, spawn, Actor, ActorRef};
 
 // Simple actor with derive
 #[derive(Actor, Debug)]
@@ -26,23 +26,18 @@ struct WorkerActor {
 struct GetName;
 struct SetName(String);
 
-impl Message<GetName> for SimpleActor {
-    type Reply = String;
-
-    async fn handle(&mut self, _msg: GetName, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl SimpleActor {
+    #[handler]
+    async fn handle_get_name(&mut self, _msg: GetName, _: &ActorRef<Self>) -> String {
         self.name.clone()
     }
-}
 
-impl Message<SetName> for SimpleActor {
-    type Reply = ();
-
-    async fn handle(&mut self, msg: SetName, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_set_name(&mut self, msg: SetName, _: &ActorRef<Self>) {
         self.name = msg.0;
     }
 }
-
-impl_message_handler!(SimpleActor, [GetName, SetName]);
 
 // Messages for CounterActor
 struct Increment;
@@ -50,83 +45,64 @@ struct Decrement;
 struct GetCount;
 struct IsAtMax;
 
-impl Message<Increment> for CounterActor {
-    type Reply = u32;
-
-    async fn handle(&mut self, _msg: Increment, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl CounterActor {
+    #[handler]
+    async fn handle_increment(&mut self, _msg: Increment, _: &ActorRef<Self>) -> u32 {
         if self.count < self.max_count {
             self.count += 1;
         }
         self.count
     }
-}
 
-impl Message<Decrement> for CounterActor {
-    type Reply = u32;
-
-    async fn handle(&mut self, _msg: Decrement, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_decrement(&mut self, _msg: Decrement, _: &ActorRef<Self>) -> u32 {
         if self.count > 0 {
             self.count -= 1;
         }
         self.count
     }
-}
 
-impl Message<GetCount> for CounterActor {
-    type Reply = u32;
-
-    async fn handle(&mut self, _msg: GetCount, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_count(&mut self, _msg: GetCount, _: &ActorRef<Self>) -> u32 {
         self.count
     }
-}
 
-impl Message<IsAtMax> for CounterActor {
-    type Reply = bool;
-
-    async fn handle(&mut self, _msg: IsAtMax, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_is_at_max(&mut self, _msg: IsAtMax, _: &ActorRef<Self>) -> bool {
         self.count >= self.max_count
     }
 }
-
-impl_message_handler!(CounterActor, [Increment, Decrement, GetCount, IsAtMax]);
 
 // Messages for WorkerActor
 struct DoWork(String);
 struct GetTasksCompleted;
 struct GetWorkerId;
 
-impl Message<DoWork> for WorkerActor {
-    type Reply = String;
-
-    async fn handle(&mut self, msg: DoWork, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl WorkerActor {
+    #[handler]
+    async fn handle_do_work(&mut self, msg: DoWork, _: &ActorRef<Self>) -> String {
         // Simulate some work
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         self.tasks_completed += 1;
         format!("Worker {} completed task: {}", self.id, msg.0)
     }
-}
 
-impl Message<GetTasksCompleted> for WorkerActor {
-    type Reply = u32;
-
-    async fn handle(
+    #[handler]
+    async fn handle_get_tasks_completed(
         &mut self,
         _msg: GetTasksCompleted,
-        _actor_ref: &ActorRef<Self>,
-    ) -> Self::Reply {
+        _: &ActorRef<Self>,
+    ) -> u32 {
         self.tasks_completed
     }
-}
 
-impl Message<GetWorkerId> for WorkerActor {
-    type Reply = u32;
-
-    async fn handle(&mut self, _msg: GetWorkerId, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_worker_id(&mut self, _msg: GetWorkerId, _: &ActorRef<Self>) -> u32 {
         self.id
     }
 }
-
-impl_message_handler!(WorkerActor, [DoWork, GetTasksCompleted, GetWorkerId]);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -140,11 +116,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (simple_ref, _simple_handle) = spawn::<SimpleActor>(simple_actor);
 
     let name = simple_ref.ask(GetName).await?;
-    println!("Initial name: {}", name);
+    println!("Initial name: {name}");
 
     simple_ref.tell(SetName("Bob".to_string())).await?;
     let new_name = simple_ref.ask(GetName).await?;
-    println!("Updated name: {}", new_name);
+    println!("Updated name: {new_name}");
 
     // Example 2: Counter Actor
     println!("\n🔢 Example 2: Counter Actor");
@@ -160,12 +136,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 1..=7 {
         let count = counter_ref.ask(Increment).await?;
         let at_max = counter_ref.ask(IsAtMax).await?;
-        println!("Increment {}: count = {}, at_max = {}", i, count, at_max);
+        println!("Increment {i}: count = {count}, at_max = {at_max}");
     }
 
     // Decrement
     let count = counter_ref.ask(Decrement).await?;
-    println!("After decrement: {}", count);
+    println!("After decrement: {count}");
 
     // Example 3: Worker Actor
     println!("\n⚙️  Example 3: Worker Actor");
@@ -176,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (worker_ref, _worker_handle) = spawn::<WorkerActor>(worker_actor);
 
     let worker_id = worker_ref.ask(GetWorkerId).await?;
-    println!("Worker ID: {}", worker_id);
+    println!("Worker ID: {worker_id}");
 
     // Assign some tasks
     let tasks = vec![
@@ -188,11 +164,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for task in tasks {
         let result = worker_ref.ask(DoWork(task.to_string())).await?;
-        println!("Result: {}", result);
+        println!("Result: {result}");
     }
 
     let total_tasks = worker_ref.ask(GetTasksCompleted).await?;
-    println!("Total tasks completed: {}", total_tasks);
+    println!("Total tasks completed: {total_tasks}");
 
     // Cleanup
     simple_ref.stop().await?;

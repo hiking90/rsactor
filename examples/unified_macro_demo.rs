@@ -1,4 +1,4 @@
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
+use rsactor::{message_handlers, spawn, Actor, ActorRef};
 
 // Demo of non-generic actor (original syntax)
 #[derive(Debug)]
@@ -11,7 +11,7 @@ impl Actor for SimpleActor {
     type Args = i32;
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        println!("SimpleActor started with counter: {}", args);
+        println!("SimpleActor started with counter: {args}");
         Ok(SimpleActor { counter: args })
     }
 }
@@ -19,25 +19,19 @@ impl Actor for SimpleActor {
 struct Increment;
 struct GetCount;
 
-impl Message<Increment> for SimpleActor {
-    type Reply = ();
-
-    async fn handle(&mut self, _: Increment, _: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl SimpleActor {
+    #[handler]
+    async fn handle_increment(&mut self, _: Increment, _: &ActorRef<Self>) {
         self.counter += 1;
         println!("SimpleActor: incremented to {}", self.counter);
     }
-}
 
-impl Message<GetCount> for SimpleActor {
-    type Reply = i32;
-
-    async fn handle(&mut self, _: GetCount, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_count(&mut self, _: GetCount, _: &ActorRef<Self>) -> i32 {
         self.counter
     }
 }
-
-// Using unified macro with non-generic syntax
-impl_message_handler!(SimpleActor, [Increment, GetCount]);
 
 // Demo of generic actor (new syntax)
 #[derive(Debug)]
@@ -58,25 +52,19 @@ impl<T: Send + std::fmt::Debug + Clone + 'static> Actor for GenericActor<T> {
 struct SetValue<T: Send + std::fmt::Debug + 'static>(T);
 struct GetValue;
 
-impl<T: Send + std::fmt::Debug + Clone + 'static> Message<SetValue<T>> for GenericActor<T> {
-    type Reply = ();
-
-    async fn handle(&mut self, msg: SetValue<T>, _: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl<T: Send + std::fmt::Debug + Clone + 'static> GenericActor<T> {
+    #[handler]
+    async fn handle_set_value(&mut self, msg: SetValue<T>, _: &ActorRef<Self>) {
         self.value = Some(msg.0);
         println!("GenericActor: set value to {:?}", self.value);
     }
-}
 
-impl<T: Send + std::fmt::Debug + Clone + 'static> Message<GetValue> for GenericActor<T> {
-    type Reply = Option<T>;
-
-    async fn handle(&mut self, _: GetValue, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_value(&mut self, _: GetValue, _: &ActorRef<Self>) -> Option<T> {
         self.value.clone()
     }
 }
-
-// Using unified macro with generic syntax
-impl_message_handler!([T: Send + std::fmt::Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue]);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     simple_ref.tell(Increment).await?;
     simple_ref.tell(Increment).await?;
     let count: i32 = simple_ref.ask(GetCount).await?;
-    println!("Final count: {}", count);
+    println!("Final count: {count}");
 
     simple_ref.stop().await?;
 
@@ -100,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     string_ref.tell(SetValue("Hello World".to_string())).await?;
     let string_value: Option<String> = string_ref.ask(GetValue).await?;
-    println!("String value: {:?}", string_value);
+    println!("String value: {string_value:?}");
 
     string_ref.stop().await?;
 
@@ -110,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     int_ref.tell(SetValue(42)).await?;
     let int_value: Option<i32> = int_ref.ask(GetValue).await?;
-    println!("Integer value: {:?}", int_value);
+    println!("Integer value: {int_value:?}");
 
     int_ref.stop().await?;
 

@@ -14,7 +14,7 @@
 
 use anyhow::Result;
 use log::{debug, info};
-use rsactor::{Actor, ActorRef, Message};
+use rsactor::{message_handlers, Actor, ActorRef};
 use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc; // Using tokio channels for communication
@@ -94,7 +94,7 @@ impl Actor for SyncDataProcessorActor {
                 let raw_value = rand::random::<f64>() * 100.0;
 
                 // Send the data to our actor using tell_blocking
-                debug!("Sync task sending value {:.2} to actor", raw_value);
+                debug!("Sync task sending value {raw_value:.2} to actor");
 
                 // Use tell_blocking which is designed for tokio blocking contexts
                 // Note: This requires access to a tokio runtime, which is available inside spawn_blocking
@@ -105,7 +105,7 @@ impl Actor for SyncDataProcessorActor {
                     },
                     None,
                 ) {
-                    info!("Failed to send data to actor: {}", e);
+                    info!("Failed to send data to actor: {e}");
                     running = false;
                 }
 
@@ -115,7 +115,7 @@ impl Actor for SyncDataProcessorActor {
                     // Command received
                     Ok(cmd) => match cmd {
                         TaskCommand::ChangeInterval(new_interval) => {
-                            info!("Sync task changing interval to {:?}", new_interval);
+                            info!("Sync task changing interval to {new_interval:?}");
                             interval = new_interval;
                         }
                         TaskCommand::Stop => {
@@ -152,19 +152,19 @@ impl Actor for SyncDataProcessorActor {
 }
 
 // Implement message handlers for our actor
-
-impl Message<GetState> for SyncDataProcessorActor {
-    type Reply = (f64, Option<f64>, Option<std::time::Instant>);
-
-    async fn handle(&mut self, _msg: GetState, _: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl SyncDataProcessorActor {
+    #[handler]
+    async fn handle_get_state(
+        &mut self,
+        _msg: GetState,
+        _: &ActorRef<Self>,
+    ) -> (f64, Option<f64>, Option<std::time::Instant>) {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
-}
 
-impl Message<SetFactor> for SyncDataProcessorActor {
-    type Reply = f64; // Return the new factor
-
-    async fn handle(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_set_factor(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> f64 {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!(
@@ -173,12 +173,9 @@ impl Message<SetFactor> for SyncDataProcessorActor {
         );
         self.factor
     }
-}
 
-impl Message<ProcessedData> for SyncDataProcessorActor {
-    type Reply = (); // No reply needed for data coming from the task
-
-    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_processed_data(&mut self, msg: ProcessedData, _: &ActorRef<Self>) {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -193,13 +190,10 @@ impl Message<ProcessedData> for SyncDataProcessorActor {
             msg.timestamp.elapsed()
         );
     }
-}
 
-// Handler for sending commands to the background task
-impl Message<TaskCommand> for SyncDataProcessorActor {
-    type Reply = bool;
-
-    async fn handle(&mut self, msg: TaskCommand, _: &ActorRef<Self>) -> Self::Reply {
+    // Handler for sending commands to the background task
+    #[handler]
+    async fn handle_task_command(&mut self, msg: TaskCommand, _: &ActorRef<Self>) -> bool {
         // With tokio channels, send is asynchronous
         match self.task_sender.send(msg).await {
             Ok(_) => {
@@ -213,12 +207,6 @@ impl Message<TaskCommand> for SyncDataProcessorActor {
         }
     }
 }
-
-// Implement the message handler trait for our actor
-rsactor::impl_message_handler!(
-    SyncDataProcessorActor,
-    [GetState, SetFactor, ProcessedData, TaskCommand]
-);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -238,10 +226,7 @@ async fn main() -> Result<()> {
     // Get the current state
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
-    println!(
-        "Current state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
-    );
+    println!("Current state: factor={factor:.2}, latest_value={latest_value:?}");
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());
@@ -250,7 +235,7 @@ async fn main() -> Result<()> {
     // Change the processing factor
     println!("Changing processing factor to 2.5...");
     let new_factor: f64 = actor_ref.ask(SetFactor(2.5)).await?;
-    println!("Factor changed to: {:.2}", new_factor);
+    println!("Factor changed to: {new_factor:.2}");
 
     // Change the task's data generation interval
     println!("Changing the sync task's data generation interval...");
@@ -271,10 +256,7 @@ async fn main() -> Result<()> {
     // Get the updated state
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
-    println!(
-        "Updated state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
-    );
+    println!("Updated state: factor={factor:.2}, latest_value={latest_value:?}");
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());
@@ -291,7 +273,7 @@ async fn main() -> Result<()> {
 
     match result {
         rsactor::ActorResult::Completed { actor, killed } => {
-            println!("Actor completed successfully. Killed: {}", killed);
+            println!("Actor completed successfully. Killed: {killed}");
             println!(
                 "Final state: factor={:.2}, latest_value={:?}",
                 actor.factor, actor.latest_value

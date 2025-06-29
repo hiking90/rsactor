@@ -8,6 +8,7 @@
 //! - Tests for panics in on_run method
 //! - Tests for proper error handling vs panicking
 //! - Tests for supervision patterns
+#![allow(deprecated)]
 
 use anyhow::Result;
 use log::info;
@@ -52,10 +53,7 @@ impl Actor for PanicTestActor {
     async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         if let Some(threshold) = self.panic_threshold {
             if self.counter >= threshold {
-                panic!(
-                    "Counter reached threshold {} - intentional panic in on_run!",
-                    threshold
-                );
+                panic!("Counter reached threshold {threshold} - intentional panic in on_run!");
             }
         }
 
@@ -647,10 +645,7 @@ mod stress_tests {
 
         // At least some messages should have been processed
         assert!(success_count > 0);
-        println!(
-            "Processed {} messages before panic, {} failed",
-            success_count, error_count
-        );
+        println!("Processed {success_count} messages before panic, {error_count} failed");
 
         // Actor should have panicked
         let join_result = join_handle.await;
@@ -773,8 +768,8 @@ mod integration_tests {
             } else {
                 let result = actor_ref.ask(WorkItem(i)).await?;
                 match result {
-                    Ok(msg) => println!("Success: {}", msg),
-                    Err(err) => println!("Expected error: {}", err),
+                    Ok(msg) => println!("Success: {msg}"),
+                    Err(err) => println!("Expected error: {err}"),
                 }
             }
         }

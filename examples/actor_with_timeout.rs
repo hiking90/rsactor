@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use log::{debug, info};
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
+use rsactor::{message_handlers, spawn, Actor, ActorRef};
 use std::time::Duration;
 
 // Define an actor that can process requests with varying response times
@@ -33,21 +33,18 @@ struct ConfigurableQuery {
     delay_ms: u64,
 }
 
-// Implement message handlers
-impl Message<FastQuery> for TimeoutDemoActor {
-    type Reply = String;
-
-    async fn handle(&mut self, msg: FastQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+// Message handling using the #[message_handlers] macro with #[handler] attributes
+#[message_handlers]
+impl TimeoutDemoActor {
+    #[handler]
+    async fn handle_fast_query(&mut self, msg: FastQuery, _actor_ref: &ActorRef<Self>) -> String {
         // This is a fast handler that completes quickly
         debug!("{} handling a FastQuery: {}", self.name, msg.0);
         format!("Fast response to: {}", msg.0)
     }
-}
 
-impl Message<SlowQuery> for TimeoutDemoActor {
-    type Reply = String;
-
-    async fn handle(&mut self, msg: SlowQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_slow_query(&mut self, msg: SlowQuery, _actor_ref: &ActorRef<Self>) -> String {
         // This is a slow handler that takes time to complete
         debug!(
             "{} handling a SlowQuery: {}. Will take 500ms",
@@ -56,12 +53,13 @@ impl Message<SlowQuery> for TimeoutDemoActor {
         tokio::time::sleep(Duration::from_millis(500)).await;
         format!("Slow response to: {}", msg.0)
     }
-}
 
-impl Message<ConfigurableQuery> for TimeoutDemoActor {
-    type Reply = String;
-
-    async fn handle(&mut self, msg: ConfigurableQuery, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_configurable_query(
+        &mut self,
+        msg: ConfigurableQuery,
+        _actor_ref: &ActorRef<Self>,
+    ) -> String {
         debug!(
             "{} handling ConfigurableQuery with delay {}ms: {}",
             self.name, msg.delay_ms, msg.question
@@ -70,9 +68,6 @@ impl Message<ConfigurableQuery> for TimeoutDemoActor {
         format!("Response after {}ms to: {}", msg.delay_ms, msg.question)
     }
 }
-
-// Use the macro to implement the MessageHandler trait
-impl_message_handler!(TimeoutDemoActor, [FastQuery, SlowQuery, ConfigurableQuery]);
 
 // Demo helper function for ask_with_timeout
 async fn demonstrate_ask_with_timeout(
@@ -93,14 +88,11 @@ async fn demonstrate_ask_with_timeout(
     match result {
         Ok(response) => {
             let elapsed = timer.elapsed().as_millis();
-            info!(
-                "✅ Success! Response received in {}ms: {}",
-                elapsed, response
-            );
+            info!("✅ Success! Response received in {elapsed}ms: {response}");
         }
         Err(e) => {
             let elapsed = timer.elapsed().as_millis();
-            info!("❌ Failed after {}ms. Error: {}", elapsed, e);
+            info!("❌ Failed after {elapsed}ms. Error: {e}");
         }
     }
 }
@@ -124,11 +116,11 @@ async fn demonstrate_tell_with_timeout(
     match result {
         Ok(_) => {
             let elapsed = timer.elapsed().as_millis();
-            info!("✅ Success! Message sent in {}ms", elapsed);
+            info!("✅ Success! Message sent in {elapsed}ms");
         }
         Err(e) => {
             let elapsed = timer.elapsed().as_millis();
-            info!("❌ Failed to send after {}ms. Error: {}", elapsed, e);
+            info!("❌ Failed to send after {elapsed}ms. Error: {e}");
         }
     }
 }
@@ -154,8 +146,8 @@ async fn main() -> Result<()> {
         )
         .await;
     match &result1 {
-        Ok(response) => info!("✅ Success: {}", response),
-        Err(e) => info!("❌ Failed: {}", e),
+        Ok(response) => info!("✅ Success: {response}"),
+        Err(e) => info!("❌ Failed: {e}"),
     }
     assert!(
         result1.is_ok(),
@@ -171,8 +163,8 @@ async fn main() -> Result<()> {
         )
         .await;
     match &result2 {
-        Ok(response) => info!("✅ Success: {}", response),
-        Err(e) => info!("❌ Failed: {}", e),
+        Ok(response) => info!("✅ Success: {response}"),
+        Err(e) => info!("❌ Failed: {e}"),
     }
     assert!(
         result2.is_err(),
@@ -188,8 +180,8 @@ async fn main() -> Result<()> {
         )
         .await;
     match &result3 {
-        Ok(response) => info!("✅ Success: {}", response),
-        Err(e) => info!("❌ Failed: {}", e),
+        Ok(response) => info!("✅ Success: {response}"),
+        Err(e) => info!("❌ Failed: {e}"),
     }
     assert!(
         result3.is_ok(),
@@ -234,7 +226,7 @@ async fn main() -> Result<()> {
 
     match result {
         rsactor::ActorResult::Completed { actor: _, killed } => {
-            info!("Actor stopped successfully. Killed: {}", killed);
+            info!("Actor stopped successfully. Killed: {killed}");
         }
         rsactor::ActorResult::Failed {
             error,
@@ -242,10 +234,7 @@ async fn main() -> Result<()> {
             phase,
             ..
         } => {
-            info!(
-                "Actor stop failed: {}. Killed: {}, Phase: {}",
-                error, killed, phase
-            );
+            info!("Actor stop failed: {error}. Killed: {killed}, Phase: {phase}");
         }
     }
     info!("Example finished successfully");

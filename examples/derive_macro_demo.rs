@@ -1,6 +1,6 @@
 // Example of using the Actor derive macro
 
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
+use rsactor::{message_handlers, spawn, Actor, ActorRef};
 
 #[derive(Actor)]
 struct MyActor {
@@ -13,33 +13,24 @@ struct GetName;
 struct Increment;
 struct GetCount;
 
-// Implement message handlers
-impl Message<GetName> for MyActor {
-    type Reply = String;
-
-    async fn handle(&mut self, _msg: GetName, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+// Implement message handlers using the #[message_handlers] macro with #[handler] attributes
+#[message_handlers]
+impl MyActor {
+    #[handler]
+    async fn handle_get_name(&mut self, _msg: GetName, _: &ActorRef<Self>) -> String {
         self.name.clone()
     }
-}
 
-impl Message<Increment> for MyActor {
-    type Reply = ();
-
-    async fn handle(&mut self, _msg: Increment, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_increment(&mut self, _msg: Increment, _: &ActorRef<Self>) {
         self.count += 1;
     }
-}
 
-impl Message<GetCount> for MyActor {
-    type Reply = u32;
-
-    async fn handle(&mut self, _msg: GetCount, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_count(&mut self, _msg: GetCount, _: &ActorRef<Self>) -> u32 {
         self.count
     }
 }
-
-// Wire up the message handlers
-impl_message_handler!(MyActor, [GetName, Increment, GetCount]);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,16 +45,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test the actor
     let name = actor_ref.ask(GetName).await?;
-    println!("Actor name: {}", name);
+    println!("Actor name: {name}");
 
     let initial_count = actor_ref.ask(GetCount).await?;
-    println!("Initial count: {}", initial_count);
+    println!("Initial count: {initial_count}");
 
     actor_ref.tell(Increment).await?;
     actor_ref.tell(Increment).await?;
 
     let final_count = actor_ref.ask(GetCount).await?;
-    println!("Final count: {}", final_count);
+    println!("Final count: {final_count}");
 
     // Stop the actor
     actor_ref.stop().await?;

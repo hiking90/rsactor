@@ -10,7 +10,7 @@
 
 use anyhow::Result;
 use log::{debug, info};
-use rsactor::{Actor, ActorRef, ActorWeak, Message};
+use rsactor::{message_handlers, Actor, ActorRef, ActorWeak};
 use std::time::Duration;
 
 // Define message types for our actor
@@ -90,28 +90,25 @@ impl Actor for DataProcessorActor {
             self.latest_value = Some(processed_value);
             self.latest_timestamp = Some(std::time::Instant::now());
 
-            debug!(
-                "Generated data: original={:.2}, processed={:.2}",
-                raw_value, processed_value
-            );
+            debug!("Generated data: original={raw_value:.2}, processed={processed_value:.2}");
         }
     }
 }
 
 // Implement message handlers for our actor
-
-impl Message<GetState> for DataProcessorActor {
-    type Reply = (f64, Option<f64>, Option<std::time::Instant>);
-
-    async fn handle(&mut self, _msg: GetState, _: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl DataProcessorActor {
+    #[handler]
+    async fn handle_get_state(
+        &mut self,
+        _msg: GetState,
+        _: &ActorRef<Self>,
+    ) -> (f64, Option<f64>, Option<std::time::Instant>) {
         (self.factor, self.latest_value, self.latest_timestamp)
     }
-}
 
-impl Message<SetFactor> for DataProcessorActor {
-    type Reply = f64; // Return the new factor
-
-    async fn handle(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_set_factor(&mut self, msg: SetFactor, _: &ActorRef<Self>) -> f64 {
         let old_factor = self.factor;
         self.factor = msg.0;
         info!(
@@ -120,12 +117,9 @@ impl Message<SetFactor> for DataProcessorActor {
         );
         self.factor
     }
-}
 
-impl Message<ProcessedData> for DataProcessorActor {
-    type Reply = (); // No reply needed for data coming from the task
-
-    async fn handle(&mut self, msg: ProcessedData, _: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_processed_data(&mut self, msg: ProcessedData, _: &ActorRef<Self>) {
         // Apply our processing factor to the incoming value
         let processed_value = msg.value * self.factor;
 
@@ -140,13 +134,13 @@ impl Message<ProcessedData> for DataProcessorActor {
             msg.timestamp.elapsed()
         );
     }
-}
 
-// Handler for sending commands to the actor's event system
-impl Message<SendTaskCommand> for DataProcessorActor {
-    type Reply = bool;
-
-    async fn handle(&mut self, msg: SendTaskCommand, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_send_task_command(
+        &mut self,
+        msg: SendTaskCommand,
+        _actor_ref: &ActorRef<Self>,
+    ) -> bool {
         match msg.0 {
             TaskCommand::ChangeInterval(new_interval) => {
                 self.interval = tokio::time::interval(new_interval);
@@ -156,12 +150,6 @@ impl Message<SendTaskCommand> for DataProcessorActor {
         }
     }
 }
-
-// Implement the message handler trait for our actor
-rsactor::impl_message_handler!(
-    DataProcessorActor,
-    [GetState, SetFactor, ProcessedData, SendTaskCommand]
-);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -181,10 +169,7 @@ async fn main() -> Result<()> {
     // Get the current state
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
-    println!(
-        "Current state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
-    );
+    println!("Current state: factor={factor:.2}, latest_value={latest_value:?}");
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());
@@ -193,7 +178,7 @@ async fn main() -> Result<()> {
     // Change the processing factor
     println!("Changing processing factor to 2.5...");
     let new_factor: f64 = actor_ref.ask(SetFactor(2.5)).await?;
-    println!("Factor changed to: {:.2}", new_factor);
+    println!("Factor changed to: {new_factor:.2}");
 
     // Change the task's data generation interval
     println!("Changing the task's data generation interval...");
@@ -217,10 +202,7 @@ async fn main() -> Result<()> {
     // Get the updated state
     let (factor, latest_value, timestamp): (f64, Option<f64>, Option<std::time::Instant>) =
         actor_ref.ask(GetState).await?;
-    println!(
-        "Updated state: factor={:.2}, latest_value={:?}",
-        factor, latest_value
-    );
+    println!("Updated state: factor={factor:.2}, latest_value={latest_value:?}");
 
     if let Some(ts) = timestamp {
         println!("Data age: {:?}", ts.elapsed());
@@ -235,7 +217,7 @@ async fn main() -> Result<()> {
 
     match result {
         rsactor::ActorResult::Completed { actor, killed } => {
-            println!("Actor completed successfully. Killed: {}", killed);
+            println!("Actor completed successfully. Killed: {killed}");
             println!(
                 "Final state: factor={:.2}, latest_value={:?}",
                 actor.factor, actor.latest_value

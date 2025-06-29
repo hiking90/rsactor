@@ -1,5 +1,6 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
+#![allow(deprecated)]
 
 use log::debug;
 use std::sync::Arc;
@@ -265,10 +266,10 @@ async fn test_actor_ref_kill() {
 
         // Verify that the UpdateCounterMsg(10) was NOT processed because kill took priority.
         let final_counter = *actor.counter.lock().await;
-        assert_eq!(final_counter, 0, "Counter should be 0, indicating UpdateCounterMsg was not processed due to kill priority. Got: {}", final_counter);
+        assert_eq!(final_counter, 0, "Counter should be 0, indicating UpdateCounterMsg was not processed due to kill priority. Got: {final_counter}");
 
         let final_lpmt = actor.last_processed_message_type.lock().await.clone();
-        assert_eq!(final_lpmt, None, "Last processed message type should be None, indicating UpdateCounterMsg was not processed. Got: {:?}", final_lpmt);
+        assert_eq!(final_lpmt, None, "Last processed message type should be None, indicating UpdateCounterMsg was not processed. Got: {final_lpmt:?}");
         assert_eq!(
             actor.id,
             actor_ref.identity(),
@@ -485,7 +486,7 @@ async fn test_set_default_mailbox_capacity_to_zero() {
     let result = set_default_mailbox_capacity(0);
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(format!("{}", err).contains("Mailbox capacity error:"));
+    assert!(format!("{err}").contains("Mailbox capacity error:"));
     assert!(
         matches!(err, Error::MailboxCapacity { message } if message == "Global default mailbox capacity must be greater than 0"),
         "Error message for zero capacity didn't match"
@@ -588,7 +589,7 @@ async fn test_actor_panic_in_message_handler() {
     assert!(ask_result.is_err(), "Ask should fail when handler panics");
     if let Err(e) = ask_result {
         // Error could be "reply channel closed" or similar, as the actor task terminates.
-        println!("Ask error after handler panic: {}", e);
+        println!("Ask error after handler panic: {e}");
         assert!(
             e.to_string().contains("Reply channel closed")
                 || e.to_string().contains("Mailbox channel closed")
@@ -602,8 +603,7 @@ async fn test_actor_panic_in_message_handler() {
             // However, if the framework were to catch panics and convert them to runtime failures,
             // this would be the case. Current code does not do this for handler panics.
             panic!(
-                "Expected JoinHandle to return Err due to task panic, but got Ok with result: {:?}",
-                result
+                "Expected JoinHandle to return Err due to task panic, but got Ok with result: {result:?}"
             );
         }
         Err(join_error) => {
@@ -799,8 +799,7 @@ async fn test_actor_ref_ask_blocking_timeout() {
             // Just check that it contains "timed out" which is what we care about
             assert!(
                 e.to_string().contains("timed out"),
-                "Error should indicate a timeout: {}",
-                e
+                "Error should indicate a timeout: {e}"
             );
         }
     });
@@ -905,8 +904,7 @@ async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
         let counter_value = *actor.counter.lock().await;
         assert!(
             counter_value >= 1,
-            "Counter should be at least 1 after SlowMsg and UpdateCounterMsg(1), got: {}",
-            counter_value
+            "Counter should be at least 1 after SlowMsg and UpdateCounterMsg(1), got: {counter_value}"
         );
     } else {
         panic!("Actor state should not be None");
@@ -963,8 +961,7 @@ async fn test_actor_ref_kill_multiple_times() {
         let final_counter = *actor.counter.lock().await;
         assert_eq!(
             final_counter, 0,
-            "Counter should be 0, indicating no messages processed due to kill. Got: {}",
-            final_counter
+            "Counter should be 0, indicating no messages processed due to kill. Got: {final_counter}"
         );
     } else {
         panic!("Actor state should not be None");
@@ -1067,8 +1064,7 @@ async fn test_ask_with_timeout() {
     if let Err(e) = result {
         assert!(
             e.to_string().contains("timed out"),
-            "Error message should mention timeout: {}",
-            e
+            "Error message should mention timeout: {e}"
         );
     }
 
@@ -1425,8 +1421,7 @@ async fn test_untyped_actor_ref_tell_incompatible_after_stop() {
         assert!(
             e.to_string().contains("Mailbox channel closed")
                 || e.to_string().contains("Failed to send message"),
-            "Error should indicate mailbox is closed, got: {}",
-            e
+            "Error should indicate mailbox is closed, got: {e}"
         );
     }
 
@@ -1462,8 +1457,7 @@ async fn test_untyped_actor_ref_ask_incompatible_message_error_handling() {
     if let Err(e) = ask_result {
         assert!(
             e.to_string().contains("received an unhandled message type"),
-            "Ask error should indicate unhandled message type, got: {}",
-            e
+            "Ask error should indicate unhandled message type, got: {e}"
         );
     }
 
@@ -1577,8 +1571,7 @@ async fn test_untyped_actor_ref_tell_vs_ask_behavior_comparison() {
         if let Err(e) = ask_result {
             assert!(
                 e.to_string().contains("received an unhandled message type"),
-                "Ask error should indicate unhandled message type, got: {}",
-                e
+                "Ask error should indicate unhandled message type, got: {e}"
             );
         }
 

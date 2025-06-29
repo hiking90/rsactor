@@ -10,9 +10,7 @@
 //! - Proper cleanup when actors are dropped
 
 use anyhow::Error as AnyError;
-use rsactor::{
-    impl_message_handler, spawn, Actor, ActorRef, ActorWeak, Message, Result, UntypedActorRef,
-};
+use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorWeak, Result, UntypedActorRef};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -31,7 +29,7 @@ impl Actor for PingActor {
         args: Self::Args,
         _actor_ref: &ActorRef<Self>,
     ) -> std::result::Result<Self, Self::Error> {
-        println!("PingActor '{}' started!", args);
+        println!("PingActor '{args}' started!");
         Ok(PingActor {
             name: args,
             ping_count: 0,
@@ -66,28 +64,22 @@ struct Status {
 }
 
 // Message implementations
-impl Message<Ping> for PingActor {
-    type Reply = String;
-
-    async fn handle(&mut self, _msg: Ping, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+#[message_handlers]
+impl PingActor {
+    #[handler]
+    async fn handle_ping(&mut self, _msg: Ping, _: &ActorRef<Self>) -> String {
         self.ping_count += 1;
         format!("{} pong! (count: {})", self.name, self.ping_count)
     }
-}
 
-impl Message<GetStatus> for PingActor {
-    type Reply = Status;
-
-    async fn handle(&mut self, _msg: GetStatus, _actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_status(&mut self, _msg: GetStatus, _: &ActorRef<Self>) -> Status {
         Status {
             name: self.name.clone(),
             ping_count: self.ping_count,
         }
     }
 }
-
-// Wire up message handlers
-impl_message_handler!(PingActor, [Ping, GetStatus]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -110,7 +102,7 @@ async fn main() -> Result<()> {
 
         // Use the strong reference
         let response: String = strong_ref.ask(Ping).await?;
-        println!("   Response: {}", response);
+        println!("   Response: {response}");
     } else {
         println!("2. Failed to upgrade weak reference - actor is dead");
     }
@@ -118,7 +110,7 @@ async fn main() -> Result<()> {
     // Send more messages using the original reference
     let response1: String = actor_ref.ask(Ping).await?;
     let response2: String = actor_ref.ask(Ping).await?;
-    println!("3. Sent more pings: '{}', '{}'", response1, response2);
+    println!("3. Sent more pings: '{response1}', '{response2}'");
 
     // Test weak reference after some activity
     if let Some(strong_ref) = weak_ref.upgrade() {
@@ -144,8 +136,8 @@ async fn main() -> Result<()> {
 
         // Try to use it
         match strong_ref.ask::<Ping, String>(Ping).await {
-            Ok(response) => println!("   Response: {}", response),
-            Err(e) => println!("   Error sending message: {}", e),
+            Ok(response) => println!("   Response: {response}"),
+            Err(e) => println!("   Error sending message: {e}"),
         }
     } else {
         println!("   Failed to upgrade weak reference - actor is no longer available");
@@ -154,7 +146,7 @@ async fn main() -> Result<()> {
     // Stop the actor via join handle
     println!("7. Stopping actor...");
     if let Ok(actor_result) = join_handle.await {
-        println!("   Actor stopped with result: {:?}", actor_result);
+        println!("   Actor stopped with result: {actor_result:?}");
     }
 
     // Final check of weak reference
