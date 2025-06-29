@@ -145,8 +145,23 @@ impl WorkerActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logger
-    env_logger::init();
+    // Initialize tracing if the feature is enabled
+    #[cfg(feature = "tracing")]
+    {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_target(false)
+            .init();
+        println!("🚀 Async Worker Demo: Tracing is ENABLED");
+        println!("You should see detailed trace logs for all actor operations\n");
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+        // Initialize logger
+        env_logger::init();
+        println!("📝 Async Worker Demo: Tracing is DISABLED\n");
+    }
 
     // Create the actors
     let (worker_ref, worker_handle) = rsactor::spawn::<WorkerActor>(());

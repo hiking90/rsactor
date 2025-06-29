@@ -92,19 +92,19 @@ Libraries like `rsactor` (see `https://github.com/hiking90/rsactor`) provide sim
 Here's a conceptual example using `rsactor`, demonstrating an actor with an internal `on_run` handling multiple tick sources:
 
 ```rust
-use rsactor::{Actor, ActorRef, Message, ActorResult, impl_message_handler, spawn};
+use rsactor::{Actor, ActorRef, ActorResult, message_handlers, spawn};
 use anyhow::Result;
 use tokio::time::{interval, Duration};
 
-// Define actor struct
-#[derive(Debug)] // Added Debug for printing the actor in ActorResult
+// Define actor struct with derive macro
+#[derive(Actor)]
 struct CounterActor {
     count: u32, // Stores the counter value
     tick_300ms: tokio::time::Interval, // 300ms interval timer
     tick_1s: tokio::time::Interval,    // 1 second interval timer
 }
 
-// Implement Actor trait for CounterActor
+// Implement custom Actor trait for initialization logic
 impl Actor for CounterActor {
     type Args = (); // No arguments needed for this actor
     type Error = anyhow::Error; // Define the error type for actor operations
@@ -120,7 +120,7 @@ impl Actor for CounterActor {
 
     // The primary processing loop for the actor within the lifecycle.
     // This demonstrates handling two independent, periodic events using tokio::select!.
-    async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &rsactor::ActorWeak<Self>) -> Result<(), Self::Error> {
         // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
         tokio::select! {
             // Executes when the 300ms interval timer ticks.
@@ -140,27 +140,20 @@ impl Actor for CounterActor {
 struct IncrementMsg(u32); // Message to increment the counter
 struct GetCountMsg;      // Message to get the current count
 
-// Implement Message<T> for IncrementMsg
-impl Message<IncrementMsg> for CounterActor {
-    type Reply = u32; // This message returns the new count
-
-    async fn handle(&mut self, msg: IncrementMsg, actor_ref: &ActorRef<Self>) -> Self::Reply {
+// Use message_handlers macro with handler attributes (recommended approach)
+#[message_handlers]
+impl CounterActor {
+    #[handler]
+    async fn handle_increment(&mut self, msg: IncrementMsg, _: &ActorRef<Self>) -> u32 {
         self.count += msg.0; // Increment the counter by the value specified in the message.
         self.count // Return the new count
     }
-}
 
-// Implement Message<T> for GetCountMsg
-impl Message<GetCountMsg> for CounterActor {
-    type Reply = u32; // This message returns the current count
-
-    async fn handle(&mut self, _msg: GetCountMsg, actor_ref: &ActorRef<Self>) -> Self::Reply {
+    #[handler]
+    async fn handle_get_count(&mut self, _msg: GetCountMsg, _: &ActorRef<Self>) -> u32 {
         self.count // Return the current count
     }
 }
-
-// Use the rsactor message handler macro to implement the MessageHandler trait for CounterActor.
-impl_message_handler!(CounterActor, [IncrementMsg, GetCountMsg]);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -231,8 +224,7 @@ In this example:
         - The 1s tick performs no specific action in this example.
         - The framework will call `on_run` repeatedly, handling each interval tick as it occurs.
 - Message types `IncrementMsg(u32)` and `GetCountMsg` are defined to interact with the counter.
-- `Message` trait implementations allow `CounterActor` to handle these messages, modifying or returning its `count`.
-- `rsactor::impl_message_handler!` macro enables the actor to process these defined messages.
+- The `#[message_handlers]` macro with `#[handler]` attributes automatically generates `Message` trait implementations and `MessageHandler` trait implementation for these messages.
 - The `main` function:
     - Spawns the `CounterActor`.
     - Waits briefly to allow the `on_run` to execute a few times.

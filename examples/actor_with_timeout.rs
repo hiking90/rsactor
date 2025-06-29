@@ -127,10 +127,25 @@ async fn demonstrate_tell_with_timeout(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Setup logger for the example
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
-        .init();
+    // Initialize tracing if the feature is enabled
+    #[cfg(feature = "tracing")]
+    {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_target(false)
+            .init();
+        println!("🚀 Timeout Demo: Tracing is ENABLED");
+        println!("You should see detailed trace logs for all actor operations\n");
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+        // Setup logger for the example
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .format_timestamp_millis()
+            .init();
+        println!("📝 Timeout Demo: Tracing is DISABLED\n");
+    }
 
     info!("Starting actor_with_timeout example");
 

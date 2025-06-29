@@ -30,6 +30,11 @@
 //! - **Type Safety Features**: Two actor reference types provide different levels of type safety:
 //!   - [`ActorRef<T>`]: Compile-time type safety with zero runtime overhead (recommended)
 //!   - [`UntypedActorRef`]: Runtime type handling for collections and dynamic scenarios
+//! - **Optional Tracing Support**: Built-in observability using the [`tracing`](https://crates.io/crates/tracing) crate (enable with `tracing` feature):
+//!   - Actor lifecycle event tracing (start, stop, different termination scenarios)
+//!   - Message handling with timing and performance metrics
+//!   - Reply processing and error handling tracing
+//!   - Structured, non-redundant logs for easier debugging and monitoring
 //!
 //! ## Core Concepts
 //!
@@ -264,6 +269,55 @@
 //! }
 //! ```
 //!
+//! ## Tracing Support
+//!
+//! rsActor provides optional tracing support for comprehensive observability. Enable it with the `tracing` feature:
+//!
+//! ```toml
+//! [dependencies]
+//! rsactor = { version = "0.9", features = ["tracing"] }
+//! tracing = "0.1"
+//! tracing-subscriber = "0.3"
+//! ```
+//!
+//! When enabled, rsActor emits structured trace events for:
+//! - Actor lifecycle events (start, stop, termination scenarios)
+//! - Message sending and handling with timing information
+//! - Reply processing and error handling
+//! - Performance metrics (message processing duration)
+//!
+//! All examples support tracing with conditional compilation. Here's the integration pattern:
+//!
+//! ```rust,no_run
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Initialize tracing if the feature is enabled
+//!     #[cfg(feature = "tracing")]
+//!     {
+//!         tracing_subscriber::fmt()
+//!             .with_max_level(tracing::Level::DEBUG)
+//!             .with_target(false)
+//!             .init();
+//!         println!("🚀 Demo: Tracing is ENABLED");
+//!     }
+//!
+//!     #[cfg(not(feature = "tracing"))]
+//!     {
+//!         env_logger::init();
+//!         println!("📝 Demo: Tracing is DISABLED");
+//!     }
+//!
+//!     // Your existing actor code here...
+//!     // When tracing is enabled, you'll see detailed logs automatically
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Run any example with tracing enabled:
+//! ```bash
+//! RUST_LOG=debug cargo run --example basic --features tracing
+//! ```
+//!
 //! This crate-level documentation provides an overview of [`rsActor`](crate).
 //! For more details on specific components, please refer to their individual
 //! documentation.
@@ -352,7 +406,27 @@ macro_rules! __impl_message_handler_body {
                     Ok(concrete_msg_box) => {
                         // Successfully downcasted. concrete_msg_box is a Box<$msg_type>.
                         // The original _msg_any has been consumed by the downcast.
+
+                        #[cfg(feature = "tracing")]
+                        {
+                            // Update the current span with the actual message type
+                            let current_span = tracing::Span::current();
+                            current_span.record("message_type", std::any::type_name::<$msg_type>());
+
+                            tracing::debug!(
+                                message_type = %std::any::type_name::<$msg_type>(),
+                                "Actor handler processing message"
+                            );
+                        }
+
                         let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, &actor_ref).await;
+
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(
+                            message_type = %std::any::type_name::<$msg_type>(),
+                            "Actor handler completed message processing"
+                        );
+
                         return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
                     }
                     Err(original_box_back) => {
@@ -364,6 +438,14 @@ macro_rules! __impl_message_handler_body {
             )*
             // If the message type was not found in the list of handled types:
             let expected_msg_types: Vec<&'static str> = vec![$(stringify!($msg_type)),*];
+
+            #[cfg(feature = "tracing")]
+            tracing::warn!(
+                expected_types = ?expected_msg_types,
+                actual_type_id = ?_msg_any.type_id(),
+                "Unhandled message type"
+            );
+
             return Err($crate::Error::UnhandledMessageType {
                 identity: actor_ref.identity(),
                 expected_types: expected_msg_types,

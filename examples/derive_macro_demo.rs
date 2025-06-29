@@ -34,6 +34,23 @@ impl MyActor {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing if the feature is enabled
+    #[cfg(feature = "tracing")]
+    {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_target(false)
+            .init();
+        println!("🚀 Derive Macro Demo: Tracing is ENABLED");
+        println!("You should see detailed trace logs for all actor operations\n");
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+        env_logger::init();
+        println!("📝 Derive Macro Demo: Tracing is DISABLED\n");
+    }
+
     // Create an actor instance
     let actor_instance = MyActor {
         name: "TestActor".to_string(),

@@ -11,6 +11,9 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(feature = "tracing")]
+use tracing::{debug as trace_debug, info, warn as trace_warn};
+
 /// A type-erased reference to an actor, allowing messages to be sent to it without type safety.
 ///
 /// `UntypedActorRef` provides a way to interact with actors without having direct access
@@ -99,6 +102,15 @@ impl UntypedActorRef {
     /// The message is sent to the actor's mailbox for processing via the actor's
     /// [`handle`](crate::actor::Message::handle) method implementation.
     /// This method returns immediately.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_tell",
+        fields(
+            actor_id = %self.identity,
+            message_type = %std::any::type_name::<M>()
+        ),
+        skip(self, msg)
+    ))]
     pub async fn tell<M>(&self, msg: M) -> Result<()>
     where
         M: Send + 'static,
@@ -112,14 +124,25 @@ impl UntypedActorRef {
             actor_ref: self.clone(), // Include the actor ref for context
         };
 
-        if self.sender.send(envelope).await.is_err() {
+        #[cfg(feature = "tracing")]
+        trace_debug!("Sending tell message (fire-and-forget)");
+
+        let result = if self.sender.send(envelope).await.is_err() {
             Err(Error::Send {
                 identity: self.identity,
                 details: "Mailbox channel closed".to_string(),
             })
         } else {
             Ok(())
+        };
+
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => trace_debug!("Tell message sent successfully"),
+            Err(e) => trace_warn!(error = %e, "Failed to send tell message"),
         }
+
+        result
     }
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget) with a timeout.
@@ -128,17 +151,41 @@ impl UntypedActorRef {
     /// The message is sent to the actor's mailbox, and this method will return once
     /// the message is sent or timeout if the send operation doesn't complete
     /// within the specified duration.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_tell_with_timeout",
+        fields(
+            actor_id = %self.identity,
+            message_type = %std::any::type_name::<M>(),
+            timeout_ms = timeout.as_millis()
+        ),
+        skip(self, msg)
+    ))]
     pub async fn tell_with_timeout<M>(&self, msg: M, timeout: Duration) -> Result<()>
     where
         M: Send + 'static,
     {
-        tokio::time::timeout(timeout, self.tell(msg))
+        #[cfg(feature = "tracing")]
+        trace_debug!(
+            timeout_ms = timeout.as_millis(),
+            "Sending tell message with timeout"
+        );
+
+        let result = tokio::time::timeout(timeout, self.tell(msg))
             .await
             .map_err(|_| Error::Timeout {
                 identity: self.identity,
                 timeout,
                 operation: "tell".to_string(),
-            })?
+            })?;
+
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => trace_debug!("Tell with timeout completed successfully"),
+            Err(e) => trace_warn!(error = %e, "Tell with timeout failed"),
+        }
+
+        result
     }
 
     /// Sends a message to the actor and awaits a reply.
@@ -146,6 +193,16 @@ impl UntypedActorRef {
     /// The message is sent to the actor\'s mailbox, and this method will wait for
     /// the actor to process the message via its [`handle`](crate::actor::Message::handle) method
     /// and send a reply back.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_ask",
+        fields(
+            actor_id = %self.identity,
+            message_type = %std::any::type_name::<M>(),
+            reply_type = %std::any::type_name::<R>()
+        ),
+        skip(self, msg)
+    ))]
     pub async fn ask<M, R>(&self, msg: M) -> Result<R>
     where
         M: Send + 'static,
@@ -158,31 +215,57 @@ impl UntypedActorRef {
             actor_ref: self.clone(), // Include the actor ref for context
         };
 
+        #[cfg(feature = "tracing")]
+        trace_debug!("Sending ask message and waiting for reply");
+
         if self.sender.send(envelope).await.is_err() {
+            #[cfg(feature = "tracing")]
+            trace_warn!("Failed to send ask message: mailbox channel closed");
+
             return Err(Error::Send {
                 identity: self.identity,
                 details: "Mailbox channel closed".to_string(),
             });
         }
 
-        match reply_rx.await {
+        let result = match reply_rx.await {
             Ok(Ok(reply_any)) => {
                 // recv was Ok, actor reply was Ok
                 match reply_any.downcast::<R>() {
-                    Ok(reply) => Ok(*reply),
-                    Err(_) => Err(Error::Downcast {
-                        identity: self.identity,
-                        expected_type: std::any::type_name::<R>().to_string(),
-                    }),
+                    Ok(reply) => {
+                        #[cfg(feature = "tracing")]
+                        trace_debug!("Ask reply received successfully");
+                        Ok(*reply)
+                    }
+                    Err(_) => {
+                        #[cfg(feature = "tracing")]
+                        trace_warn!(
+                            expected_type = %std::any::type_name::<R>(),
+                            "Ask reply type downcast failed"
+                        );
+                        Err(Error::Downcast {
+                            identity: self.identity,
+                            expected_type: std::any::type_name::<R>().to_string(),
+                        })
+                    }
                 }
             }
-            Ok(Err(e)) => Err(e), // recv was Ok, actor reply was Err
-            Err(_recv_err) => Err(Error::Receive {
-                // recv itself failed
-                identity: self.identity,
-                details: "Reply channel closed unexpectedly".to_string(),
-            }),
-        }
+            Ok(Err(e)) => {
+                #[cfg(feature = "tracing")]
+                trace_warn!(error = %e, "Ask reply contained error");
+                Err(e)
+            }
+            Err(_recv_err) => {
+                #[cfg(feature = "tracing")]
+                trace_warn!("Ask reply channel closed unexpectedly");
+                Err(Error::Receive {
+                    identity: self.identity,
+                    details: "Reply channel closed unexpectedly".to_string(),
+                })
+            }
+        };
+
+        result
     }
 
     /// Sends a message to the actor and awaits a reply with a timeout.
@@ -191,18 +274,43 @@ impl UntypedActorRef {
     /// The message is sent to the actor's mailbox, and this method will wait for
     /// the actor to process the message and send a reply, or timeout if the reply
     /// doesn't arrive within the specified duration.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_ask_with_timeout",
+        fields(
+            actor_id = %self.identity,
+            message_type = %std::any::type_name::<M>(),
+            reply_type = %std::any::type_name::<R>(),
+            timeout_ms = timeout.as_millis()
+        ),
+        skip(self, msg)
+    ))]
     pub async fn ask_with_timeout<M, R>(&self, msg: M, timeout: Duration) -> Result<R>
     where
         M: Send + 'static,
         R: Send + 'static,
     {
-        tokio::time::timeout(timeout, self.ask(msg))
+        #[cfg(feature = "tracing")]
+        trace_debug!(
+            timeout_ms = timeout.as_millis(),
+            "Sending ask message with timeout"
+        );
+
+        let result = tokio::time::timeout(timeout, self.ask(msg))
             .await
             .map_err(|_| Error::Timeout {
                 identity: self.identity, // Added missing fields for consistency
                 timeout,                 // Added missing fields for consistency
                 operation: "ask".to_string(),
-            })?
+            })?;
+
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => trace_debug!("Ask with timeout completed successfully"),
+            Err(e) => trace_warn!(error = %e, "Ask with timeout failed"),
+        }
+
+        result
     }
 
     /// Sends an immediate termination signal to the actor.
@@ -210,31 +318,50 @@ impl UntypedActorRef {
     /// The actor will stop processing messages and shut down as soon as possible.
     /// The actor's final result will indicate it was killed.
     /// This will trigger the actor's [`on_stop`](crate::Actor::on_stop) method with `killed = true`.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(level = "info", name = "actor_kill", skip(self))
+    )]
     pub fn kill(&self) -> Result<()> {
+        #[cfg(feature = "tracing")]
+        info!(actor_id = %self.identity, "Killing actor");
+
         debug!(
             "Attempting to send Terminate message to actor {} via dedicated channel using try_send",
             self.identity
         );
         // Use the dedicated terminate_sender with try_send
-        match self.terminate_sender.try_send(ControlSignal::Terminate) {
+        let result = match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
                 // Successfully sent the terminate message.
+                #[cfg(feature = "tracing")]
+                info!("Kill signal sent successfully");
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // The channel is full. Since it has a capacity of 1,
                 // this means a Terminate message is already in the queue.
                 warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.identity);
+                #[cfg(feature = "tracing")]
+                trace_warn!(
+                    "Kill signal not sent: terminate mailbox full, actor already terminating"
+                );
                 // Considered Ok as the desired state (stopping/killed) is effectively met.
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // The channel is closed, which implies the actor is already stopped or has finished processing.
                 warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.identity);
+                #[cfg(feature = "tracing")]
+                trace_warn!(
+                    "Kill signal not sent: terminate mailbox closed, actor already stopped"
+                );
                 // Considered Ok as the desired state (stopped) is met.
                 Ok(())
             }
-        }
+        };
+
+        result
     }
 
     /// Sends a graceful stop signal to the actor.
@@ -243,22 +370,35 @@ impl UntypedActorRef {
     /// New messages sent after this call might be ignored or fail.
     /// The actor's final result will indicate normal completion.
     /// This will trigger the actor's [`on_stop`](crate::Actor::on_stop) method with `killed = false`.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(level = "info", name = "actor_stop", skip(self))
+    )]
     pub async fn stop(&self) -> Result<()> {
-        debug!("Sending StopGracefully message to actor {}", self.identity);
-        match self
+        let result = match self
             .sender
             .send(MailboxMessage::StopGracefully(self.clone()))
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                #[cfg(feature = "tracing")]
+                info!(actor_id = %self.identity, "Actor stop signal sent successfully");
+                Ok(())
+            }
             Err(_) => {
                 // This error means the actor's mailbox channel is closed,
                 // which implies the actor is already stopping or has stopped.
                 warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", self.identity);
+                #[cfg(feature = "tracing")]
+                trace_warn!(
+                    "Stop signal not sent: mailbox closed, actor already stopped or stopping"
+                );
                 // Considered Ok as the desired state (stopped/stopping) is met.
                 Ok(())
             }
-        }
+        };
+
+        result
     }
 
     /// Creates a weak reference to this actor.
@@ -339,16 +479,29 @@ impl UntypedActorRef {
     ///
     /// For more comprehensive examples, including [`UntypedActorRef::ask_blocking`], refer to
     /// `examples/actor_blocking_tasks.rs`.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_tell_blocking",
+        fields(
+            actor_id = %self.identity,
+            message_type = %std::any::type_name::<M>(),
+            timeout_ms = timeout.map(|t| t.as_millis())
+        ),
+        skip(self, msg)
+    ))]
     pub fn tell_blocking<M>(&self, msg: M, timeout: Option<Duration>) -> Result<()>
     where
         M: Send + 'static,
     {
+        #[cfg(feature = "tracing")]
+        trace_debug!("Executing tell_blocking");
+
         let rt = Handle::try_current().map_err(|e| Error::Runtime {
             identity: self.identity,
             details: format!("Failed to get Tokio runtime handle for tell_blocking: {e}"),
         })?;
 
-        match timeout {
+        let result = match timeout {
             Some(duration) => {
                 rt.block_on(tokio::time::timeout(duration, self.tell(msg)))
                     .map_err(|_| Error::Timeout {
@@ -358,7 +511,15 @@ impl UntypedActorRef {
                     })? // Flatten Result<Result<()>> to Result<()>
             }
             None => rt.block_on(self.tell(msg)),
+        };
+
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => trace_debug!("Tell blocking completed successfully"),
+            Err(e) => trace_warn!(error = %e, "Tell blocking failed"),
         }
+
+        result
     }
 
     /// Synchronous version of [`UntypedActorRef::ask`] that blocks until the reply is received.
@@ -404,17 +565,31 @@ impl UntypedActorRef {
     /// # }
     /// ```
     /// Refer to the `examples/actor_blocking_tasks.rs` file for a runnable demonstration.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_ask_blocking",
+        fields(
+            actor_id = %self.identity,
+            message_type = %std::any::type_name::<M>(),
+            reply_type = %std::any::type_name::<R>(),
+            timeout_ms = timeout.map(|t| t.as_millis())
+        ),
+        skip(self, msg)
+    ))]
     pub fn ask_blocking<M, R>(&self, msg: M, timeout: Option<Duration>) -> Result<R>
     where
         M: Send + 'static,
         R: Send + 'static,
     {
+        #[cfg(feature = "tracing")]
+        trace_debug!("Executing ask_blocking");
+
         let rt = Handle::try_current().map_err(|e| Error::Runtime {
             identity: self.identity,
             details: format!("Failed to get Tokio runtime handle for ask_blocking: {e}"),
         })?;
 
-        match timeout {
+        let result = match timeout {
             Some(duration) => {
                 rt.block_on(tokio::time::timeout(duration, self.ask(msg)))
                     .map_err(|_| Error::Timeout {
@@ -424,7 +599,15 @@ impl UntypedActorRef {
                     })? // Flatten Result<Result<R>> to Result<R>
             }
             None => rt.block_on(self.ask(msg)),
+        };
+
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => trace_debug!("Ask blocking completed successfully"),
+            Err(e) => trace_warn!(error = %e, "Ask blocking failed"),
         }
+
+        result
     }
 }
 

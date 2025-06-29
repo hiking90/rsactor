@@ -81,7 +81,22 @@ impl MyActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init(); // Initialize the logger
+    // Initialize tracing if the feature is enabled
+    #[cfg(feature = "tracing")]
+    {
+        use tracing_subscriber;
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .init();
+        println!("🚀 Basic Demo: Tracing is ENABLED (TRACE level)");
+        println!("You should see detailed trace logs for all actor operations");
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+        env_logger::init(); // Initialize the logger only when tracing is disabled
+        println!("📝 Basic Demo: Tracing is DISABLED");
+    }
 
     println!("Spawning MyActor...");
 
