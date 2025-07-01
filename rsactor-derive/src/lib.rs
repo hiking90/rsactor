@@ -293,19 +293,14 @@ fn message_impl(mut input: ItemImpl) -> syn::Result<TokenStream2> {
     let actor_type = &input.self_ty;
     let generics = &input.generics;
 
-    let (message_impls, message_types) =
-        process_handler_methods(&input.items, actor_type, generics)?;
+    let message_impls = process_handler_methods(&input.items, actor_type, generics)?;
 
     // Remove `#[handler]` attributes from the impl block for clean output
     clean_handler_attributes(&mut input.items);
 
-    // Generate MessageHandler implementation directly instead of using deprecated macro
-    let message_handler_impl = generate_message_handler_impl(&message_types, actor_type, generics);
-
     let result = quote! {
         #input
         #(#message_impls)*
-        #message_handler_impl
     };
 
     Ok(result)
@@ -315,7 +310,7 @@ fn process_handler_methods(
     items: &[ImplItem],
     actor_type: &Type,
     generics: &syn::Generics,
-) -> syn::Result<(Vec<TokenStream2>, Vec<Type>)> {
+) -> syn::Result<Vec<TokenStream2>> {
     let mut message_impls = Vec::new();
     let mut message_types = Vec::new();
 
@@ -339,41 +334,13 @@ fn process_handler_methods(
         }
     }
 
-    Ok((message_impls, message_types))
+    Ok(message_impls)
 }
 
 fn clean_handler_attributes(items: &mut [ImplItem]) {
     for item in items {
         if let ImplItem::Fn(method) = item {
             method.attrs.retain(|attr| !attr.path().is_ident("handler"));
-        }
-    }
-}
-
-fn generate_message_handler_impl(
-    message_types: &[Type],
-    actor_type: &Type,
-    generics: &syn::Generics,
-) -> TokenStream2 {
-    if message_types.is_empty() {
-        return quote! {};
-    }
-
-    let message_handler_body = generate_message_handler_body(message_types);
-
-    if generics.params.is_empty() {
-        quote! {
-            impl rsactor::MessageHandler for #actor_type {
-                #message_handler_body
-            }
-        }
-    } else {
-        let params = &generics.params;
-        let where_clause = &generics.where_clause;
-        quote! {
-            impl<#params> rsactor::MessageHandler for #actor_type #where_clause {
-                #message_handler_body
-            }
         }
     }
 }
@@ -445,56 +412,5 @@ fn extract_message_type(method: &ImplItemFn) -> syn::Result<Option<Type>> {
     match &inputs[1] {
         FnArg::Typed(PatType { ty, .. }) => Ok(Some(ty.as_ref().clone())),
         _ => Ok(None),
-    }
-}
-
-fn generate_message_handler_body(message_types: &[Type]) -> TokenStream2 {
-    quote! {
-        async fn handle(
-            &mut self,
-            _msg_any: Box<dyn std::any::Any + Send>,
-            actor_ref: &rsactor::ActorRef<Self>,
-        ) -> rsactor::Result<Box<dyn std::any::Any + Send>> {
-            let mut _msg_any = _msg_any;
-            #(
-                match _msg_any.downcast::<#message_types>() {
-                    Ok(concrete_msg_box) => {                        // Add tracing support for the derive macro generated handler
-                        #[cfg(feature = "tracing")]
-                        {
-                            // Update the current span with the actual message type
-                            let current_span = tracing::Span::current();
-                            current_span.record("message_type", std::any::type_name::<#message_types>());
-
-                            tracing::debug!(
-                                target: "rsactor::actor",
-                                message_type = %std::any::type_name::<#message_types>(),
-                                actor_id = %actor_ref.identity(),
-                                "Actor processing message"
-                            );
-                        }                        let reply = <Self as rsactor::Message<#message_types>>::handle(self, *concrete_msg_box, &actor_ref).await;
-
-                        return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
-                    }
-                    Err(original_box_back) => {
-                        _msg_any = original_box_back;
-                    }
-                }
-            )*
-            let expected_msg_types: Vec<&'static str> = vec![#(stringify!(#message_types)),*];
-
-            #[cfg(feature = "tracing")]
-            tracing::warn!(
-                target: "rsactor::actor",
-                expected_types = ?expected_msg_types,
-                actual_type_id = ?_msg_any.type_id(),
-                "Unhandled message type"
-            );
-
-            return Err(rsactor::Error::UnhandledMessageType {
-                identity: actor_ref.identity(),
-                expected_types: expected_msg_types,
-                actual_type_id: _msg_any.type_id()
-            });
-        }
     }
 }

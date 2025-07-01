@@ -24,12 +24,8 @@ impl Actor for MyActor {
     type Error = anyhow::Error; // Define the error type for actor operations
 
     // Called when the actor is started
-    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        info!(
-            "MyActor (id: {}) started. Initial count: {}.",
-            actor_ref.identity(),
-            args.count
-        );
+    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        info!("MyActor started. Initial count: {}.", args.count);
         Ok(args)
     }
 
@@ -110,7 +106,6 @@ async fn main() -> Result<()> {
     // Spawn the actor. This returns an ActorRef for sending messages
     // and a JoinHandle to await the actor's completion.
     let (actor_ref, join_handle) = rsactor::spawn::<MyActor>(my_actor); // MODIFIED: use system.spawn and await
-    println!("MyActor spawned with ref: {:?}", actor_ref.identity());
 
     tokio::time::sleep(Duration::from_millis(700)).await;
 
@@ -133,26 +128,21 @@ async fn main() -> Result<()> {
 
     // Signal the actor to stop gracefully.
     // The actor will process any remaining messages in its mailbox before stopping.
-    println!(
-        "Sending StopGracefully message to actor {}.",
-        actor_ref.identity()
-    );
+    println!("Sending StopGracefully message to actor.",);
     actor_ref.stop().await?; // Corrected method name
 
     // Wait for the actor's task to complete.
     // `join_handle.await` returns a Result containing a tuple:
     // - The actor instance (allowing access to its final state).
     // - The ActorResult indicating completion state and returned actor.
-    println!("Waiting for actor {} to stop...", actor_ref.identity());
+    println!("Waiting for actor to stop...");
     let result = join_handle.await?;
     // Successfully retrieved the actor result.
     match result {
         rsactor::ActorResult::Completed { actor, killed } => {
             println!(
-                "Actor {} stopped. Final count: {}. Killed: {}",
-                actor_ref.identity(),
-                actor.count,
-                killed
+                "Actor stopped. Final count: {}. Killed: {}",
+                actor.count, killed
             );
         }
         rsactor::ActorResult::Failed {
@@ -162,8 +152,7 @@ async fn main() -> Result<()> {
             killed,
         } => {
             println!(
-                "Actor {} stop failed: {}. Phase: {}, Killed: {}. Final count: {}",
-                actor_ref.identity(),
+                "Actor stop failed: {}. Phase: {}, Killed: {}. Final count: {}",
                 error,
                 phase,
                 killed,

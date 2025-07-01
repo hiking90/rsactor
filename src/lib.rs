@@ -326,22 +326,19 @@ mod error;
 pub use error::{Error, Result};
 
 mod actor_ref;
-pub use actor_ref::{ActorRef, ActorWeak, UntypedActorRef, UntypedActorWeak};
+pub use actor_ref::{ActorRef, ActorWeak};
 
 mod actor_result;
 pub use actor_result::{ActorResult, FailurePhase};
 
 mod actor;
-pub use actor::{Actor, Message, MessageHandler};
+pub use actor::{Actor, Message};
 
+use futures::FutureExt;
 // Re-export derive macro
 pub use rsactor_derive::{message_handlers, Actor};
 
-use std::{
-    any::{Any, TypeId},
-    fmt::Debug,
-    sync::OnceLock,
-};
+use std::{any::TypeId, fmt::Debug, future::Future, sync::OnceLock};
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -354,9 +351,13 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Creates a new `ActorIdentity` with the given ID and type name.
-    pub fn new(id: TypeId, type_name: &'static str) -> Self {
-        Identity { id, type_name }
+    /// Creates a new `Identity` for the specified type T.
+    /// This is a generic function that automatically infers the type ID and type name.
+    pub fn of<T: 'static>() -> Self {
+        Identity {
+            id: TypeId::of::<T>(),
+            type_name: std::any::type_name::<T>(),
+        }
     }
 
     /// Returns a string representation of the actor's identity.
@@ -455,132 +456,62 @@ macro_rules! __impl_message_handler_body {
     };
 }
 
-/// **⚠️ DEPRECATED**: Implements the `MessageHandler` trait for both generic and non-generic actor types.
-///
-/// **This macro is deprecated and will be removed in a future version.
-/// Please use the `#[message_handlers]` attribute macro with `#[handler]` method attributes instead.**
-///
-/// This macro simplifies the process of handling multiple message types within an actor.
-/// It generates the necessary boilerplate code to downcast a `Box<dyn Any + Send>`
-/// message to its concrete type and then calls the appropriate `Message::handle`
-/// implementation on the actor.
-///
-/// # Migration Guide
-///
-/// Instead of:
-/// ```rust,ignore
-/// impl_message_handler!(MyActor, [Msg1, Msg2]);
-/// ```
-///
-/// Use:
-/// ```rust,ignore
-/// #[message_handlers]
-/// impl MyActor {
-///     #[handler]
-///     async fn handle_msg1(&mut self, msg: Msg1, actor_ref: &ActorRef<Self>) -> Reply1 { /* ... */ }
-///
-///     #[handler]
-///     async fn handle_msg2(&mut self, msg: Msg2, actor_ref: &ActorRef<Self>) -> Reply2 { /* ... */ }
-/// }
-/// ```
-///
-/// # Usage
-///
-/// ## For non-generic actors:
-/// ```rust,ignore
-/// struct MyActor;
-///
-/// impl Actor for MyActor { /* ... */ }
-///
-/// struct Msg1;
-/// struct Msg2;
-///
-/// impl Message<Msg1> for MyActor {
-///     type Reply = ();
-///     async fn handle(&mut self, msg: Msg1, _actor_ref: &ActorRef<Self>) -> Self::Reply { /* ... */ }
-/// }
-///
-/// impl Message<Msg2> for MyActor {
-///     type Reply = String;
-///     async fn handle(&mut self, msg: Msg2, _actor_ref: &ActorRef<Self>) -> Self::Reply {
-///         /* ... */ "response".to_string()
-///     }
-/// }
-///
-/// // This will implement `MessageHandler` for `MyActor`, allowing it to handle `Msg1` and `Msg2`.
-/// impl_message_handler!(MyActor, [Msg1, Msg2]);
-/// ```
-///
-/// ## For generic actors:
-/// ```rust,ignore
-/// struct GenericActor<T: Send + Debug + Clone + 'static> {
-///     data: Option<T>,
-/// }
-///
-/// impl<T: Send + Debug + Clone + 'static> Actor for GenericActor<T> { /* ... */ }
-///
-/// struct SetValue<T: Send + Debug + 'static>(T);
-/// struct GetValue;
-///
-/// impl<T: Send + Debug + Clone + 'static> Message<SetValue<T>> for GenericActor<T> {
-///     type Reply = ();
-///     async fn handle(&mut self, msg: SetValue<T>, _actor_ref: &ActorRef<Self>) -> Self::Reply { /* ... */ }
-/// }
-///
-/// impl<T: Send + Debug + Clone + 'static> Message<GetValue> for GenericActor<T> {
-///     type Reply = Option<T>;
-///     async fn handle(&mut self, msg: GetValue, _actor_ref: &ActorRef<Self>) -> Self::Reply { /* ... */ }
-/// }
-///
-/// // This will implement `MessageHandler` for the generic `GenericActor<T>`.
-/// impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue]);
-/// ```
-///
-/// # Arguments
-///
-/// ## Non-generic form:
-/// * `$actor_type:ty`: The type of the actor for which to implement `MessageHandler`.
-/// * `[$($msg_type:ty),* $(,)?]`: A list of message types that the actor can handle.
-/// ```ignore
-/// impl_message_handler!(MyActor, [Msg1, Msg2]);
-/// ```
-///
-/// ## Generic form:
-/// * `[$($generics:tt)*]`: Generic type parameters with their trait bounds (as token tree to handle complex bounds)
-/// * `for $actor_type:ty`: The generic actor type for which to implement `MessageHandler`
-/// * `[$($msg_type:ty),* $(,)?]`: A list of message types that the actor can handle
-/// ```ignore
-/// impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue]);
-/// ```
-///
-/// # Internals
-/// This macro facilitates dynamic message dispatch by downcasting `Box<dyn std::any::Any + Send>`
-/// message payloads to their concrete types at runtime. It implements the [`MessageHandler`](crate::actor::MessageHandler)
-/// trait for your actor, enabling it to handle multiple message types through the
-/// [`handle`](crate::actor::Message::handle) method. The actual message handling logic
-/// is generated by the internal `__impl_message_handler_body!` helper macro to avoid code
-/// duplication between different implementation patterns.
-#[deprecated(
-    since = "0.9.0",
-    note = "Use the `#[message_handlers]` attribute macro with `#[handler]` method attributes instead. This macro will be removed in version 1.0."
-)]
-#[macro_export]
-macro_rules! impl_message_handler {
-    // Generic actor pattern: [generics] for ActorType<T>, [messages]
-    ([$($generics:tt)*] for $actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
-        #[allow(deprecated)]
-        impl<$($generics)*> $crate::MessageHandler for $actor_type {
-            $crate::__impl_message_handler_body!($actor_type, [$($msg_type),*]);
-        }
-    };
+/// Type-erased payload handler trait that can be used with dynamic dispatch
+trait PayloadHandler<A>: Send
+where
+    A: Actor,
+{
+    /// Process the message payload and return a result
+    fn handle_message(
+        self: Box<Self>,
+        actor: &mut A,
+        actor_ref: ActorRef<A>,
+        reply_channel: Option<oneshot::Sender<Box<dyn std::any::Any + Send>>>,
+    ) -> BoxFuture<'_, ()>;
+}
 
-    // Non-generic actor pattern: ActorType, [messages]
-    ($actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
-        #[allow(deprecated)]
-        impl $crate::MessageHandler for $actor_type {
-            $crate::__impl_message_handler_body!($actor_type, [$($msg_type),*]);
+type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+impl<A, T> PayloadHandler<A> for T
+where
+    A: Actor + Message<T> + 'static,
+    T: Send + 'static,
+{
+    fn handle_message(
+        self: Box<Self>,
+        actor: &mut A,
+        actor_ref: ActorRef<A>,
+        reply_channel: Option<oneshot::Sender<Box<dyn std::any::Any + Send>>>,
+    ) -> BoxFuture<'_, ()> {
+        async move {
+            let result = Message::handle(actor, *self, &actor_ref).await;
+            if let Some(channel) = reply_channel {
+                match channel.send(Box::new(result)) {
+                    Ok(_) => {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(
+                            actor = %actor_ref.identity(),
+                            "Reply sent successfully"
+                        );
+                    }
+                    Err(_) => {
+                        #[cfg(feature = "tracing")]
+                        tracing::error!(
+                            actor = %actor_ref.identity(),
+                            error = ?e,
+                            "Failed to send reply"
+                        );
+                        log::error!(
+                            "Failed to send reply for actor {}: {}",
+                            std::any::type_name::<A>(),
+                            std::any::type_name::<T>()
+                        );
+                    }
+                }
+            }
         }
-    };
+        .boxed()
+    }
 }
 
 /// Represents messages that can be sent to an actor's mailbox.
@@ -588,21 +519,23 @@ macro_rules! impl_message_handler {
 /// This enum includes both user-defined messages (wrapped in `Envelope`)
 /// and control messages like `StopGracefully`. The `Terminate` control signal
 /// is handled through a separate dedicated channel.
-#[derive(Debug)]
-pub(crate) enum MailboxMessage {
+pub(crate) enum MailboxMessage<T>
+where
+    T: Actor + 'static,
+{
     // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
     /// A user-defined message to be processed by the actor.
     Envelope {
         /// The message payload.
-        payload: Box<dyn Any + Send>,
+        payload: Box<dyn PayloadHandler<T>>,
         /// A channel to send the reply back to the caller. Optional for 'tell' operations.
-        reply_channel: Option<oneshot::Sender<Result<Box<dyn Any + Send>>>>,
-        actor_ref: UntypedActorRef, // The actor reference that sent the message
+        reply_channel: Option<oneshot::Sender<Box<dyn std::any::Any + Send>>>,
+        actor_ref: ActorRef<T>, // The actor reference that sent the message
     },
     // Terminate is removed from here
     /// A signal for the actor to stop gracefully after processing existing messages in its mailbox.
     #[allow(dead_code)] // To avoid dropping ActorRef until StopGracefully is delivered.
-    StopGracefully(UntypedActorRef),
+    StopGracefully(ActorRef<T>),
 }
 
 /// Represents control signals that can be sent to an actor.
@@ -614,7 +547,7 @@ pub(crate) enum ControlSignal {
 }
 
 // Type alias for the sender part of the actor's mailbox channel.
-pub(crate) type MailboxSender = mpsc::Sender<MailboxMessage>; // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
+pub(crate) type MailboxSender<T> = mpsc::Sender<MailboxMessage<T>>; // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
 
 // Global configuration for the default mailbox capacity.
 static CONFIGURED_DEFAULT_MAILBOX_CAPACITY: OnceLock<usize> = OnceLock::new();
@@ -646,7 +579,7 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 /// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result as an [`ActorResult<T>`](crate::ActorResult).
-pub fn spawn<T: Actor + MessageHandler + 'static>(
+pub fn spawn<T: Actor + 'static>(
     args: T::Args,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY
@@ -662,7 +595,7 @@ pub fn spawn<T: Actor + MessageHandler + 'static>(
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
 /// to control the actor's mailbox capacity.
-pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
+pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
     args: T::Args, // Actor initialization arguments
     mailbox_capacity: usize,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
@@ -675,13 +608,7 @@ pub fn spawn_with_mailbox_capacity<T: Actor + MessageHandler + 'static>(
     // This ensures that a kill signal can be sent even if the main mailbox is full.
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
-    let untyped_actor_ref = UntypedActorRef::new(
-        Identity::new(TypeId::of::<T>(), std::any::type_name::<T>()), // Use type name of the actor
-        mailbox_tx,
-        terminate_tx,
-    ); // Pass terminate_tx
-
-    let actor_ref = ActorRef::new(untyped_actor_ref);
+    let actor_ref = ActorRef::new(mailbox_tx, terminate_tx); // Pass terminate_tx
 
     let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
         args,
