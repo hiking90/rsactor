@@ -8,7 +8,7 @@ use std::{fmt::Debug, future::Future, time::Duration};
 use tokio::sync::mpsc;
 
 #[cfg(feature = "tracing")]
-use tracing::{debug as trace_debug, warn as trace_warn};
+use tracing::debug as trace_debug;
 
 /// Defines the behavior of an actor.
 ///

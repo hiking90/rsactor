@@ -39,7 +39,6 @@
 //! - **[`Message<M>`](actor::Message)**: Trait for handling a message type `M` and defining its reply type.
 //! - **[`ActorRef`]**: Handle for sending messages to an actor.
 //! - **[`spawn`]**: Function to create and start an actor, returning an [`ActorRef`] and a `JoinHandle`.
-//! - **[`MessageHandler`]**: Trait for type-erased message handling. This is typically implemented automatically by the [`message_handlers`] macro.
 //! - **[`ActorResult`]**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 //!
 //! ## Getting Started

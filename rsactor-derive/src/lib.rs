@@ -110,7 +110,7 @@
 //!
 //! ### Benefits
 //!
-//! - Automatic generation of Message<T> trait implementations
+//! - Automatic generation of `Message<T>` trait implementations
 //! - Automatic implementation of MessageHandler trait for the actor
 //! - Selective processing: only methods with `#[handler]` attribute are processed
 //! - Reduced boilerplate and potential for errors
@@ -259,7 +259,7 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// ```
 ///
 /// This will automatically generate:
-/// - The Message<MessageType> trait implementations for each handler method
+/// - The `Message<MessageType>` trait implementations for each handler method
 /// - The MessageHandler trait implementation for the actor
 ///
 /// # Requirements
@@ -272,7 +272,7 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 ///
 /// # Benefits
 ///
-/// - No need to manually implement Message<T> trait for each message type
+/// - No need to manually implement `Message<T>` trait for each message type
 /// - No need to manually implement MessageHandler trait
 /// - Reduces boilerplate code and potential for errors
 /// - Automatically keeps message handler registration in sync with method definitions
