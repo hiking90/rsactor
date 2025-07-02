@@ -27,7 +27,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 *   **Macro-Assisted Message Handling**:
     *   `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
-*   **Strong Type Safety**: Provides both compile-time (`ActorRef<T>`) and runtime (`UntypedActorRef`) type safety options, ensuring message handling consistency while supporting flexible actor management patterns.
+*   **Strong Type Safety**: Provides compile-time (`ActorRef<T>`) type safety, ensuring message handling consistency and preventing type-related runtime errors.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `#[message_handlers]` macro) are also required, but they don't add any additional constraints on the actor's fields.
 *   **Optional Tracing Support**: Built-in support for detailed observability using the `tracing` crate. When enabled via the `tracing` feature flag, provides comprehensive logging of actor lifecycle events, message handling, and performance metrics.
 

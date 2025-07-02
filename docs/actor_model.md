@@ -92,19 +92,18 @@ Libraries like `rsactor` (see `https://github.com/hiking90/rsactor`) provide sim
 Here's a conceptual example using `rsactor`, demonstrating an actor with an internal `on_run` handling multiple tick sources:
 
 ```rust
-use rsactor::{Actor, ActorRef, ActorResult, message_handlers, spawn};
+use rsactor::{Actor, ActorRef, ActorWeak, message_handlers, spawn};
 use anyhow::Result;
 use tokio::time::{interval, Duration};
 
-// Define actor struct with derive macro
-#[derive(Actor)]
+// Define actor struct
 struct CounterActor {
-    count: u32, // Stores the counter value
+    count: u32,                        // Stores the counter value
     tick_300ms: tokio::time::Interval, // 300ms interval timer
     tick_1s: tokio::time::Interval,    // 1 second interval timer
 }
 
-// Implement custom Actor trait for initialization logic
+// Implement Actor trait for complex initialization
 impl Actor for CounterActor {
     type Args = (); // No arguments needed for this actor
     type Error = anyhow::Error; // Define the error type for actor operations
@@ -120,7 +119,7 @@ impl Actor for CounterActor {
 
     // The primary processing loop for the actor within the lifecycle.
     // This demonstrates handling two independent, periodic events using tokio::select!.
-    async fn on_run(&mut self, _actor_ref: &rsactor::ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
         // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
         tokio::select! {
             // Executes when the 300ms interval timer ticks.
@@ -129,6 +128,7 @@ impl Actor for CounterActor {
             }
             // Executes when the 1s interval timer ticks. (Currently no specific action)
             _ = self.tick_1s.tick() => {
+                // Could implement different behavior here
             }
         }
         // Return Ok(()) to continue running
@@ -165,15 +165,18 @@ async fn main() -> Result<()> {
 
     // Send an IncrementMsg to the actor to increment the counter by 5 and await the reply.
     let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;
+    println!("Count after increment: {}", new_count);
 
     // Send a GetCountMsg to the actor to get the current count and await the reply.
     let current_count: u32 = actor_ref.ask(GetCountMsg).await?;
+    println!("Current count: {}", current_count);
 
     // Allow a little more time for ticks.
     tokio::time::sleep(Duration::from_millis(700)).await;
 
     // Send a GetCountMsg to the actor to get the final count and await the reply.
     let final_count: u32 = actor_ref.ask(GetCountMsg).await?;
+    println!("Final count: {}", final_count);
 
     // Gracefully stop the actor.
     actor_ref.stop().await?; // Gracefully stop the actor
@@ -183,7 +186,7 @@ async fn main() -> Result<()> {
 
     // Example of how to inspect the ActorResult
     match actor_result {
-        ActorResult::Completed { actor, killed } => {
+        rsactor::ActorResult::Completed { actor, killed } => {
             println!(
                 "Main: CounterActor (ID: {}) task completed. Final state count: {}. Killed: {}",
                 actor_ref.identity(), // Print the ID of the stopped actor.
@@ -191,7 +194,7 @@ async fn main() -> Result<()> {
                 killed
             );
         }
-        ActorResult::Failed { actor, error, phase, killed } => {
+        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
             if let Some(actor_state) = actor {
                 println!(
                     "Main: CounterActor (ID: {}) task failed during phase {:?}. Final state count: {}. Error: {:?}. Killed: {}",

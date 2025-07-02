@@ -16,8 +16,7 @@ use tracing::{debug as trace_debug, info, warn as trace_warn};
 ///
 /// `ActorRef<T>` provides type-safe message passing to actors, ensuring that only
 /// messages that the actor can handle are sent, and that reply types are correctly typed.
-/// It wraps an [`UntypedActorRef`] and provides compile-time type safety through Rust's
-/// type system and trait bounds.
+/// It provides compile-time type safety through Rust's type system and trait bounds.
 ///
 /// ## Type Safety Benefits
 ///
@@ -48,24 +47,17 @@ use tracing::{debug as trace_debug, info, warn as trace_warn};
 /// - **Utility Methods**:
 ///   - [`identity`](ActorRef::identity): Get the unique ID of the actor.
 ///   - [`is_alive`](ActorRef::is_alive): Check if the actor is still running.
-///   - [`untyped_actor_ref`](ActorRef::untyped_actor_ref): Access the underlying [`UntypedActorRef`].
 ///
 /// ## Recommended Usage
 ///
-/// Use [`ActorRef<T>`] by default for all actor communication. It provides the same functionality
-/// as [`UntypedActorRef`] but with compile-time guarantees that prevent type-related runtime errors.
+/// Use [`ActorRef<T>`] by default for all actor communication. It provides compile-time
+/// guarantees that prevent type-related runtime errors.
 ///
 /// **When to use `ActorRef<T>`**:
 /// - Default choice for actor communication
 /// - When you know the actor type at compile time
 /// - When you want compile-time message validation
 /// - When working with strongly-typed actor systems
-///
-/// **When to use `UntypedActorRef`**:
-/// - Collections of heterogeneous actors (`Vec<UntypedActorRef>`, `HashMap<String, UntypedActorRef>`)
-/// - Plugin systems with dynamically loaded actors
-/// - Generic actor management interfaces
-/// - When you need type erasure for dynamic scenarios
 #[derive(Debug)]
 pub struct ActorRef<T: Actor> {
     id: Identity, // Added identity field for actor identification
@@ -74,7 +66,7 @@ pub struct ActorRef<T: Actor> {
 }
 
 impl<T: Actor> ActorRef<T> {
-    /// Creates a new type-safe ActorRef from an UntypedActorRef.
+    /// Creates a new type-safe ActorRef.
     pub(crate) fn new(
         id: Identity,
         sender: MailboxSender<T>,
@@ -215,7 +207,7 @@ impl<T: Actor> ActorRef<T> {
         fields(
             actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
-            reply_type = %std::any::type_name::<R>()
+            reply_type = %std::any::type_name::<T::Reply>()
         ),
         skip(self, msg)
     ))]
@@ -257,7 +249,7 @@ impl<T: Actor> ActorRef<T> {
                     Err(_) => {
                         #[cfg(feature = "tracing")]
                         trace_warn!(
-                            expected_type = %std::any::type_name::<R>(),
+                            expected_type = %std::any::type_name::<T::Reply>(),
                             "Ask reply type downcast failed"
                         );
                         Err(Error::Downcast {
@@ -290,7 +282,7 @@ impl<T: Actor> ActorRef<T> {
         fields(
             actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
-            reply_type = %std::any::type_name::<R>(),
+            reply_type = %std::any::type_name::<T::Reply>(),
             timeout_ms = timeout.as_millis()
         ),
         skip(self, msg)
@@ -334,7 +326,7 @@ impl<T: Actor> ActorRef<T> {
     )]
     pub fn kill(&self) -> Result<()> {
         #[cfg(feature = "tracing")]
-        info!(actor_id = %self.identify(), "Killing actor");
+        info!(actor_id = %self.identity(), "Killing actor");
 
         debug!(
             "Attempting to send Terminate message to actor {} via dedicated channel using try_send",
@@ -462,7 +454,7 @@ impl<T: Actor> ActorRef<T> {
         fields(
             actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
-            reply_type = %std::any::type_name::<R>(),
+            reply_type = %std::any::type_name::<T::Reply>(),
             timeout_ms = timeout.map(|t| t.as_millis())
         ),
         skip(self, msg)
@@ -516,9 +508,8 @@ impl<T: Actor> Clone for ActorRef<T> {
 
 /// A weak, type-safe reference to an actor of type `T`.
 ///
-/// `ActorWeak<T>` is the type-safe counterpart to [`UntypedActorWeak`]. It does not
-/// prevent the actor from being dropped and can be upgraded to a strong [`ActorRef<T>`]
-/// if the actor is still alive.
+/// `ActorWeak<T>` is a weak reference that does not prevent the actor from being dropped
+/// and can be upgraded to a strong [`ActorRef<T>`] if the actor is still alive.
 ///
 /// ## Creating `ActorWeak<T>`
 ///
@@ -579,7 +570,6 @@ impl<T: Actor> ActorWeak<T> {
     #[inline]
     pub fn is_alive(&self) -> bool {
         // Both channels must have strong references for the actor to be alive
-        // This matches the logic in UntypedActorRef::is_alive()
         self.sender.strong_count() > 0 && self.terminate_sender.strong_count() > 0
     }
 }

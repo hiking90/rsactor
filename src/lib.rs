@@ -1,4 +1,4 @@
-// Copyright 2022 Jeff Kim <hiking90@gmail./// ### Option 1: Using the Actor Derive Macro (Recommended for Simple Cases)om>
+// Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
 //! # rsActor
@@ -24,12 +24,9 @@
 //!   The framework manages the execution flow while giving developers full control over actor behavior.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
-//! - **Macro for Message Handling**: Multiple approaches available:
+//! - **Macro for Message Handling**:
 //!   - [`message_handlers`] attribute macro with `#[handler]` method attributes for automatic message handling (recommended)
-//!   - [`impl_message_handler!`] macro for manual message routing (deprecated, use `#[message_handlers]` instead)
-//! - **Type Safety Features**: Two actor reference types provide different levels of type safety:
-//!   - [`ActorRef<T>`]: Compile-time type safety with zero runtime overhead (recommended)
-//!   - [`UntypedActorRef`]: Runtime type handling for collections and dynamic scenarios
+//! - **Type Safety Features**: [`ActorRef<T>`] provides compile-time type safety with zero runtime overhead
 //! - **Optional Tracing Support**: Built-in observability using the [`tracing`](https://crates.io/crates/tracing) crate (enable with `tracing` feature):
 //!   - Actor lifecycle event tracing (start, stop, different termination scenarios)
 //!   - Message handling with timing and performance metrics
@@ -42,7 +39,7 @@
 //! - **[`Message<M>`](actor::Message)**: Trait for handling a message type `M` and defining its reply type.
 //! - **[`ActorRef`]**: Handle for sending messages to an actor.
 //! - **[`spawn`]**: Function to create and start an actor, returning an [`ActorRef`] and a `JoinHandle`.
-//! - **[`MessageHandler`]**: Trait for type-erased message handling. This is typically implemented automatically by the [`message_handlers`] macro (recommended) or the deprecated [`impl_message_handler!`] macro.
+//! - **[`MessageHandler`]**: Trait for type-erased message handling. This is typically implemented automatically by the [`message_handlers`] macro.
 //! - **[`ActorResult`]**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
 //!
 //! ## Getting Started
@@ -96,10 +93,7 @@
 //! # }
 //! ```
 //!
-//! ### Option B: Manual Message Implementation (Deprecated - Use Option A Instead)
-//!
-//! **⚠️ DEPRECATED**: This approach using manual `Message` trait implementation and `impl_message_handler!`
-//! is deprecated and will be removed in version 1.0. Please use the `#[message_handlers]` macro approach shown in Option A instead.
+//! ### Option B: Manual Message Implementation
 //!
 //! For cases where you need more control over message handling, you can manually implement the Message trait:
 //!
@@ -179,10 +173,7 @@
 //! }
 //! ```
 //!
-//! ### Option C: Manual Actor Implementation (Advanced Usage - Consider Using Option A)
-//!
-//! **Note**: While this approach is still supported, consider using the `#[message_handlers]` macro
-//! for message handling even with custom Actor implementations.
+//! ### Option C: Manual Actor Implementation (Advanced Usage)
 //!
 //! For actors that need complex initialization logic, implement the Actor trait manually:
 //!
@@ -364,90 +355,6 @@ impl std::fmt::Display for Identity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.type_name)
     }
-}
-
-/// Internal helper macro that generates the common message handling logic
-/// shared between generic and non-generic `impl_message_handler!` implementations.
-///
-/// This macro eliminates code duplication by providing the core message handling
-/// logic that downcasts incoming messages and dispatches them to the appropriate
-/// `Message::handle` implementation.
-///
-/// # Parameters
-/// * `$actor_type:ty`: The actor type for which to generate the handler
-/// * `[$($msg_type:ty),* $(,)?]`: List of message types to handle
-///
-/// # Generated Code
-/// Creates an `async fn handle` method that:
-/// 1. Attempts to downcast the incoming `Box<dyn Any + Send>` to each message type
-/// 2. Calls the appropriate `Message::handle` implementation when a match is found
-/// 3. Returns an error if no message type matches
-#[deprecated(
-    since = "0.9.0",
-    note = "This is an internal helper for the deprecated `impl_message_handler!` macro. Will be removed in version 1.0."
-)]
-#[macro_export]
-#[doc(hidden)]
-macro_rules! __impl_message_handler_body {
-    ($actor_type:ty, [$($msg_type:ty),* $(,)?]) => {
-        async fn handle(
-            &mut self,
-            _msg_any: Box<dyn std::any::Any + Send>, // This Box is consumed by the first successful downcast
-            actor_ref: &$crate::ActorRef<$actor_type>,
-        ) -> $crate::Result<Box<dyn std::any::Any + Send>> {
-            let mut _msg_any = _msg_any; // Mutable to allow reassignment in the loop
-            $(
-                match _msg_any.downcast::<$msg_type>() {
-                    Ok(concrete_msg_box) => {
-                        // Successfully downcasted. concrete_msg_box is a Box<$msg_type>.
-                        // The original _msg_any has been consumed by the downcast.
-
-                        #[cfg(feature = "tracing")]
-                        {
-                            // Update the current span with the actual message type
-                            let current_span = tracing::Span::current();
-                            current_span.record("message_type", std::any::type_name::<$msg_type>());
-
-                            tracing::debug!(
-                                message_type = %std::any::type_name::<$msg_type>(),
-                                "Actor handler processing message"
-                            );
-                        }
-
-                        let reply = <$actor_type as $crate::Message<$msg_type>>::handle(self, *concrete_msg_box, &actor_ref).await;
-
-                        #[cfg(feature = "tracing")]
-                        tracing::debug!(
-                            message_type = %std::any::type_name::<$msg_type>(),
-                            "Actor handler completed message processing"
-                        );
-
-                        return Ok(Box::new(reply) as Box<dyn std::any::Any + Send>);
-                    }
-                    Err(original_box_back) => {
-                        // Downcast failed. original_box_back is the original Box<dyn Any + Send>.
-                        // We reassign it to _msg_any so it can be used in the next iteration of the $(...)* loop.
-                        _msg_any = original_box_back;
-                    }
-                }
-            )*
-            // If the message type was not found in the list of handled types:
-            let expected_msg_types: Vec<&'static str> = vec![$(stringify!($msg_type)),*];
-
-            #[cfg(feature = "tracing")]
-            tracing::warn!(
-                expected_types = ?expected_msg_types,
-                actual_type_id = ?_msg_any.type_id(),
-                "Unhandled message type"
-            );
-
-            return Err($crate::Error::UnhandledMessageType {
-                identity: actor_ref.identity(),
-                expected_types: expected_msg_types,
-                actual_type_id: _msg_any.type_id()
-            });
-        }
-    };
 }
 
 /// Type-erased payload handler trait that can be used with dynamic dispatch

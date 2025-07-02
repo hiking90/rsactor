@@ -7,19 +7,28 @@ This FAQ provides answers to common questions about the `rsActor` framework.
 
 **Q1: What is rsActor?**
 
-A1: `rsActor` is a lightweight, Tokio-based actor framework for Rust. It aims to provide a simple and easy-to-use solution for building concurrent applications using the actor model, focusing on local, in-process actor systems.
+A1: `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing a simple and efficient actor model for local, in-process systems. It emphasizes clean message-passing semantics and straightforward actor lifecycle management while maintaining high performance for Rust applications.
 
 **Q2: What are the main design goals or philosophy behind rsActor?**
 
-A2: The primary goal is simplicity and ease of use for in-process actor systems. It leverages Tokio for its asynchronous runtime and provides core actor primitives without extensive boilerplate or features typically found in larger, distributed actor systems.
+A2: The primary goals are simplicity and efficiency for in-process actor systems. It leverages Tokio for its asynchronous runtime and provides core actor primitives with minimal boilerplate. Key features include:
+*   **Type Safety**: Strong compile-time type safety through `ActorRef<T>`
+*   **Performance**: Zero-cost abstractions with efficient message passing
+*   **Simplicity**: Clean APIs with optional derive macros for reduced boilerplate
+*   **Observability**: Optional tracing support for production debugging
 
 **Q3: How does rsActor compare to other Rust actor frameworks like Actix or Kameo?**
 
 A3:
 *   **Scope:** `rsActor` is designed for local, in-process actors only and does not support remote actors or clustering, unlike some more comprehensive frameworks.
-*   **Simplicity:** It aims for a smaller API surface and less complexity compared to frameworks like Actix.
-*   **Features:** As mentioned in the `README.md`, compared to Kameo, `rsActor` uses a concrete `ActorRef` with runtime type checking for replies, does not include built-in actor linking or supervision, is tightly coupled with Tokio, and provides both `#[message_handlers]` macro and deprecated `impl_message_handler!` macro to simplify message handler boilerplate.
-*   **Error Handling:** Error handling is primarily through the framework's own `Result<T>` type (which uses `rsactor::Error`) and the `ActorResult` enum which indicates startup or runtime failures.
+*   **Simplicity:** It aims for a smaller API surface and less complexity compared to frameworks like Actix, with a focus on essential actor model features.
+*   **Type Safety:** Provides strong compile-time type safety through `ActorRef<T>` while maintaining flexibility.
+*   **Features:** Compared to Kameo, `rsActor` provides:
+    - Concrete `ActorRef<T>` with compile-time type safety
+    - Optional tracing support for production observability
+    - Straightforward lifecycle management with `on_start`, `on_run`, and `on_stop` hooks
+    - Both `#[message_handlers]` macro and manual `Message<T>` trait implementation
+*   **Error Handling:** Uses `ActorResult` enum to indicate startup or runtime failures with detailed error information and failure phases.
 
 ## Actor Definition and Usage
 
@@ -298,6 +307,9 @@ impl Message<AddUser> for UserManagerActor {
         Ok(user.id)
     }
 }
+
+// Use macro to implement MessageHandler trait (deprecated approach)
+impl_message_handler!(UserManagerActor, [Ping, AddUser, RemoveUser, GetUser]);
 ```
 
 Then you must also use the `impl_message_handler!` macro to register all the message types your actor can handle:
@@ -550,47 +562,9 @@ A17: `rsActor` does not have a built-in supervision system like some other actor
     }
     ```
 
-**Q18: How do I implement periodic tasks?**
+**Q18: How to communicate between actors?**
 
-A18: Periodic tasks are best implemented using the `on_run` method with Tokio's time utilities:
-
-```rust
-use tokio::time::{self, Duration, Interval};
-
-struct MyActor {
-    interval: Interval,
-    other_data: Vec<String>,
-}
-
-impl Actor for MyActor {
-    type Args = Duration;
-    type Error = anyhow::Error;
-
-    async fn on_start(interval_duration: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        let mut interval = time::interval(interval_duration);
-        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-
-        Ok(Self {
-            interval,
-            other_data: Vec::new(),
-        })
-    }
-
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
-        // Wait for the next interval tick
-        self.interval.tick().await;
-
-        // Perform periodic task
-        self.perform_work();
-
-        Ok(())
-    }
-}
-```
-
-**Q19: How to communicate between actors?**
-
-A19: Actors communicate by sending messages to each other:
+A18: Actors communicate by sending messages to each other:
 
 ```rust
 impl Message<ProcessOrder> for OrderProcessorActor {
@@ -627,9 +601,9 @@ impl Message<ProcessOrder> for OrderProcessorActor {
 }
 ```
 
-**Q20: How do I implement request-response patterns?**
+**Q19: How do I implement request-response patterns?**
 
-A20: The request-response pattern is built into `rsActor` through the `ask` method and `Message<T>::Reply` type:
+A19: The request-response pattern is built into `rsActor` through the `ask` method and `Message<T>::Reply` type:
 
 ```rust
 // Request message
@@ -659,9 +633,9 @@ async fn get_user_profile(
 }
 ```
 
-**Q21: How do I share actor references between actors?**
+**Q20: How do I share actor references between actors?**
 
-A21: Actor references can be shared by passing them during actor creation or via messages:
+A20: Actor references can be shared by passing them during actor creation or via messages:
 
 1.  **Via constructor arguments**:
     ```rust
@@ -707,9 +681,9 @@ A21: Actor references can be shared by passing them during actor creation or via
     coordinator_ref.tell(RegisterWorker { worker: worker_ref }).await?;
     ```
 
-**Q22: Can I use generics with actors?**
+**Q21: Can I use generics with actors?**
 
-A22: Yes, you can define generic actors. Here's an example using both the recommended `#[message_handlers]` approach and the manual approach:
+A21: Yes, you can define generic actors. Here's an example using both the recommended `#[message_handlers]` approach and the manual approach:
 
 ### Recommended Approach: Using `#[message_handlers]` Macro
 
@@ -881,9 +855,9 @@ With the generic syntax, you specify the generic constraints in square brackets,
 
 **Note:** The `#[message_handlers]` macro approach is recommended over `impl_message_handler!` as it provides better ergonomics and reduces boilerplate.
 
-**Q23: How can I effectively use the `on_run` method in my actors?**
+**Q22: How can I effectively use the `on_run` method in my actors?**
 
-A23: The `on_run` method is a key part of the actor lifecycle in the `rsActor` framework that enables an actor to perform its primary processing work. It is called after `on_start` completes and continues running throughout the actor's lifetime. Here's how to use it effectively:
+A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` framework that enables an actor to perform its primary processing work. It is called after `on_start` completes and continues running throughout the actor's lifetime. Here's how to use it effectively:
 
 *   **Actor Behavior Implementation:** The `on_run` method is where you implement the actor's primary behavior and processing logic. Following the actor model principles, this processing happens concurrently with message handling, allowing the actor to maintain its core responsibilities while remaining responsive to messages.
 
@@ -906,7 +880,7 @@ A23: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
     }
 
     // Use the intervals in on_run without loop
-    async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
         tokio::select! {
             _ = self.fast_interval.tick() => {
                 // Handle high-frequency tasks (every 500ms)
@@ -984,9 +958,9 @@ A23: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
     }
     ```
 
-**Q24: How do I handle backpressure in actors?**
+**Q23: How do I handle backpressure in actors?**
 
-A24: Backpressure is important to prevent overwhelming actors with more messages than they can process. `rsActor` provides several techniques:
+A23: Backpressure is important to prevent overwhelming actors with more messages than they can process. `rsActor` provides several techniques:
 
 1.  **Mailbox Capacity**:
     When spawning an actor, you can specify the mailbox size:
@@ -1043,7 +1017,7 @@ A24: Backpressure is important to prevent overwhelming actors with more messages
 
     // Actor side
     impl Message<ProcessItem> for ProcessingActor {
-        type Reply = (); // Acknowledgment
+        type Reply = ();
 
         async fn handle(&mut self, msg: ProcessItem, _actor_ref: &ActorRef<Self>) -> Self::Reply {
             self.process(msg.item);
@@ -1070,9 +1044,9 @@ A24: Backpressure is important to prevent overwhelming actors with more messages
     }
     ```
 
-**Q25: How does rsActor handle type safety for messages and actors?**
+**Q24: How does rsActor handle type safety for messages and actors?**
 
-A25: rsActor provides a comprehensive type safety system for actor messaging through two complementary approaches:
+A24: rsActor provides a comprehensive type safety system for actor messaging through two complementary approaches:
 
 1. **Compile-time Type Safety with `ActorRef<T>`**:
    - The primary actor reference type you'll use in most cases

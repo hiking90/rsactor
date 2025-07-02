@@ -1,0 +1,185 @@
+@startuml Error Handling
+title rsActor Error Handling Scenarios
+
+participant "Client" as Client
+participant "ActorRef<T>" as ActorRef
+participant "JoinHandle" as JoinHandle
+participant "Actor" as Actor
+participant "on_start()" as OnStart
+participant "on_run()" as OnRun
+participant "on_stop()" as OnStop
+
+== Scenario 1: Initialization Failure ==
+Client -> ActorRef: spawn(invalid_args)
+activate ActorRef
+ActorRef -> OnStart: Call on_start(invalid_args, &actor_ref)
+activate OnStart
+OnStart -> OnStart: Initialization fails (e.g., DB connection error)
+OnStart --> ActorRef: Err(InitializationError)
+deactivate OnStart
+ActorRef --> JoinHandle: ActorResult::Failed { phase: OnStart, actor: None, error, killed: false }
+deactivate ActorRef
+
+note right of JoinHandle
+  Initialization Failure:
+  - No actor instance created
+  - actor field is None
+  - phase is FailurePhase::OnStart
+  - killed is always false
+end note
+
+Client -> JoinHandle: await join_handle
+activate JoinHandle
+JoinHandle --> Client: ActorResult::Failed { phase: OnStart, actor: None, ... }
+deactivate JoinHandle
+
+== Scenario 2: Runtime Failure in on_run ==
+note over Actor: Actor is running normally
+Actor -> OnRun: Periodic on_run() call
+activate OnRun
+OnRun -> OnRun: Runtime error occurs (e.g., resource exhaustion)
+OnRun --> Actor: Err(RuntimeError)
+deactivate OnRun
+
+Actor -> OnStop: Call on_stop(&actor_weak, killed = false)
+activate OnStop
+OnStop --> Actor: Ok(()) [cleanup successful]
+deactivate OnStop
+
+Actor --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed: false }
+
+note right of JoinHandle
+  Runtime Failure:
+  - Actor instance available for inspection
+  - phase is FailurePhase::OnRun
+  - on_stop was called for cleanup
+  - killed is false (not a forced termination)
+end note
+
+== Scenario 3: Cleanup Failure in on_stop ==
+Client -> ActorRef: actor_ref.stop().await
+activate ActorRef
+ActorRef -> Actor: Send StopGracefully message
+Actor -> OnStop: Call on_stop(&actor_weak, killed = false)
+activate OnStop
+OnStop -> OnStop: Cleanup fails (e.g., file system error)
+OnStop --> Actor: Err(CleanupError)
+deactivate OnStop
+
+Actor --> JoinHandle: ActorResult::Failed { phase: OnStop, actor: Some(actor), error, killed: false }
+deactivate ActorRef
+
+note right of JoinHandle
+  Cleanup Failure:
+  - Actor instance available
+  - phase is FailurePhase::OnStop
+  - Original termination was graceful
+  - killed indicates termination type
+end note
+
+== Scenario 4: Multiple Error Handling ==
+Client -> ActorRef: spawn(args)
+activate ActorRef
+
+loop Error Recovery Pattern
+    ActorRef -> JoinHandle: await join_handle
+    activate JoinHandle
+
+    alt ActorResult::Failed
+        JoinHandle --> Client: Failed result with error details
+        deactivate JoinHandle
+
+        Client -> Client: Analyze failure phase and error
+
+        alt FailurePhase::OnStart
+            Client -> Client: Fix initialization parameters
+            Client -> ActorRef: spawn(corrected_args) [retry with fixes]
+        else FailurePhase::OnRun
+            Client -> Client: Handle runtime state if available
+            note right of Client
+              Runtime failures provide actor state:
+              - Can inspect final state
+              - Can recover partial work
+              - Can implement retry logic
+            end note
+            Client -> ActorRef: spawn(args) [optional restart]
+        else FailurePhase::OnStop
+            Client -> Client: Log cleanup failure
+            note right of Client
+              Cleanup failures are usually logged:
+              - Actor completed its work
+              - Only cleanup had issues
+              - May need manual cleanup
+            end note
+        end
+    else ActorResult::Completed
+        JoinHandle --> Client: Successful completion
+        deactivate JoinHandle
+        note right of Client: Normal completion - no error handling needed
+    end
+end
+
+deactivate ActorRef
+
+== Scenario 5: Message Handling Errors ==
+Client -> ActorRef: actor_ref.ask(problematic_message).await
+activate ActorRef
+
+ActorRef -> Actor: Process message in handler
+activate Actor
+
+note right of Actor
+  Message Handler Error Handling:
+  - Errors in handlers don't terminate actor
+  - Return error types in reply
+  - Actor continues processing other messages
+end note
+
+alt Handler Returns Error Reply
+    Actor --> ActorRef: Reply with error result
+    deactivate Actor
+    ActorRef --> Client: Error reply (actor still alive)
+else Handler Panics (should be avoided)
+    Actor -> Actor: Panic in handler
+    note right of Actor
+      Panics in handlers can terminate the actor task
+      Use proper error handling instead of panics
+    end note
+    Actor --> JoinHandle: Task panic -> ActorResult::Failed
+    ActorRef --> Client: Send error (channel closed)
+end
+
+deactivate ActorRef
+
+== Best Practices for Error Handling ==
+
+note over Client, OnStop
+  Error Handling Best Practices:
+
+  1. Initialization (on_start):
+     - Validate all required resources
+     - Use ? operator for early returns
+     - Provide meaningful error messages
+
+  2. Runtime (on_run):
+     - Handle recoverable errors gracefully
+     - Use timeouts for external operations
+     - Consider circuit breaker patterns
+
+  3. Cleanup (on_stop):
+     - Perform critical cleanup in Drop if needed
+     - Log but don't panic on cleanup failures
+     - Differentiate between graceful and forced termination
+
+  4. Message Handlers:
+     - Never panic in handlers
+     - Return error types in replies
+     - Use Result<T, E> for fallible operations
+
+  5. Client Code:
+     - Always check ActorResult from join handles
+     - Implement retry logic for recoverable failures
+     - Extract and use actor state when available
+end note
+
+@enduml

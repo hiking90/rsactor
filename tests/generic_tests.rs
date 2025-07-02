@@ -1,5 +1,5 @@
 // filepath: /Volumes/Workspace/rust/rsactor/tests/generic_tests.rs
-#![allow(deprecated)]
+// filepath: /Volumes/Workspace/rust/rsactor/tests/generic_tests.rs
 
 use anyhow::Result;
 use rsactor::{spawn, Actor, ActorRef, ActorResult, Message};

@@ -1,6 +1,6 @@
 # Tracing Support in rsActor
 
-rsActor provides comprehensive tracing support through the optional `tracing` feature, offering deep observability into actor behavior, message handling, and performance characteristics with structured logging through the `tracing` crate.
+rsActor provides comprehensive tracing support through the optional `tracing` feature, offering deep observability into actor behavior, message handling, and performance characteristics with structured logging through the [`tracing`](https://crates.io/crates/tracing) crate.
 
 ## Enabling Tracing
 
