@@ -1,7 +1,7 @@
 // Tests for the Actor derive macro (structs and enums)
 #![allow(deprecated)]
 
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Message};
+use rsactor::{spawn, Actor, ActorRef, Message};
 
 #[derive(Actor, Debug, PartialEq)]
 struct TestActor {
@@ -37,8 +37,6 @@ impl Message<SetValue> for TestActor {
         self.value = msg.0;
     }
 }
-
-impl_message_handler!(TestActor, [GetValue, GetName, SetValue]);
 
 #[tokio::test]
 async fn test_derive_actor_basic_functionality() {
@@ -120,8 +118,6 @@ impl Message<Ping> for UnitActor {
     }
 }
 
-impl_message_handler!(UnitActor, [Ping]);
-
 #[tokio::test]
 async fn test_derive_actor_unit_struct() {
     let (actor_ref, _join_handle) = spawn::<UnitActor>(UnitActor);
@@ -154,8 +150,6 @@ impl Message<GetSecond> for TupleActor {
         self.1
     }
 }
-
-impl_message_handler!(TupleActor, [GetFirst, GetSecond]);
 
 #[tokio::test]
 async fn test_derive_actor_tuple_struct() {
@@ -238,17 +232,6 @@ impl Message<GetCompletedValue> for StateActor {
         }
     }
 }
-
-impl_message_handler!(
-    StateActor,
-    [
-        GetState,
-        SetState,
-        IsIdle,
-        GetProcessingData,
-        GetCompletedValue
-    ]
-);
 
 #[tokio::test]
 async fn test_derive_actor_enum_basic() {
@@ -376,8 +359,6 @@ impl Message<TurnLeft> for DirectionActor {
         };
     }
 }
-
-impl_message_handler!(DirectionActor, [GetDirection, TurnRight, TurnLeft]);
 
 #[tokio::test]
 async fn test_derive_actor_simple_enum() {

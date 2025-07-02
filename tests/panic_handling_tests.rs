@@ -12,7 +12,7 @@
 
 use anyhow::Result;
 use log::info;
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, ActorWeak, Message};
+use rsactor::{spawn, Actor, ActorRef, ActorResult, ActorWeak, Message};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,11 +109,6 @@ impl Message<CounterResetMessage> for PanicTestActor {
         old_counter
     }
 }
-
-impl_message_handler!(
-    PanicTestActor,
-    [SafeMessage, PanicMessage, ErrorMessage, CounterResetMessage]
-);
 
 #[cfg(test)]
 mod tests {
@@ -413,8 +408,6 @@ mod advanced_tests {
         }
     }
 
-    impl_message_handler!(StartupPanicActor, []);
-
     #[test]
     async fn test_panic_during_on_start() {
         // This should cause spawn to panic
@@ -466,8 +459,6 @@ mod advanced_tests {
             Ok(())
         }
     }
-
-    impl_message_handler!(StopPanicActor, []);
 
     #[test]
     async fn test_panic_during_on_stop() -> Result<()> {
@@ -536,8 +527,6 @@ mod advanced_tests {
             let _ = actor_ref.kill();
         }
     }
-
-    impl_message_handler!(KillTestActor, [KillMessage]);
 
     #[test]
     async fn test_kill_vs_graceful_stop_with_panic() -> Result<()> {
@@ -754,8 +743,6 @@ mod integration_tests {
             }
         }
 
-        impl_message_handler!(ServiceActor, [WorkItem, GetStats]);
-
         let (actor_ref, join_handle) = spawn::<ServiceActor>(());
 
         // Process various work items
@@ -819,8 +806,6 @@ mod integration_tests {
                 self.id
             }
         }
-
-        impl_message_handler!(SimpleActor, [SimpleMsg]);
 
         // Create multiple actors
         let (actor1_ref, actor1_handle) = spawn::<SimpleActor>(1);

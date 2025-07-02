@@ -6,7 +6,7 @@ use log::debug;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, Identity, Message};
+use rsactor::{spawn, Actor, ActorRef, Identity, Message};
 
 // Initialize logger for tests with configurable level
 fn init_test_logger() {
@@ -82,8 +82,6 @@ impl Message<TestMessage> for DropTestActor {
         debug!("Completed processing message: {}", msg.content);
     }
 }
-
-impl_message_handler!(DropTestActor, [TestMessage]);
 
 #[tokio::test]
 async fn test_actor_ref_drop_terminates_actor_after_processing_messages() {

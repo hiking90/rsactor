@@ -104,7 +104,7 @@
 //! For cases where you need more control over message handling, you can manually implement the Message trait:
 //!
 //! ```rust
-//! use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn};
+//! use rsactor::{Actor, ActorRef, Message, spawn};
 //!
 //! // 1. Define your actor struct and derive Actor
 //! #[derive(Actor)]
@@ -131,10 +131,7 @@
 //!     }
 //! }
 //!
-//! // 3. Wire up message handlers
-//! impl_message_handler!(MyActor, [GetName, Increment]);
-//!
-//! // 4. Usage
+//! // 3. Usage
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let actor_instance = MyActor { name: "Test".to_string(), count: 0 };
@@ -338,14 +335,14 @@ use futures::FutureExt;
 // Re-export derive macro
 pub use rsactor_derive::{message_handlers, Actor};
 
-use std::{any::TypeId, fmt::Debug, future::Future, sync::OnceLock};
+use std::{fmt::Debug, future::Future, sync::atomic::AtomicU32, sync::OnceLock};
 
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Identity {
     /// Unique ID of the actor
-    pub id: TypeId,
+    pub id: u32,
     /// Type name of the actor
     pub type_name: &'static str,
 }
@@ -353,11 +350,8 @@ pub struct Identity {
 impl Identity {
     /// Creates a new `Identity` for the specified type T.
     /// This is a generic function that automatically infers the type ID and type name.
-    pub fn of<T: 'static>() -> Self {
-        Identity {
-            id: TypeId::of::<T>(),
-            type_name: std::any::type_name::<T>(),
-        }
+    pub fn new(id: u32, type_name: &'static str) -> Self {
+        Identity { id, type_name }
     }
 
     /// Returns a string representation of the actor's identity.
@@ -603,12 +597,19 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
         panic!("Mailbox capacity must be greater than 0");
     }
 
+    static ACTOR_IDS: AtomicU32 = AtomicU32::new(1);
+
+    let actor_id = Identity::new(
+        ACTOR_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        std::any::type_name::<T>(),
+    );
+
     let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
     // Create a dedicated channel for the Terminate signal with a small capacity (e.g., 1 or 2)
     // This ensures that a kill signal can be sent even if the main mailbox is full.
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
-    let actor_ref = ActorRef::new(mailbox_tx, terminate_tx); // Pass terminate_tx
+    let actor_ref = ActorRef::new(actor_id, mailbox_tx, terminate_tx); // Pass terminate_tx
 
     let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
         args,

@@ -68,6 +68,7 @@ use tracing::{debug as trace_debug, info, warn as trace_warn};
 /// - When you need type erasure for dynamic scenarios
 #[derive(Debug)]
 pub struct ActorRef<T: Actor> {
+    id: Identity, // Added identity field for actor identification
     sender: MailboxSender<T>,
     pub(crate) terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
 }
@@ -75,13 +76,20 @@ pub struct ActorRef<T: Actor> {
 impl<T: Actor> ActorRef<T> {
     /// Creates a new type-safe ActorRef from an UntypedActorRef.
     pub(crate) fn new(
+        id: Identity,
         sender: MailboxSender<T>,
         terminate_sender: mpsc::Sender<ControlSignal>,
     ) -> Self {
         ActorRef {
+            id,
             sender,
             terminate_sender,
         }
+    }
+
+    /// Returns the unique ID of the actor.
+    pub fn identity(&self) -> Identity {
+        self.id
     }
 
     /// Checks if the actor is still alive by verifying if its channels are open.
@@ -97,6 +105,7 @@ impl<T: Actor> ActorRef<T> {
     /// and optionally upgrade back to a strong [`ActorRef<T>`] without keeping the actor alive.
     pub fn downgrade(this: &Self) -> ActorWeak<T> {
         ActorWeak {
+            id: this.id, // Clone the Identity for type safety
             sender: this.sender.downgrade(),
             terminate_sender: this.terminate_sender.downgrade(),
         }
@@ -112,7 +121,7 @@ impl<T: Actor> ActorRef<T> {
         level = "debug",
         name = "actor_tell",
         fields(
-            actor_id = %Identity::of::<T>(),
+            actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>()
         ),
         skip(self, msg)
@@ -133,7 +142,7 @@ impl<T: Actor> ActorRef<T> {
 
         let result = if self.sender.send(envelope).await.is_err() {
             Err(Error::Send {
-                identity: Identity::of::<T>(), // Use Identity::of for type safety
+                identity: self.identity(), // Use Identity::of for type safety
                 details: "Mailbox channel closed".to_string(),
             })
         } else {
@@ -159,7 +168,7 @@ impl<T: Actor> ActorRef<T> {
         level = "debug",
         name = "actor_tell_with_timeout",
         fields(
-            actor_id = %Identity::of::<T>(),
+            actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
             timeout_ms = timeout.as_millis()
         ),
@@ -179,7 +188,7 @@ impl<T: Actor> ActorRef<T> {
         let result = tokio::time::timeout(timeout, self.tell(msg))
             .await
             .map_err(|_| Error::Timeout {
-                identity: Identity::of::<T>(), // Use Identity::of for type safety
+                identity: self.identity(),
                 timeout,
                 operation: "tell".to_string(),
             })?;
@@ -204,7 +213,7 @@ impl<T: Actor> ActorRef<T> {
         level = "debug",
         name = "actor_ask",
         fields(
-            actor_id = %Identity::of::<T>(),
+            actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
             reply_type = %std::any::type_name::<R>()
         ),
@@ -231,7 +240,7 @@ impl<T: Actor> ActorRef<T> {
             trace_warn!("Failed to send ask message: mailbox channel closed");
 
             return Err(Error::Send {
-                identity: Identity::of::<T>(), // Use Identity::of for type safety
+                identity: self.identity(),
                 details: "Mailbox channel closed".to_string(),
             });
         }
@@ -252,7 +261,7 @@ impl<T: Actor> ActorRef<T> {
                             "Ask reply type downcast failed"
                         );
                         Err(Error::Downcast {
-                            identity: Identity::of::<T>(),
+                            identity: self.identity(),
                             expected_type: std::any::type_name::<T::Reply>().to_string(),
                         })
                     }
@@ -262,7 +271,7 @@ impl<T: Actor> ActorRef<T> {
                 #[cfg(feature = "tracing")]
                 trace_warn!("Ask reply channel closed unexpectedly");
                 Err(Error::Receive {
-                    identity: Identity::of::<T>(),
+                    identity: self.identity(),
                     details: "Reply channel closed unexpectedly".to_string(),
                 })
             }
@@ -279,7 +288,7 @@ impl<T: Actor> ActorRef<T> {
         level = "debug",
         name = "actor_ask_with_timeout",
         fields(
-            actor_id = %Identity::of::<T>(),
+            actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
             reply_type = %std::any::type_name::<R>(),
             timeout_ms = timeout.as_millis()
@@ -301,8 +310,8 @@ impl<T: Actor> ActorRef<T> {
         let result = tokio::time::timeout(timeout, self.ask(msg))
             .await
             .map_err(|_| Error::Timeout {
-                identity: Identity::of::<T>(), // Added missing fields for consistency
-                timeout,                       // Added missing fields for consistency
+                identity: self.identity(),
+                timeout, // Added missing fields for consistency
                 operation: "ask".to_string(),
             })?;
 
@@ -325,11 +334,11 @@ impl<T: Actor> ActorRef<T> {
     )]
     pub fn kill(&self) -> Result<()> {
         #[cfg(feature = "tracing")]
-        info!(actor_id = %Identity::of::<T>(), "Killing actor");
+        info!(actor_id = %self.identify(), "Killing actor");
 
         debug!(
             "Attempting to send Terminate message to actor {} via dedicated channel using try_send",
-            Identity::of::<T>()
+            self.identity()
         );
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) {
@@ -342,7 +351,7 @@ impl<T: Actor> ActorRef<T> {
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // The channel is full. Since it has a capacity of 1,
                 // this means a Terminate message is already in the queue.
-                warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", Identity::of::<T>());
+                warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.identity());
                 #[cfg(feature = "tracing")]
                 trace_warn!(
                     "Kill signal not sent: terminate mailbox full, actor already terminating"
@@ -352,7 +361,7 @@ impl<T: Actor> ActorRef<T> {
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // The channel is closed, which implies the actor is already stopped or has finished processing.
-                warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", Identity::of::<T>());
+                warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.identity());
                 #[cfg(feature = "tracing")]
                 trace_warn!(
                     "Kill signal not sent: terminate mailbox closed, actor already stopped"
@@ -380,13 +389,13 @@ impl<T: Actor> ActorRef<T> {
         {
             Ok(_) => {
                 #[cfg(feature = "tracing")]
-                info!(actor_id = %Identity::of::<T>(), "Actor stop signal sent successfully");
+                info!(actor_id = %self.identity(), "Actor stop signal sent successfully");
                 Ok(())
             }
             Err(_) => {
                 // This error means the actor's mailbox channel is closed,
                 // which implies the actor is already stopping or has stopped.
-                warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", Identity::of::<T>());
+                warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", self.identity());
                 #[cfg(feature = "tracing")]
                 trace_warn!(
                     "Stop signal not sent: mailbox closed, actor already stopped or stopping"
@@ -404,7 +413,7 @@ impl<T: Actor> ActorRef<T> {
         level = "debug",
         name = "actor_tell_blocking",
         fields(
-            actor_id = %Identity::of::<T>(),
+            actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
             timeout_ms = timeout.map(|t| t.as_millis())
         ),
@@ -419,7 +428,7 @@ impl<T: Actor> ActorRef<T> {
         trace_debug!("Executing tell_blocking");
 
         let rt = Handle::try_current().map_err(|e| Error::Runtime {
-            identity: Identity::of::<T>(),
+            identity: self.identity(),
             details: format!("Failed to get Tokio runtime handle for tell_blocking: {e}"),
         })?;
 
@@ -427,7 +436,7 @@ impl<T: Actor> ActorRef<T> {
             Some(duration) => {
                 rt.block_on(tokio::time::timeout(duration, self.tell(msg)))
                     .map_err(|_| Error::Timeout {
-                        identity: Identity::of::<T>(),
+                        identity: self.identity(),
                         timeout: duration,
                         operation: "tell_blocking".to_string(),
                     })? // Flatten Result<Result<()>> to Result<()>
@@ -451,7 +460,7 @@ impl<T: Actor> ActorRef<T> {
         level = "debug",
         name = "actor_ask_blocking",
         fields(
-            actor_id = %Identity::of::<T>(),
+            actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
             reply_type = %std::any::type_name::<R>(),
             timeout_ms = timeout.map(|t| t.as_millis())
@@ -468,7 +477,7 @@ impl<T: Actor> ActorRef<T> {
         trace_debug!("Executing ask_blocking");
 
         let rt = Handle::try_current().map_err(|e| Error::Runtime {
-            identity: Identity::of::<T>(),
+            identity: self.identity(),
             details: format!("Failed to get Tokio runtime handle for ask_blocking: {e}"),
         })?;
 
@@ -476,7 +485,7 @@ impl<T: Actor> ActorRef<T> {
             Some(duration) => {
                 rt.block_on(tokio::time::timeout(duration, self.ask(msg)))
                     .map_err(|_| Error::Timeout {
-                        identity: Identity::of::<T>(),
+                        identity: self.identity(),
                         timeout: duration,
                         operation: "ask_blocking".to_string(),
                     })? // Flatten Result<Result<R>> to Result<R>
@@ -498,6 +507,7 @@ impl<T: Actor> Clone for ActorRef<T> {
     #[inline]
     fn clone(&self) -> Self {
         ActorRef {
+            id: self.id, // Clone the Identity
             sender: self.sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
         }
@@ -533,6 +543,7 @@ impl<T: Actor> Clone for ActorRef<T> {
 /// ```
 #[derive(Debug)]
 pub struct ActorWeak<T: Actor> {
+    id: Identity, // Added identity field for actor identification
     sender: tokio::sync::mpsc::WeakSender<MailboxMessage<T>>,
     terminate_sender: tokio::sync::mpsc::WeakSender<ControlSignal>,
 }
@@ -549,9 +560,14 @@ impl<T: Actor> ActorWeak<T> {
         let terminate_sender = self.terminate_sender.upgrade()?;
 
         Some(ActorRef {
+            id: self.id, // Use the stored Identity
             sender,
             terminate_sender,
         })
+    }
+
+    pub fn identity(&self) -> Identity {
+        self.id
     }
 
     /// Checks if the actor might still be alive.
@@ -572,6 +588,7 @@ impl<T: Actor> Clone for ActorWeak<T> {
     #[inline]
     fn clone(&self) -> Self {
         ActorWeak {
+            id: self.id, // Clone the Identity
             sender: self.sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
         }

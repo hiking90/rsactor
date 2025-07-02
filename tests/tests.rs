@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex; // Ensure 'log' crate is a dev-dependency or available
 
 use rsactor::{
-    impl_message_handler, set_default_mailbox_capacity, spawn, spawn_with_mailbox_capacity, Actor,
-    ActorRef, ActorResult, ActorWeak, Error, Identity, Message,
+    set_default_mailbox_capacity, spawn, spawn_with_mailbox_capacity, Actor, ActorRef, ActorResult,
+    ActorWeak, Error, Identity, Message,
 };
 
 // Test Actor Setup
@@ -86,11 +86,6 @@ impl Message<SlowMsg> for TestActor {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await // Sleep for 100ms
     }
 }
-
-impl_message_handler!(
-    TestActor,
-    [PingMsg, UpdateCounterMsg, GetCounterMsg, SlowMsg]
-);
 
 async fn setup_actor() -> (
     ActorRef<TestActor>,
@@ -290,56 +285,6 @@ async fn test_actor_ref_kill() {
     );
 }
 
-#[tokio::test]
-async fn test_ask_wrong_reply_type() {
-    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
-
-    let result = actor_ref
-        .untyped_actor_ref()
-        .ask::<PingMsg, i32>(PingMsg("hello".to_string()))
-        .await;
-    assert!(result.is_err());
-    if let Err(e) = result {
-        assert!(e.to_string().contains("Failed to downcast reply"));
-    }
-
-    actor_ref.stop().await.unwrap();
-    let _result = handle.await.unwrap();
-}
-
-#[tokio::test]
-async fn test_unhandled_message_type() {
-    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
-
-    struct UnhandledMsg; // Not in impl_message_handler! for TestActor
-
-    let result = actor_ref
-        .untyped_actor_ref()
-        .ask::<UnhandledMsg, ()>(UnhandledMsg)
-        .await;
-    assert!(result.is_err());
-    if let Err(e) = result {
-        assert!(e
-            .to_string()
-            .contains("received an unhandled message type."));
-    }
-
-    actor_ref.stop().await.unwrap();
-    // Actor panics with unhandled message, no need to call stop
-    let join_result = handle.await;
-    assert!(
-        join_result.is_err(),
-        "Expected actor to panic with unhandled message"
-    );
-    if let Err(join_error) = join_result {
-        assert!(
-            join_error.is_panic(),
-            "The join error should be caused by a panic"
-        );
-    }
-    // We don't assert on_stop_called since the actor panics before on_stop can be called
-}
-
 // Test actor lifecycle errors
 struct LifecycleErrorArgs {
     fail_on_start: bool,
@@ -411,7 +356,6 @@ impl Message<NoOpMsg> for LifecycleErrorActor {
     type Reply = ();
     async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef<Self>) -> Self::Reply {}
 }
-impl_message_handler!(LifecycleErrorActor, [NoOpMsg]);
 
 #[tokio::test]
 async fn test_actor_fail_on_start() {
@@ -544,7 +488,6 @@ impl Message<PanicMsg> for PanicActor {
         panic!("Simulated panic in message handler");
     }
 }
-impl_message_handler!(PanicActor, [PanicMsg]);
 
 // Actor with String as Error type
 struct StringErrorActor {
@@ -576,8 +519,6 @@ impl Message<SimpleMsg> for StringErrorActor {
         "SimpleMsg processed".to_string()
     }
 }
-
-impl_message_handler!(StringErrorActor, [SimpleMsg]);
 
 #[tokio::test]
 async fn test_actor_panic_in_message_handler() {
@@ -670,9 +611,6 @@ impl Actor for DummyActor {
         Ok(DummyActor)
     }
 }
-
-// Even if the actor handles no messages, impl_message_handler is needed
-impl_message_handler!(DummyActor, []); // Assuming this is valid for no messages
 
 #[tokio::test]
 async fn test_spawn_and_stop_dummy_actor() {
@@ -1143,454 +1081,6 @@ impl Message<CompatibleMsg> for IncompatibleMessageTestActor {
         let mut messages = self.messages_received.lock().await;
         messages.push(format!("CompatibleMsg: {}", msg.0));
         format!("Handled: {}", msg.0)
-    }
-}
-
-// Only implement handler for CompatibleMsg - other messages will be incompatible
-impl_message_handler!(IncompatibleMessageTestActor, [CompatibleMsg]);
-
-// Define incompatible message types (not in the message handler)
-#[derive(Debug)]
-struct IncompatibleMsg1;
-
-#[derive(Debug)]
-struct IncompatibleMsg2 {
-    _data: String,
-    _value: u64,
-}
-
-#[derive(Debug)]
-struct IncompatibleMsg3;
-
-#[tokio::test]
-async fn test_untyped_actor_ref_tell_incompatible_message_single() {
-    let messages_received = Arc::new(Mutex::new(Vec::new()));
-    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
-
-    // First, verify that compatible messages work
-    let result = actor_ref
-        .untyped_actor_ref()
-        .tell(CompatibleMsg("test".to_string()))
-        .await;
-    assert!(result.is_ok(), "Compatible message should succeed");
-
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-    // Now send an incompatible message via UntypedActorRef.tell
-    let result = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
-
-    // The tell operation itself should succeed (message sent to mailbox)
-    assert!(
-        result.is_ok(),
-        "Tell operation should succeed even with incompatible message"
-    );
-
-    // Give the actor time to process the incompatible message
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Check that compatible message was processed
-    let messages = messages_received.lock().await;
-    assert_eq!(
-        messages.len(),
-        1,
-        "Only the compatible message should have been processed"
-    );
-    assert!(
-        messages[0].contains("CompatibleMsg: test"),
-        "Compatible message should be processed"
-    );
-    drop(messages);
-
-    // The actor should panic in debug mode when handling the incompatible message
-    let join_result = handle.await;
-
-    #[cfg(debug_assertions)]
-    {
-        // In debug mode, the actor should panic with unhandled message
-        assert!(
-            join_result.is_err(),
-            "Expected actor to panic with incompatible message in debug mode"
-        );
-        if let Err(join_error) = join_result {
-            assert!(
-                join_error.is_panic(),
-                "The join error should be caused by a panic in debug mode"
-            );
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        // In release mode, the actor continues running despite unhandled message
-        // We need to stop it manually
-        let _ = actor_ref.stop().await;
-        let result = join_result.expect("Actor should complete in release mode");
-        // The actor should complete normally in release mode
-        assert!(
-            result.is_completed() || result.is_stop_failed(),
-            "Actor should complete or fail gracefully in release mode"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_untyped_actor_ref_tell_multiple_incompatible_messages() {
-    let messages_received = Arc::new(Mutex::new(Vec::new()));
-    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
-
-    // Send multiple incompatible messages via UntypedActorRef.tell
-    let result1 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
-    let result2 = actor_ref
-        .untyped_actor_ref()
-        .tell(IncompatibleMsg2 {
-            _data: "test".to_string(),
-            _value: 456,
-        })
-        .await;
-    let result3 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg3).await;
-
-    // All tell operations should succeed (messages sent to mailbox)
-    assert!(result1.is_ok(), "First incompatible tell should succeed");
-    assert!(result2.is_ok(), "Second incompatible tell should succeed");
-    assert!(result3.is_ok(), "Third incompatible tell should succeed");
-
-    // Give the actor time to process messages
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    // No messages should have been processed (all incompatible)
-    let messages = messages_received.lock().await;
-    assert_eq!(
-        messages.len(),
-        0,
-        "No incompatible messages should have been processed"
-    );
-    drop(messages);
-
-    // The actor should panic in debug mode when handling the first incompatible message
-    let join_result = handle.await;
-
-    #[cfg(debug_assertions)]
-    {
-        // In debug mode, the actor should panic with the first unhandled message
-        assert!(
-            join_result.is_err(),
-            "Expected actor to panic with incompatible messages in debug mode"
-        );
-        if let Err(join_error) = join_result {
-            assert!(
-                join_error.is_panic(),
-                "The join error should be caused by a panic in debug mode"
-            );
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        // In release mode, the actor continues running despite unhandled messages
-        let _ = actor_ref.stop().await;
-        let result = join_result.expect("Actor should complete in release mode");
-        assert!(
-            result.is_completed() || result.is_stop_failed(),
-            "Actor should complete or fail gracefully in release mode"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_untyped_actor_ref_tell_mixed_compatible_incompatible_messages() {
-    let messages_received = Arc::new(Mutex::new(Vec::new()));
-    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
-
-    // Send a mix of compatible and incompatible messages
-    let result1 = actor_ref
-        .untyped_actor_ref()
-        .tell(CompatibleMsg("first".to_string()))
-        .await;
-    let result2 = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
-    let result3 = actor_ref
-        .untyped_actor_ref()
-        .tell(CompatibleMsg("second".to_string()))
-        .await;
-
-    // All tell operations should succeed (messages sent to mailbox)
-    assert!(result1.is_ok(), "First compatible tell should succeed");
-    assert!(result2.is_ok(), "Incompatible tell should succeed");
-    assert!(result3.is_ok(), "Second compatible tell should succeed");
-
-    // Give the actor time to process messages
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Check processed messages
-    let messages = messages_received.lock().await;
-
-    #[cfg(debug_assertions)]
-    {
-        // In debug mode, actor panics on first incompatible message
-        // So only the first compatible message should be processed
-        assert_eq!(
-            messages.len(),
-            1,
-            "Only first compatible message should be processed before panic"
-        );
-        assert!(
-            messages[0].contains("CompatibleMsg: first"),
-            "First compatible message should be processed"
-        );
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        // In release mode, incompatible messages are logged but actor continues
-        // Both compatible messages should be processed
-        assert!(
-            messages.len() >= 1,
-            "At least the first compatible message should be processed"
-        );
-        assert!(
-            messages[0].contains("CompatibleMsg: first"),
-            "First compatible message should be processed"
-        );
-
-        // The second compatible message might also be processed depending on timing
-        if messages.len() > 1 {
-            assert!(
-                messages[1].contains("CompatibleMsg: second"),
-                "Second compatible message should be processed if reached"
-            );
-        }
-    }
-    drop(messages);
-
-    // Handle actor completion based on build mode
-    let join_result = handle.await;
-
-    #[cfg(debug_assertions)]
-    {
-        // In debug mode, the actor should panic with the incompatible message
-        assert!(
-            join_result.is_err(),
-            "Expected actor to panic with incompatible message in debug mode"
-        );
-        if let Err(join_error) = join_result {
-            assert!(
-                join_error.is_panic(),
-                "The join error should be caused by a panic in debug mode"
-            );
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        // In release mode, stop the actor manually
-        let _ = actor_ref.stop().await;
-        let result = join_result.expect("Actor should complete in release mode");
-        assert!(
-            result.is_completed() || result.is_stop_failed(),
-            "Actor should complete or fail gracefully in release mode"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_untyped_actor_ref_tell_incompatible_after_stop() {
-    let messages_received = Arc::new(Mutex::new(Vec::new()));
-    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
-
-    // Send a compatible message first
-    let result = actor_ref
-        .untyped_actor_ref()
-        .tell(CompatibleMsg("before_stop".to_string()))
-        .await;
-    assert!(result.is_ok(), "Compatible message should succeed");
-
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-    // Stop the actor
-    actor_ref.stop().await.expect("Stop should succeed");
-
-    // Wait for actor to stop
-    let result = handle.await.expect("Actor should stop normally");
-    assert!(result.stopped_normally(), "Actor should stop normally");
-
-    // Try to send incompatible message to stopped actor
-    let result = actor_ref.untyped_actor_ref().tell(IncompatibleMsg1).await;
-
-    // This should fail because the actor is stopped
-    assert!(result.is_err(), "Tell to stopped actor should fail");
-    if let Err(e) = result {
-        assert!(
-            e.to_string().contains("Mailbox channel closed")
-                || e.to_string().contains("Failed to send message"),
-            "Error should indicate mailbox is closed, got: {e}"
-        );
-    }
-
-    // Verify only the compatible message was processed
-    let messages = messages_received.lock().await;
-    assert_eq!(
-        messages.len(),
-        1,
-        "Only the compatible message before stop should be processed"
-    );
-    assert!(
-        messages[0].contains("CompatibleMsg: before_stop"),
-        "Compatible message should be processed"
-    );
-}
-
-#[tokio::test]
-async fn test_untyped_actor_ref_ask_incompatible_message_error_handling() {
-    let messages_received = Arc::new(Mutex::new(Vec::new()));
-    let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
-
-    // Test ask with incompatible message - this should return an error immediately
-    let ask_result = actor_ref
-        .untyped_actor_ref()
-        .ask::<IncompatibleMsg1, String>(IncompatibleMsg1)
-        .await;
-
-    // ask should return an UnhandledMessageType error
-    assert!(
-        ask_result.is_err(),
-        "Ask with incompatible message should return error"
-    );
-    if let Err(e) = ask_result {
-        assert!(
-            e.to_string().contains("received an unhandled message type"),
-            "Ask error should indicate unhandled message type, got: {e}"
-        );
-    }
-
-    // No messages should have been processed
-    let messages = messages_received.lock().await;
-    assert_eq!(
-        messages.len(),
-        0,
-        "No incompatible messages should be processed"
-    );
-    drop(messages);
-
-    // Clean up - handle actor termination based on build mode
-    let join_result = handle.await;
-
-    #[cfg(debug_assertions)]
-    {
-        // In debug mode, actor should panic when processing the ask message
-        assert!(
-            join_result.is_err(),
-            "Expected actor to panic in debug mode"
-        );
-        if let Err(join_error) = join_result {
-            assert!(
-                join_error.is_panic(),
-                "Should be a panic error in debug mode"
-            );
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        // In release mode, stop the actor manually
-        let _ = actor_ref.stop().await;
-        let result = join_result.expect("Actor should complete in release mode");
-        assert!(
-            result.is_completed() || result.is_stop_failed(),
-            "Actor should complete gracefully in release mode"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_untyped_actor_ref_tell_vs_ask_behavior_comparison() {
-    // Test 1: tell with incompatible message
-    {
-        let messages_received = Arc::new(Mutex::new(Vec::new()));
-        let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
-
-        // Test tell with incompatible message - this should succeed in sending
-        let tell_result = actor_ref
-            .untyped_actor_ref()
-            .tell(IncompatibleMsg2 {
-                _data: "tell_test".to_string(),
-                _value: 222,
-            })
-            .await;
-
-        // tell should succeed in sending the message to the mailbox
-        assert!(
-            tell_result.is_ok(),
-            "Tell with incompatible message should succeed in sending"
-        );
-
-        // Give some time for processing
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        // No messages should have been processed
-        let messages = messages_received.lock().await;
-        assert_eq!(
-            messages.len(),
-            0,
-            "No incompatible messages should be processed"
-        );
-        drop(messages);
-
-        // Clean up
-        let join_result = handle.await;
-
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                join_result.is_err(),
-                "Expected actor to panic in debug mode"
-            );
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            let _ = actor_ref.stop().await;
-            let _ = join_result.expect("Actor should complete in release mode");
-        }
-    }
-
-    // Test 2: ask with incompatible message (separate actor instance)
-    {
-        let messages_received = Arc::new(Mutex::new(Vec::new()));
-        let (actor_ref, handle) = spawn::<IncompatibleMessageTestActor>(messages_received.clone());
-
-        // Test ask with incompatible message - this should return an error
-        let ask_result = actor_ref
-            .untyped_actor_ref()
-            .ask::<IncompatibleMsg1, String>(IncompatibleMsg1)
-            .await;
-
-        // ask should return an UnhandledMessageType error
-        assert!(
-            ask_result.is_err(),
-            "Ask with incompatible message should return error"
-        );
-        if let Err(e) = ask_result {
-            assert!(
-                e.to_string().contains("received an unhandled message type"),
-                "Ask error should indicate unhandled message type, got: {e}"
-            );
-        }
-
-        // Clean up
-        let join_result = handle.await;
-
-        #[cfg(debug_assertions)]
-        {
-            assert!(
-                join_result.is_err(),
-                "Expected actor to panic in debug mode"
-            );
-        }
-
-        #[cfg(not(debug_assertions))]
-        {
-            let _ = actor_ref.stop().await;
-            let _ = join_result.expect("Actor should complete in release mode");
-        }
     }
 }
 

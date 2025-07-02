@@ -2,7 +2,7 @@
 #![allow(deprecated)]
 
 use anyhow::Result;
-use rsactor::{impl_message_handler, spawn, Actor, ActorRef, ActorResult, Message};
+use rsactor::{spawn, Actor, ActorRef, ActorResult, Message};
 use std::fmt::Debug;
 
 // ---- Generic Actor Definition ----
@@ -76,10 +76,6 @@ impl<T: Send + Debug + Clone + 'static> Message<ClearValue> for GenericActor<T> 
         self.data = None;
     }
 }
-
-// ---- impl_message_handler Macro ----
-// Generic implementation using the new macro
-impl_message_handler!([T: Send + Debug + Clone + 'static] for GenericActor<T>, [SetValue<T>, GetValue, ClearValue]);
 
 // ---- Test Cases ----
 #[cfg(test)]
@@ -396,13 +392,6 @@ impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Messa
     }
 }
 
-// impl_message_handler for BiGenericActor with multiple generic types
-impl_message_handler!(
-    [K: Send + Debug + Clone + 'static,
-     V: Send + Debug + Clone + 'static]
-    for BiGenericActor<K, V>,
-    [SetKeyValue<K, V>, GetKey, GetValueFromBi, ClearBoth]);
-
 // Example 2: Actor with three generic types and complex constraints
 #[derive(Debug)]
 struct TriGenericActor<T, U, W>
@@ -536,13 +525,6 @@ where
     }
 }
 
-// impl_message_handler for TriGenericActor with complex generic constraints
-impl_message_handler!([T: Send + Debug + Clone + Default + 'static,
-                       U: Send + Debug + Clone + PartialEq + 'static,
-                       W: Send + Debug + Clone + ToString + 'static]
-                     for TriGenericActor<T, U, W>,
-                     [SetT<T>, SetU<U>, SetW<W>, GetAll, CompareU<U>, GetWAsString]);
-
 // Example 3: Generic actor with associated types constraints
 pub trait Serializable: Send + Debug + Clone + 'static {
     type Output: Send + Debug + Clone + 'static;
@@ -627,8 +609,3 @@ impl<T: Serializable> Message<GetOriginal> for SerializableActor<T> {
         self.data.clone()
     }
 }
-
-// impl_message_handler for SerializableActor with trait constraints
-impl_message_handler!([T: Serializable]
-                     for SerializableActor<T>,
-                     [SetSerializable<T>, GetSerialized, GetOriginal]);

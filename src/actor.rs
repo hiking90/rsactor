@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::actor_ref::ActorRef;
-use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, Identity, MailboxMessage};
+use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage};
 use log::{debug, error};
 use std::{fmt::Debug, future::Future, time::Duration};
 use tokio::sync::mpsc;
@@ -87,7 +87,7 @@ pub trait Actor: Sized + Send + 'static {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
+    /// use rsactor::{Actor, ActorRef, Message, spawn, ActorResult};
     /// use std::time::Duration;
     /// use anyhow::Result;
     ///
@@ -107,9 +107,6 @@ pub trait Actor: Sized + Send + 'static {
     ///         Ok(Self { name })
     ///     }
     /// }
-    ///
-    /// // Register message handlers
-    /// impl_message_handler!(SimpleActor, []);
     ///
     /// // Main function showing the basic lifecycle
     /// #[tokio::main]
@@ -188,7 +185,7 @@ pub trait Actor: Sized + Send + 'static {
     ///    would typically involve a single tick of an interval. The `Interval` itself
     ///    should be stored as a field in the actor\'s struct to persist across `on_run` invocations.
     ///    ```rust,no_run
-    ///    # use rsactor::{Actor, ActorRef, ActorWeak, Message, impl_message_handler, spawn};
+    ///    # use rsactor::{Actor, ActorRef, ActorWeak, Message, spawn};
     ///    # use anyhow::Result;
     ///    # use std::time::Duration;
     ///    # use tokio::time::{Interval, MissedTickBehavior};
@@ -366,8 +363,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     mut receiver: mpsc::Receiver<MailboxMessage<T>>,
     mut terminate_receiver: mpsc::Receiver<ControlSignal>,
 ) -> ActorResult<T> {
-    let actor_id = Identity::of::<T>();
-
+    let actor_id = actor_ref.identity();
     let mut actor = match T::on_start(args, &actor_ref).await {
         Ok(actor) => {
             debug!("Actor {actor_id} on_start completed successfully.");
