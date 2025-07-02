@@ -5,6 +5,10 @@ use crate::Actor;
 use std::fmt::Debug;
 
 /// Represents the phase during which an actor failure occurred.
+///
+/// This enum is used to identify which lifecycle method of an actor
+/// caused a failure, enabling more precise error handling and debugging.
+/// Each phase corresponds to a specific method in the [`Actor`](crate::Actor) trait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePhase {
     /// Actor failed during the [`on_start`](crate::Actor::on_start) lifecycle hook.
@@ -15,6 +19,10 @@ pub enum FailurePhase {
     OnStop,
 }
 
+/// Implements Display for FailurePhase to provide human-readable error messages.
+///
+/// This allows `FailurePhase` to be easily converted to strings for logging,
+/// error reporting, and debugging purposes.
 impl std::fmt::Display for FailurePhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -37,6 +45,76 @@ impl std::fmt::Display for FailurePhase {
 /// - The phase in which a failure occurred (if applicable)
 /// - The actor instance itself (if recoverable)
 /// - The error that caused a failure (if applicable)
+///
+/// # Usage Patterns
+///
+/// ## Basic Error Handling
+/// ```rust,no_run
+/// # use rsactor::{Actor, ActorRef, spawn, ActorResult};
+/// # use anyhow::Result;
+/// # struct MyActor;
+/// # impl Actor for MyActor {
+/// #     type Args = ();
+/// #     type Error = anyhow::Error;
+/// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self> { Ok(MyActor) }
+/// # }
+/// # async fn example() -> Result<()> {
+/// let (actor_ref, join_handle) = spawn::<MyActor>(());
+///
+/// match join_handle.await? {
+///     ActorResult::Completed { actor, killed } => {
+///         println!("Actor completed successfully, killed: {}", killed);
+///         // Use the recovered actor instance
+///     }
+///     ActorResult::Failed { error, phase, .. } => {
+///         eprintln!("Actor failed in phase {:?}: {}", phase, error);
+///         // Handle the error appropriately
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// ## Actor Supervision
+/// ```rust,no_run
+/// # use rsactor::{Actor, ActorRef, spawn, ActorResult, FailurePhase};
+/// # use anyhow::Result;
+/// # struct MyActor;
+/// # impl Actor for MyActor {
+/// #     type Args = ();
+/// #     type Error = anyhow::Error;
+/// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self> { Ok(MyActor) }
+/// # }
+/// # async fn restart_actor() -> Result<(ActorRef<MyActor>, tokio::task::JoinHandle<ActorResult<MyActor>>)> {
+/// #     Ok(spawn::<MyActor>(()))
+/// # }
+/// # async fn supervision_example() -> Result<()> {
+/// let (actor_ref, join_handle) = spawn::<MyActor>(());
+///
+/// match join_handle.await? {
+///     result if result.is_startup_failed() => {
+///         // Actor failed to start - may need different initialization
+///         eprintln!("Startup failed, checking configuration...");
+///     }
+///     result if result.is_runtime_failed() => {
+///         // Runtime failure - restart the actor
+///         if let Some(actor) = result.into_actor() {
+///             println!("Restarting actor after runtime failure...");
+///             let (new_ref, new_handle) = restart_actor().await?;
+///         }
+///     }
+///     result if result.was_killed() => {
+///         // Actor was forcefully terminated
+///         println!("Actor was killed - no restart needed");
+///     }
+///     _ => {
+///         // Normal completion
+///         println!("Actor completed normally");
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// This enum is typically returned by actor supervision systems or when awaiting the
 /// completion of an actor's task.
@@ -175,6 +253,26 @@ impl<T: Actor> ActorResult<T> {
     ///
     /// If the failure occurred during the [`on_start`](crate::Actor::on_start) phase, this will return `None`
     /// since the actor was not successfully initialized.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rsactor::{ActorResult, Actor, ActorRef};
+    /// # struct MyActor;
+    /// # impl Actor for MyActor {
+    /// #     type Args = ();
+    /// #     type Error = anyhow::Error;
+    /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> { Ok(MyActor) }
+    /// # }
+    /// # fn example(result: ActorResult<MyActor>) {
+    /// if let Some(actor) = result.actor() {
+    ///     // Actor instance is available - can inspect its state
+    ///     println!("Actor instance recovered");
+    /// } else {
+    ///     // Actor failed during initialization
+    ///     println!("Actor not available (startup failure)");
+    /// }
+    /// # }
+    /// ```
     pub fn actor(&self) -> Option<&T> {
         match self {
             ActorResult::Completed { actor, .. } => Some(actor),
@@ -186,6 +284,25 @@ impl<T: Actor> ActorResult<T> {
     ///
     /// This method is similar to [`actor()`](ActorResult::actor()) but it consumes the `ActorResult`,
     /// giving ownership of the actor to the caller if available.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rsactor::{ActorResult, Actor, ActorRef};
+    /// # struct MyActor { state: String }
+    /// # impl Actor for MyActor {
+    /// #     type Args = ();
+    /// #     type Error = anyhow::Error;
+    /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+    /// #         Ok(MyActor { state: "ready".to_string() })
+    /// #     }
+    /// # }
+    /// # fn example(result: ActorResult<MyActor>) {
+    /// if let Some(actor) = result.into_actor() {
+    ///     // Take ownership of the actor for reuse or state inspection
+    ///     println!("Actor final state: {}", actor.state);
+    /// }
+    /// # }
+    /// ```
     pub fn into_actor(self) -> Option<T> {
         match self {
             ActorResult::Completed { actor, .. } => Some(actor),
@@ -234,6 +351,25 @@ impl<T: Actor> ActorResult<T> {
     ///
     /// This transforms the `ActorResult<T>` into a `Result<T, T::Error>`,
     /// which is useful for integrating with Rust's standard error handling patterns.
+    ///
+    /// **Note**: This method discards information about whether the actor was killed
+    /// and the failure phase. Use the individual query methods if you need this information.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rsactor::{ActorResult, Actor, ActorRef};
+    /// # struct MyActor;
+    /// # impl Actor for MyActor {
+    /// #     type Args = ();
+    /// #     type Error = anyhow::Error;
+    /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> { Ok(MyActor) }
+    /// # }
+    /// # fn example(result: ActorResult<MyActor>) -> Result<MyActor, anyhow::Error> {
+    /// // Convert to standard Result for use with ? operator
+    /// let actor = result.to_result()?;
+    /// Ok(actor)
+    /// # }
+    /// ```
     pub fn to_result(self) -> std::result::Result<T, T::Error> {
         match self {
             ActorResult::Completed { actor, .. } => Ok(actor),

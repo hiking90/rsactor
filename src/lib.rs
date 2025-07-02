@@ -323,7 +323,7 @@ mod actor;
 pub use actor::{Actor, Message};
 
 use futures::FutureExt;
-// Re-export derive macro
+// Re-export derive macros for convenient access
 pub use rsactor_derive::{message_handlers, Actor};
 
 use std::{fmt::Debug, future::Future, sync::atomic::AtomicU32, sync::OnceLock};
@@ -339,13 +339,12 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Creates a new `Identity` for the specified type T.
-    /// This is a generic function that automatically infers the type ID and type name.
+    /// Creates a new `Identity` with the given ID and type name.
     pub fn new(id: u32, type_name: &'static str) -> Self {
         Identity { id, type_name }
     }
 
-    /// Returns a string representation of the actor's identity.
+    /// Returns the type name of the actor.
     pub fn name(&self) -> &'static str {
         self.type_name
     }
@@ -357,12 +356,21 @@ impl std::fmt::Display for Identity {
     }
 }
 
-/// Type-erased payload handler trait that can be used with dynamic dispatch
+/// Type-erased payload handler trait for dynamic message dispatch.
+///
+/// This trait allows different message types to be handled uniformly within the actor system,
+/// enabling storage of various message types in the same mailbox while preserving type safety
+/// through the `Message` trait implementation.
 trait PayloadHandler<A>: Send
 where
     A: Actor,
 {
-    /// Process the message payload and return a result
+    /// Handles the message by calling the appropriate handler and optionally sending a reply.
+    ///
+    /// # Parameters
+    /// - `actor`: Mutable reference to the actor instance
+    /// - `actor_ref`: Reference to the actor for potential self-messaging
+    /// - `reply_channel`: Optional channel to send the result back for `ask` operations
     fn handle_message(
         self: Box<Self>,
         actor: &mut A,
@@ -399,11 +407,10 @@ where
                         #[cfg(feature = "tracing")]
                         tracing::error!(
                             actor = %actor_ref.identity(),
-                            error = ?e,
-                            "Failed to send reply"
+                            "Failed to send reply - receiver dropped"
                         );
                         log::error!(
-                            "Failed to send reply for actor {}: {}",
+                            "Failed to send reply for actor {}: {} - receiver dropped",
                             std::any::type_name::<A>(),
                             std::any::type_name::<T>()
                         );
@@ -424,33 +431,41 @@ pub(crate) enum MailboxMessage<T>
 where
     T: Actor + 'static,
 {
-    // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
     /// A user-defined message to be processed by the actor.
     Envelope {
-        /// The message payload.
+        /// The message payload containing the actual message data.
         payload: Box<dyn PayloadHandler<T>>,
-        /// A channel to send the reply back to the caller. Optional for 'tell' operations.
+        /// Optional channel to send the reply back to the caller (used for `ask` operations).
         reply_channel: Option<oneshot::Sender<Box<dyn std::any::Any + Send>>>,
-        actor_ref: ActorRef<T>, // The actor reference that sent the message
+        /// The actor reference for potential self-messaging or context.
+        actor_ref: ActorRef<T>,
     },
-    // Terminate is removed from here
     /// A signal for the actor to stop gracefully after processing existing messages in its mailbox.
-    #[allow(dead_code)] // To avoid dropping ActorRef until StopGracefully is delivered.
+    ///
+    /// The contained `ActorRef<T>` prevents the actor from being dropped until this message is processed.
+    #[allow(dead_code)]
     StopGracefully(ActorRef<T>),
 }
 
-/// Represents control signals that can be sent to an actor.
+/// Control signals sent through a dedicated high-priority channel.
+///
+/// These signals are processed with higher priority than regular mailbox messages
+/// to ensure timely actor termination even when the mailbox is full.
 #[derive(Debug)]
 pub(crate) enum ControlSignal {
-    // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
-    /// A signal for the actor to terminate immediately.
+    /// A signal for the actor to terminate immediately without processing remaining mailbox messages.
     Terminate,
 }
 
-// Type alias for the sender part of the actor's mailbox channel.
-pub(crate) type MailboxSender<T> = mpsc::Sender<MailboxMessage<T>>; // This needs to be pub(crate) or pub for actor_ref.rs to use it, or moved.
+/// Type alias for the sender side of an actor's mailbox channel.
+///
+/// This is used by `ActorRef` to send messages to the actor's mailbox.
+pub(crate) type MailboxSender<T> = mpsc::Sender<MailboxMessage<T>>;
 
-// Global configuration for the default mailbox capacity.
+/// Global configuration for the default mailbox capacity.
+///
+/// This value can be set once using `set_default_mailbox_capacity()` and will be used
+/// by the `spawn()` function when no specific capacity is provided.
 static CONFIGURED_DEFAULT_MAILBOX_CAPACITY: OnceLock<usize> = OnceLock::new();
 
 /// The default mailbox capacity for actors.
@@ -512,11 +527,13 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
     );
 
     let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
-    // Create a dedicated channel for the Terminate signal with a small capacity (e.g., 1 or 2)
-    // This ensures that a kill signal can be sent even if the main mailbox is full.
-    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1); // Changed type
 
-    let actor_ref = ActorRef::new(actor_id, mailbox_tx, terminate_tx); // Pass terminate_tx
+    // Create a dedicated high-priority channel for terminate signals.
+    // This ensures that kill signals can be sent even when the main mailbox is full,
+    // allowing for immediate actor termination regardless of mailbox state.
+    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
+
+    let actor_ref = ActorRef::new(actor_id, mailbox_tx, terminate_tx);
 
     let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
         args,

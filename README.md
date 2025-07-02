@@ -133,7 +133,7 @@ impl CounterActor {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let actor = CounterActor { count: 0 };
-    let (actor_ref, _join_handle) = rsactor::spawn::<CounterActor>(actor);
+    let (actor_ref, _join_handle) = spawn::<CounterActor>(actor);
 
     actor_ref.tell(Increment).await?;
     let count = actor_ref.ask(GetCount).await?;
@@ -144,9 +144,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### Option B: Complex Initialization with Custom Actor Implementation
+#### Option B: Custom Actor Implementation with Initialization Arguments
 
-For actors that need complex initialization logic with custom Actor trait implementation:
+For actors that need custom initialization logic with the Actor trait:
 
 ```rust
 use rsactor::{Actor, ActorRef, message_handlers, spawn};
@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
 
     info!("Creating CounterActor");
 
-    let (actor_ref, join_handle) = spawn::<CounterActor>(0u32); // Pass initial count
+    let (actor_ref, join_handle) = spawn::<CounterActor>(0u32); // Pass initial count as Args
     info!("CounterActor spawned with ID: {}", actor_ref.identity());
 
     let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;

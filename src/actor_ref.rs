@@ -60,9 +60,12 @@ use tracing::{debug as trace_debug, info, warn as trace_warn};
 /// - When working with strongly-typed actor systems
 #[derive(Debug)]
 pub struct ActorRef<T: Actor> {
-    id: Identity, // Added identity field for actor identification
+    /// The unique identifier for this actor instance
+    id: Identity,
+    /// Channel for sending messages to the actor's mailbox
     sender: MailboxSender<T>,
-    pub(crate) terminate_sender: mpsc::Sender<ControlSignal>, // Changed type
+    /// Channel for sending control signals (e.g., terminate) to the actor
+    pub(crate) terminate_sender: mpsc::Sender<ControlSignal>,
 }
 
 impl<T: Actor> ActorRef<T> {
@@ -134,7 +137,7 @@ impl<T: Actor> ActorRef<T> {
 
         let result = if self.sender.send(envelope).await.is_err() {
             Err(Error::Send {
-                identity: self.identity(), // Use Identity::of for type safety
+                identity: self.identity(),
                 details: "Mailbox channel closed".to_string(),
             })
         } else {
@@ -239,7 +242,7 @@ impl<T: Actor> ActorRef<T> {
 
         match reply_rx.await {
             Ok(reply_any) => {
-                // recv was Ok, actor reply was Ok
+                // Successfully received reply from actor
                 match reply_any.downcast::<T::Reply>() {
                     Ok(reply) => {
                         #[cfg(feature = "tracing")]
@@ -303,7 +306,7 @@ impl<T: Actor> ActorRef<T> {
             .await
             .map_err(|_| Error::Timeout {
                 identity: self.identity(),
-                timeout, // Added missing fields for consistency
+                timeout,
                 operation: "ask".to_string(),
             })?;
 
@@ -431,7 +434,7 @@ impl<T: Actor> ActorRef<T> {
                         identity: self.identity(),
                         timeout: duration,
                         operation: "tell_blocking".to_string(),
-                    })? // Flatten Result<Result<()>> to Result<()>
+                    })? // Unwrap nested Result
             }
             None => rt.block_on(self.tell(msg)),
         };
@@ -480,7 +483,7 @@ impl<T: Actor> ActorRef<T> {
                         identity: self.identity(),
                         timeout: duration,
                         operation: "ask_blocking".to_string(),
-                    })? // Flatten Result<Result<R>> to Result<R>
+                    })? // Unwrap nested Result
             }
             None => rt.block_on(self.ask(msg)),
         };
@@ -499,7 +502,7 @@ impl<T: Actor> Clone for ActorRef<T> {
     #[inline]
     fn clone(&self) -> Self {
         ActorRef {
-            id: self.id, // Clone the Identity
+            id: self.id,
             sender: self.sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
         }
@@ -534,8 +537,11 @@ impl<T: Actor> Clone for ActorRef<T> {
 /// ```
 #[derive(Debug)]
 pub struct ActorWeak<T: Actor> {
-    id: Identity, // Added identity field for actor identification
+    /// The unique identifier for this actor instance
+    id: Identity,
+    /// Weak reference to the actor's mailbox sender
     sender: tokio::sync::mpsc::WeakSender<MailboxMessage<T>>,
+    /// Weak reference to the actor's terminate signal sender
     terminate_sender: tokio::sync::mpsc::WeakSender<ControlSignal>,
 }
 
@@ -551,12 +557,13 @@ impl<T: Actor> ActorWeak<T> {
         let terminate_sender = self.terminate_sender.upgrade()?;
 
         Some(ActorRef {
-            id: self.id, // Use the stored Identity
+            id: self.id,
             sender,
             terminate_sender,
         })
     }
 
+    /// Returns the unique ID of the actor this weak reference points to.
     pub fn identity(&self) -> Identity {
         self.id
     }
@@ -578,7 +585,7 @@ impl<T: Actor> Clone for ActorWeak<T> {
     #[inline]
     fn clone(&self) -> Self {
         ActorWeak {
-            id: self.id, // Clone the Identity
+            id: self.id,
             sender: self.sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
         }

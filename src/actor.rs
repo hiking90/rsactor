@@ -354,9 +354,43 @@ pub trait Message<T: Send + 'static>: Actor {
     ) -> impl Future<Output = Self::Reply> + Send;
 }
 
-// This method encapsulates the actor's entire lifecycle within its spawned task.
-// It handles on_start, message processing, then returns the actor result.
-// Consumes self to return the actor.
+/// Executes the complete lifecycle of an actor within its spawned task.
+///
+/// This function is the core runtime for an actor, handling the entire lifecycle from
+/// initialization through message processing to termination. It orchestrates:
+///
+/// 1. **Initialization**: Calls `on_start` to create the actor instance
+/// 2. **Runtime Loop**: Concurrently handles messages and executes `on_run`
+/// 3. **Termination**: Manages graceful/forceful shutdown and calls `on_stop`
+///
+/// # Arguments
+///
+/// * `args` - Initialization arguments passed to the actor's `on_start` method
+/// * `actor_ref` - Strong reference to the actor (dropped after initialization)
+/// * `receiver` - Channel receiver for incoming messages
+/// * `terminate_receiver` - Channel receiver for termination signals
+///
+/// # Returns
+///
+/// Returns an `ActorResult<T>` indicating the final state of the actor:
+/// - `ActorResult::Completed` if the actor terminated normally
+/// - `ActorResult::Failed` if an error occurred during any lifecycle phase
+///
+/// # Lifecycle Flow
+///
+/// ```text
+/// ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+/// │  on_start   │───▶│   Runtime   │───▶│   on_stop   │
+/// │ (create)    │    │   Loop      │    │ (cleanup)   │
+/// └─────────────┘    └─────────────┘    └─────────────┘
+///                           │
+///                           ▼
+///                    ┌─────────────┐
+///                    │ Message     │
+///                    │ Processing  │
+///                    │ + on_run    │
+///                    └─────────────┘
+/// ```
 pub(crate) async fn run_actor_lifecycle<T: Actor>(
     args: T::Args,
     actor_ref: ActorRef<T>,
@@ -380,18 +414,22 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
         }
     };
 
-    debug!("Runtime for actor {actor_id} is running.");
+    debug!("Actor {actor_id} runtime starting - entering main processing loop.");
 
     let actor_weak = ActorRef::downgrade(&actor_ref);
-    drop(actor_ref); // Drop the strong reference to allow graceful shutdown
+    drop(actor_ref); // Drop the strong reference to allow graceful shutdown detection
 
     let mut killed = false;
 
-    // Message processing loop
+    // Main actor processing loop - handles three concurrent operations:
+    // 1. Termination signals (highest priority via biased select)
+    // 2. Incoming messages from the mailbox
+    // 3. Actor's on_run lifecycle method execution
     loop {
         tokio::select! {
-            // Handle Terminate signal with highest priority
-            biased; // Ensure Terminate is checked first if multiple conditions are ready
+            // Handle termination signals with highest priority using biased selection
+            // This ensures that termination requests are processed immediately when available
+            biased;
 
             maybe_terminate = terminate_receiver.recv() => {
                 match maybe_terminate {
@@ -422,7 +460,8 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 break; // Exit the loop
             }
 
-            // Process incoming messages from the main mailbox
+            // Process incoming messages from the actor's mailbox
+            // Messages can be: regular message envelopes or graceful stop signals
             maybe_message = receiver.recv() => {
                 match maybe_message {
                     Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
@@ -454,12 +493,16 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 }
             }
 
+            // Execute the actor's on_run method concurrently with message processing
+            // This allows the actor to perform its primary work while staying responsive
             maybe_result = actor.on_run(&actor_weak) => {
                 match maybe_result {
                     Ok(_) => {
-                        // on_run completed successfully, continue processing messages.
+                        // on_run completed successfully, continue the processing loop
+                        // The actor runtime will call on_run again for the next iteration
                     }
-                    Err(e) => { // e is A::Error
+                    Err(e) => {
+                        // on_run returned an error - terminate the actor with failure status
                         let error_msg = format!("Actor {actor_id} on_run error: {e:?}");
                         error!("{error_msg}");
                         return ActorResult::Failed {
@@ -474,11 +517,12 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
         }
     }
 
-    receiver.close(); // Close the main mailbox
-    terminate_receiver.close(); // Close its own channel
+    // Cleanup: Close channels to signal shutdown completion
+    receiver.close(); // Close the message mailbox
+    terminate_receiver.close(); // Close the termination signal channel
 
-    debug!("Actor {actor_id} message loop ended.");
+    debug!("Actor {actor_id} lifecycle completed - exiting runtime loop.");
 
-    // Return completed actor result
+    // Return the final actor state - successful completion
     ActorResult::Completed { actor, killed }
 }
