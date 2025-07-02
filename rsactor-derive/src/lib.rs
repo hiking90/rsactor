@@ -111,7 +111,6 @@
 //! ### Benefits
 //!
 //! - Automatic generation of `Message<T>` trait implementations
-//! - Automatic implementation of MessageHandler trait for the actor
 //! - Selective processing: only methods with `#[handler]` attribute are processed
 //! - Reduced boilerplate and potential for errors
 //! - Type-safe message handling with compile-time checks
@@ -224,8 +223,7 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 ///
 /// This macro analyzes method signatures in an impl block and generates the corresponding
 /// Message trait implementations for methods marked with `#[handler]` attribute, reducing
-/// boilerplate code. It also automatically generates the `impl_message_handler!` macro call
-/// to register the message handlers with the actor.
+/// boilerplate code.
 ///
 /// # Usage
 ///
@@ -260,7 +258,6 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 ///
 /// This will automatically generate:
 /// - The `Message<MessageType>` trait implementations for each handler method
-/// - The MessageHandler trait implementation for the actor
 ///
 /// # Requirements
 ///
@@ -273,9 +270,7 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// # Benefits
 ///
 /// - No need to manually implement `Message<T>` trait for each message type
-/// - No need to manually implement MessageHandler trait
 /// - Reduces boilerplate code and potential for errors
-/// - Automatically keeps message handler registration in sync with method definitions
 /// - Only processes methods marked with `#[handler]`, leaving other methods unchanged
 #[proc_macro_attribute]
 pub fn message_handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -312,7 +307,6 @@ fn process_handler_methods(
     generics: &syn::Generics,
 ) -> syn::Result<Vec<TokenStream2>> {
     let mut message_impls = Vec::new();
-    let mut message_types = Vec::new();
 
     for item in items {
         if let ImplItem::Fn(method) = item {
@@ -325,11 +319,6 @@ fn process_handler_methods(
                 // Generate message implementation for this method
                 let impl_tokens = generate_message_impl(method, actor_type, generics)?;
                 message_impls.push(impl_tokens);
-
-                // Extract message type
-                if let Some(message_type) = extract_message_type(method)? {
-                    message_types.push(message_type);
-                }
             }
         }
     }
@@ -398,19 +387,4 @@ fn generate_message_impl(
     };
 
     Ok(impl_tokens)
-}
-
-fn extract_message_type(method: &ImplItemFn) -> syn::Result<Option<Type>> {
-    // Parse method signature
-    let inputs = &method.sig.inputs;
-
-    if inputs.len() != 3 {
-        return Ok(None); // Skip methods that don't match the pattern
-    }
-
-    // Extract message type from second parameter
-    match &inputs[1] {
-        FnArg::Typed(PatType { ty, .. }) => Ok(Some(ty.as_ref().clone())),
-        _ => Ok(None),
-    }
 }
