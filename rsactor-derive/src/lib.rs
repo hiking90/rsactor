@@ -190,13 +190,15 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
 fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
+    let generics = &input.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Check if it's a struct or enum
     match &input.data {
         Data::Struct(_) | Data::Enum(_) => {
-            // Generate the Actor implementation
+            // Generate the Actor implementation with proper generic support
             let expanded = quote! {
-                impl rsactor::Actor for #name {
+                impl #impl_generics rsactor::Actor for #name #ty_generics #where_clause {
                     type Args = Self;
                     type Error = std::convert::Infallible;
 
@@ -262,10 +264,19 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// # Requirements
 ///
 /// Each method marked with `#[handler]` must follow this signature pattern:
+/// - Must be an `async fn`
 /// - First parameter: `&mut self`
-/// - Second parameter: `_msg: MessageType` (where MessageType is the message struct)
-/// - Third parameter: `_: &ActorRef<Self>` or `_actor_ref: &ActorRef<Self>`
+/// - Second parameter: `msg: MessageType` (where MessageType is the message struct)
+/// - Third parameter: `&ActorRef<Self>` or `&rsactor::ActorRef<Self>`
 /// - Return type: the reply type for the message
+///
+/// # Error Messages
+///
+/// The macro provides detailed error messages for common mistakes:
+/// - Wrong parameter count
+/// - Missing `async` keyword
+/// - Incorrect parameter types
+/// - Invalid #[handler] attribute usage
 ///
 /// # Benefits
 ///
@@ -310,12 +321,26 @@ fn process_handler_methods(
 
     for item in items {
         if let ImplItem::Fn(method) = item {
-            // Check for `#[handler]` attribute
-            if method
+            // Check for `#[handler]` attribute with better error handling
+            let handler_attr = method
                 .attrs
                 .iter()
-                .any(|attr| attr.path().is_ident("handler"))
-            {
+                .find(|attr| attr.path().is_ident("handler"));
+
+            if let Some(attr) = handler_attr {
+                // Validate attribute syntax - check if it's a simple path attribute
+                match &attr.meta {
+                    syn::Meta::Path(_) => {
+                        // This is correct: #[handler] with no arguments
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "The #[handler] attribute does not accept any arguments",
+                        ));
+                    }
+                }
+
                 // Generate message implementation for this method
                 let impl_tokens = generate_message_impl(method, actor_type, generics)?;
                 message_impls.push(impl_tokens);
@@ -342,10 +367,30 @@ fn generate_message_impl(
     // Parse method signature
     let inputs = &method.sig.inputs;
 
+    // Validate that the method is async
+    if method.sig.asyncness.is_none() {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            format!("Handler method '{}' must be async", method.sig.ident),
+        ));
+    }
+
     if inputs.len() != 3 {
         return Err(syn::Error::new_spanned(
             &method.sig,
-            "Message handler method must have exactly 3 parameters: &mut self, message, &ActorRef<Self>"
+            format!(
+                "Message handler method '{}' must have exactly 3 parameters: &mut self, message, &ActorRef<Self>. Found {} parameters.",
+                method.sig.ident,
+                inputs.len()
+            )
+        ));
+    }
+
+    // Validate first parameter (&mut self)
+    if !matches!(&inputs[0], FnArg::Receiver(receiver) if receiver.mutability.is_some()) {
+        return Err(syn::Error::new_spanned(
+            &inputs[0],
+            "First parameter must be '&mut self'",
         ));
     }
 
@@ -355,10 +400,26 @@ fn generate_message_impl(
         _ => {
             return Err(syn::Error::new_spanned(
                 &inputs[1],
-                "Expected typed parameter for message",
+                "Second parameter must be a typed message parameter (e.g., 'msg: MessageType')",
             ))
         }
     };
+
+    // Validate third parameter (&ActorRef<Self>)
+    let third_param_valid = match &inputs[2] {
+        FnArg::Typed(PatType { ty, .. }) => {
+            // Check if the type looks like &ActorRef<Self> or &rsactor::ActorRef<Self>
+            matches!(ty.as_ref(), Type::Reference(_))
+        }
+        _ => false,
+    };
+
+    if !third_param_valid {
+        return Err(syn::Error::new_spanned(
+            &inputs[2],
+            "Third parameter must be '&ActorRef<Self>' or '&rsactor::ActorRef<Self>'",
+        ));
+    }
 
     // Extract return type - handle both explicit return types and unit return (no return type)
     let return_type = match &method.sig.output {
@@ -388,3 +449,33 @@ fn generate_message_impl(
 
     Ok(impl_tokens)
 }
+
+// TODO: Future enhancements that could be added:
+//
+// 1. Support for custom error types in derive macro:
+//    #[derive(Actor)]
+//    #[actor(error = "MyCustomError")]
+//    struct MyActor { ... }
+//
+// 2. Support for custom Args types:
+//    #[derive(Actor)]
+//    #[actor(args = "MyArgsType")]
+//    struct MyActor { ... }
+//
+// 3. Handler attribute with options:
+//    #[handler(timeout = "5s")]
+//    #[handler(priority = "high")]
+//    async fn handle_message(&mut self, msg: Msg, _: &ActorRef<Self>) -> Reply
+//
+// 4. Automatic message struct generation:
+//    #[message_handlers]
+//    impl MyActor {
+//        #[handler]
+//        #[message(name = "Increment")]  // Generates struct Increment;
+//        async fn handle_increment(&mut self, _: (), _: &ActorRef<Self>) -> u32
+//    }
+//
+// 5. Validation attributes:
+//    #[handler]
+//    #[validate(non_empty, range(1..100))]
+//    async fn handle_set_value(&mut self, msg: SetValue, _: &ActorRef<Self>) -> Result<(), Error>
