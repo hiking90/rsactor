@@ -1,5 +1,5 @@
 // Tests for the Actor derive macro (structs and enums)
-
+#![allow(clippy::unused_unit)]
 use rsactor::{spawn, Actor, ActorRef, Message};
 
 #[derive(Actor, Debug, PartialEq)]
