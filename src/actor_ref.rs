@@ -4,7 +4,7 @@
 use crate::error::{Error, Result};
 use crate::Identity;
 use crate::{Actor, ControlSignal, MailboxMessage, MailboxSender, Message};
-use log::{debug, warn};
+use log::warn;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
@@ -331,10 +331,6 @@ impl<T: Actor> ActorRef<T> {
         #[cfg(feature = "tracing")]
         info!(actor_id = %self.identity(), "Killing actor");
 
-        debug!(
-            "Attempting to send Terminate message to actor {} via dedicated channel using try_send",
-            self.identity()
-        );
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
