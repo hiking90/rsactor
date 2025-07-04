@@ -11,7 +11,7 @@
 
 use anyhow::Error as AnyError;
 use log::info;
-use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorWeak, Result, UntypedActorRef};
+use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorWeak, Result};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
     let (actor_ref, join_handle) = spawn::<PingActor>("TestActor".to_string());
 
     // Create a weak reference
-    let weak_ref = UntypedActorRef::downgrade(actor_ref.untyped_actor_ref());
+    let weak_ref = ActorRef::downgrade(&actor_ref);
     println!(
         "1. Created weak reference to actor: {}",
         weak_ref.identity()
@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
         println!("   Successfully upgraded weak reference after drop");
 
         // Try to use it
-        match strong_ref.ask::<Ping, String>(Ping).await {
+        match strong_ref.ask(Ping).await {
             Ok(response) => println!("   Response: {response}"),
             Err(e) => println!("   Error sending message: {e}"),
         }

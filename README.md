@@ -27,7 +27,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 *   **Macro-Assisted Message Handling**:
     *   `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
-*   **Strong Type Safety**: Provides both compile-time (`ActorRef<T>`) and runtime (`UntypedActorRef`) type safety options, ensuring message handling consistency while supporting flexible actor management patterns.
+*   **Strong Type Safety**: Provides compile-time (`ActorRef<T>`) type safety, ensuring message handling consistency and preventing type-related runtime errors.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `#[message_handlers]` macro) are also required, but they don't add any additional constraints on the actor's fields.
 *   **Optional Tracing Support**: Built-in support for detailed observability using the `tracing` crate. When enabled via the `tracing` feature flag, provides comprehensive logging of actor lifecycle events, message handling, and performance metrics.
 
@@ -133,7 +133,7 @@ impl CounterActor {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let actor = CounterActor { count: 0 };
-    let (actor_ref, _join_handle) = rsactor::spawn::<CounterActor>(actor);
+    let (actor_ref, _join_handle) = spawn::<CounterActor>(actor);
 
     actor_ref.tell(Increment).await?;
     let count = actor_ref.ask(GetCount).await?;
@@ -144,9 +144,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### Option B: Complex Initialization with Custom Actor Implementation
+#### Option B: Custom Actor Implementation with Initialization Arguments
 
-For actors that need complex initialization logic with custom Actor trait implementation:
+For actors that need custom initialization logic with the Actor trait:
 
 ```rust
 use rsactor::{Actor, ActorRef, message_handlers, spawn};
@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
 
     info!("Creating CounterActor");
 
-    let (actor_ref, join_handle) = spawn::<CounterActor>(0u32); // Pass initial count
+    let (actor_ref, join_handle) = spawn::<CounterActor>(0u32); // Pass initial count as Args
     info!("CounterActor spawned with ID: {}", actor_ref.identity());
 
     let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;

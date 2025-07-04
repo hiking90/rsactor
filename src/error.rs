@@ -34,19 +34,11 @@ pub enum Error {
         /// Type of operation that timed out (e.g., "send", "ask")
         operation: String,
     },
-    /// Error when a message type is not handled by an actor
-    UnhandledMessageType {
-        /// ID of the actor that timed out
-        identity: Identity,
-        /// Expected message types
-        expected_types: Vec<&'static str>,
-        /// Actual message type ID
-        actual_type_id: std::any::TypeId,
-    },
     /// Error when downcasting a reply to the expected type
     Downcast {
         /// ID of the actor that sent the incompatible reply
         identity: Identity,
+        /// The expected type name that the downcast failed to match
         expected_type: String,
     },
     /// Error when a runtime operation fails
@@ -58,11 +50,14 @@ pub enum Error {
     },
     /// Error related to mailbox capacity configuration
     MailboxCapacity {
-        /// The error message
+        /// Detailed error message describing the mailbox capacity issue
         message: String,
     },
 }
 
+/// Implementation of the Display trait for Error enum.
+///
+/// Provides human-readable error messages for each error variant.
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -101,19 +96,6 @@ impl std::fmt::Display for Error {
                     timeout
                 )
             }
-            Error::UnhandledMessageType {
-                identity: actor_id,
-                expected_types,
-                actual_type_id,
-            } => {
-                write!(
-                    f,
-                    "Actor '{}' received an unhandled message type. Expected one of: [{}]. Actual message type ID: {:?}",
-                    actor_id.name(),
-                    expected_types.join(", "),
-                    actual_type_id
-                )
-            }
             Error::Downcast {
                 identity: actor_id,
                 expected_type,
@@ -138,10 +120,24 @@ impl std::fmt::Display for Error {
     }
 }
 
+/// Implementation of the standard Error trait for rsactor Error enum.
+///
+/// This allows Error to be used with standard error handling mechanisms.
 impl std::error::Error for Error {}
 
 /// A Result type specialized for rsactor operations.
 ///
 /// This type is returned by most actor operations like [`tell`](crate::actor_ref::ActorRef::tell),
 /// [`ask`](crate::actor_ref::ActorRef::ask), [`stop`](crate::actor_ref::ActorRef::stop), etc.
+///
+/// # Examples
+///
+/// ```rust
+/// use rsactor::Result;
+///
+/// fn actor_operation() -> Result<String> {
+///     // ... actor operation logic
+///     Ok("success".to_string())
+/// }
+/// ```
 pub type Result<T> = std::result::Result<T, Error>;

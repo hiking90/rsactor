@@ -1,8 +1,8 @@
 @startuml Actor Termination
-title Actor Termination (stop, kill, and on_run completion)
+title Actor Termination (stop, kill, and lifecycle completion)
 
 actor Client
-participant "ActorRef" as ActorRef_obj
+participant "ActorRef<T>" as ActorRef_obj
 participant "MailboxChannel (mpsc)" as MailboxChannel
 participant "TerminateChannel (mpsc)" as TerminateChannel
 participant "run_actor_lifecycle()" as Lifecycle
@@ -17,32 +17,36 @@ box "Actor Task" #LightCoral
 end box
 
 == Normal Operation ==
-Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await continuously
-activate on_run_method
-note right of on_run_method: on_run() is called repeatedly\nuntil it returns Err() or stop/kill signal received
-on_run_method --> Lifecycle: Returns Ok(()) or Err(error)
-note right of Lifecycle: If Ok(()), on_run is called again\nIf Err(), actor terminates with failure
+Lifecycle -> Lifecycle: Main tokio::select! loop (biased)
+activate Lifecycle
+loop Continuous Operation
+  Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await
+  activate on_run_method
+  on_run_method --> Lifecycle: Returns Ok(()) or Err(error)
+  deactivate on_run_method
+  note right of Lifecycle: If Ok(()), on_run is called again\nIf Err(), actor terminates with failure
+end
 
 == Stop Operation (Graceful) ==
 Client -> ActorRef_obj: actor_ref.stop().await
 activate ActorRef_obj
 ActorRef_obj -> MailboxChannel: sender.send(MailboxMessage::StopGracefully(actor_ref)).await
 deactivate ActorRef_obj
-note right of Client: Client awaits JoinHandle or stop() completion
 
-MailboxChannel -> Lifecycle: receiver.recv() gets StopGracefully
-activate Lifecycle
-Lifecycle -> Lifecycle: Sets termination flag
-Lifecycle -> on_run_method: Current on_run continues until completion or next iteration
-deactivate on_run_method
+MailboxChannel -> Lifecycle: tokio::select! receives StopGracefully
 Lifecycle -> on_stop_method: Calls actor.on_stop(&actor_weak, killed = false).await
 activate on_stop_method
 on_stop_method --> Lifecycle: Returns Ok(()) or Err(error)
 deactivate on_stop_method
-Lifecycle -> Lifecycle: Breaks message loop
-Lifecycle -> MailboxChannel: receiver.close()
-Lifecycle -> TerminateChannel: terminate_receiver.close()
-Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Completed { killed: false, .. }
+
+alt on_stop Success
+  Lifecycle -> Lifecycle: Breaks message loop gracefully
+  Lifecycle -> MailboxChannel: receiver.close()
+  Lifecycle -> TerminateChannel: terminate_receiver.close()
+  Lifecycle --> JoinHandle_obj: ActorResult::Completed { actor, killed: false }
+else on_stop Failure
+  Lifecycle --> JoinHandle_obj: ActorResult::Failed { phase: OnStop, killed: false, .. }
+end
 deactivate Lifecycle
 
 == Kill Operation (Immediate) ==
@@ -51,30 +55,49 @@ activate ActorRef_obj
 ActorRef_obj -> TerminateChannel: terminate_sender.try_send(ControlSignal::Terminate)
 deactivate ActorRef_obj
 
-TerminateChannel -> Lifecycle: terminate_receiver.recv() gets Terminate (prioritized via biased select!)
+TerminateChannel -> Lifecycle: tokio::select! (biased) receives Terminate signal
 activate Lifecycle
-Lifecycle -> Lifecycle: Sets killed = true
-Lifecycle -> on_run_method: Current on_run may continue briefly, then terminates
-deactivate on_run_method
 Lifecycle -> on_stop_method: Calls actor.on_stop(&actor_weak, killed = true).await
 activate on_stop_method
 on_stop_method --> Lifecycle: Returns Ok(()) or Err(error)
 deactivate on_stop_method
-Lifecycle -> Lifecycle: Breaks message loop immediately
-Lifecycle -> MailboxChannel: receiver.close()
-Lifecycle -> TerminateChannel: terminate_receiver.close()
-Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Completed { killed: true, .. }
+
+alt on_stop Success
+  Lifecycle -> Lifecycle: Breaks message loop immediately
+  Lifecycle -> MailboxChannel: receiver.close()
+  Lifecycle -> TerminateChannel: terminate_receiver.close()
+  Lifecycle --> JoinHandle_obj: ActorResult::Completed { actor, killed: true }
+else on_stop Failure
+  Lifecycle --> JoinHandle_obj: ActorResult::Failed { phase: OnStop, killed: true, .. }
+end
 deactivate Lifecycle
 
 == Termination via on_run Error ==
 Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await
+activate Lifecycle
 activate on_run_method
 on_run_method --> Lifecycle: Returns Err(error)
 deactivate on_run_method
-Lifecycle -> Lifecycle: Actor terminates due to on_run error
-note right of Lifecycle: on_stop is NOT called when on_run fails\nActor terminates immediately with ActorResult::Failed
-Lifecycle -> Lifecycle: Breaks message loop
-Lifecycle --> JoinHandle_obj: Task finishes, JoinHandle resolves with ActorResult::Failed { cause, phase: OnRun, .. }
+
+Lifecycle -> on_stop_method: Calls actor.on_stop(&actor_weak, killed = false).await
+activate on_stop_method
+on_stop_method --> Lifecycle: Returns Ok(()) or Err(stop_error)
+deactivate on_stop_method
+
+Lifecycle -> Lifecycle: Breaks message loop due to on_run error
+Lifecycle --> JoinHandle_obj: ActorResult::Failed { phase: OnRun, error, .. }
+deactivate Lifecycle
+
+== All ActorRef Instances Dropped ==
+note over ActorRef_obj: All strong references dropped
+MailboxChannel -> Lifecycle: receiver.recv() returns None (channel closed)
+activate Lifecycle
+Lifecycle -> on_stop_method: Calls actor.on_stop(&actor_weak, killed = false).await
+activate on_stop_method
+on_stop_method --> Lifecycle: Returns Ok(()) or Err(error)
+deactivate on_stop_method
+Lifecycle -> Lifecycle: Natural termination due to no references
+Lifecycle --> JoinHandle_obj: ActorResult::Completed { actor, killed: false }
 deactivate Lifecycle
 
 @enduml

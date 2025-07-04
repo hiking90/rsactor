@@ -1,0 +1,139 @@
+@startuml Actor Lifecycle
+title Actor Lifecycle Management
+
+participant "spawn()" as Spawn
+participant "ActorRef<T>" as ActorRef
+participant "JoinHandle" as JoinHandle
+participant "run_actor_lifecycle()" as Lifecycle
+participant "Actor::on_start()" as OnStart
+participant "Actor::on_run()" as OnRun
+participant "Actor::on_stop()" as OnStop
+
+== Initialization Phase ==
+Spawn -> Lifecycle: Start actor task
+activate Lifecycle
+Lifecycle -> OnStart: Call on_start(args, &actor_ref)
+activate OnStart
+
+alt Successful Initialization
+    OnStart --> Lifecycle: Ok(actor_instance)
+    deactivate OnStart
+    note right of Lifecycle: Actor instance created successfully
+    Lifecycle -> Lifecycle: Store actor instance
+    Lifecycle -> Lifecycle: Create ActorWeak reference
+    Lifecycle -> Lifecycle: Enter main processing loop
+else Initialization Failure
+    OnStart --> Lifecycle: Err(error)
+    deactivate OnStart
+    Lifecycle --> JoinHandle: ActorResult::Failed { phase: OnStart, actor: None, error, killed: false }
+    deactivate Lifecycle
+    note right of JoinHandle: Actor never started - no instance available
+end
+
+== Processing Phase ==
+loop Main Actor Loop
+    Lifecycle -> Lifecycle: tokio::select! (biased)
+
+    alt Termination Signal (Highest Priority)
+        Lifecycle -> Lifecycle: Received ControlSignal::Terminate
+        note right of Lifecycle: Kill signal has highest priority
+        Lifecycle -> OnStop: Call on_stop(&actor_weak, killed = true)
+    else Graceful Stop Message
+        Lifecycle -> Lifecycle: Received StopGracefully message
+        Lifecycle -> OnStop: Call on_stop(&actor_weak, killed = false)
+    else Mailbox Closed
+        Lifecycle -> Lifecycle: All ActorRef instances dropped
+        Lifecycle -> OnStop: Call on_stop(&actor_weak, killed = false)
+    else Message Received
+        Lifecycle -> Lifecycle: Process incoming message
+        note right of Lifecycle: Handle message via MessageHandler trait
+    else on_run Execution
+        Lifecycle -> OnRun: Call actor.on_run(&actor_weak)
+        activate OnRun
+
+        alt on_run Success
+            OnRun --> Lifecycle: Ok(())
+            deactivate OnRun
+            note right of Lifecycle: Continue loop - on_run will be called again
+        else on_run Failure
+            OnRun --> Lifecycle: Err(error)
+            deactivate OnRun
+            note right of Lifecycle: Actor terminates due to runtime error
+            Lifecycle -> OnStop: Call on_stop(&actor_weak, killed = false)
+        end
+    end
+end
+
+== Termination Phase ==
+activate OnStop
+alt on_stop Success
+    OnStop --> Lifecycle: Ok(())
+    deactivate OnStop
+
+    alt Normal Completion
+        Lifecycle --> JoinHandle: ActorResult::Completed { actor, killed: false/true }
+    else Runtime Error (from on_run)
+        Lifecycle --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed: false }
+    end
+
+else on_stop Failure
+    OnStop --> Lifecycle: Err(stop_error)
+    deactivate OnStop
+    Lifecycle --> JoinHandle: ActorResult::Failed { phase: OnStop, actor: Some(actor), error: stop_error, killed }
+end
+
+deactivate Lifecycle
+
+== Result Handling ==
+JoinHandle -> JoinHandle: await join_handle
+activate JoinHandle
+
+alt ActorResult::Completed
+    note right of JoinHandle
+        Actor completed successfully
+        - Final actor state available
+        - killed flag indicates termination type
+    end note
+else ActorResult::Failed
+    note right of JoinHandle
+        Actor failed during lifecycle
+        - phase indicates where failure occurred
+        - error contains failure details
+        - actor state may be available for recovery
+    end note
+end
+
+deactivate JoinHandle
+
+== Lifecycle Method Characteristics ==
+
+note over OnStart
+  on_start():
+  ✅ Required implementation
+  ✅ Creates actor instance
+  ✅ Can perform async initialization
+  ✅ Failure prevents actor creation
+  ✅ Receives ActorRef for self-reference
+end note
+
+note over OnRun
+  on_run():
+  ✅ Optional (has default implementation)
+  ✅ Called repeatedly while actor lives
+  ✅ Runs concurrently with message handling
+  ✅ Ok(()) continues execution
+  ✅ Err() terminates actor
+  ✅ Receives ActorWeak to avoid cycles
+end note
+
+note over OnStop
+  on_stop():
+  ✅ Optional (has default implementation)
+  ✅ Called before actor terminates
+  ✅ killed flag indicates termination type
+  ✅ Can perform cleanup operations
+  ✅ Failure affects final ActorResult
+  ✅ Receives ActorWeak reference
+end note
+
+@enduml

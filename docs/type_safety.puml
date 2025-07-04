@@ -1,0 +1,108 @@
+@startuml Type Safety System
+title rsActor Type Safety System
+
+actor Developer
+participant "ActorRef<CounterActor>" as ActorRef
+participant "Rust Compiler" as Compiler
+participant "CounterActor" as Actor
+participant "Message<IncrementMsg>" as MessageTrait
+participant "#[message_handlers]" as MacroGen
+
+box "Compile Time" #LightGreen
+    participant Compiler
+    participant MacroGen
+end box
+
+box "Runtime" #LightBlue
+    participant ActorRef
+    participant Actor
+    participant MessageTrait
+end box
+
+== Compile-Time Type Safety ==
+Developer -> ActorRef: Attempts to send message
+Developer -> ActorRef: actor_ref.ask(IncrementMsg(5))
+
+ActorRef -> Compiler: Type check: Can CounterActor handle IncrementMsg?
+activate Compiler
+
+Compiler -> MacroGen: Check if Message<IncrementMsg> is implemented for CounterActor
+activate MacroGen
+MacroGen -> MessageTrait: Verify Message<IncrementMsg> trait implementation exists
+activate MessageTrait
+MessageTrait --> MacroGen: Implementation exists with Reply = u32
+deactivate MessageTrait
+MacroGen --> Compiler: Type compatibility confirmed
+deactivate MacroGen
+
+Compiler -> Compiler: Verify ask() return type matches Message<IncrementMsg>::Reply
+Compiler --> Developer: ✅ Compilation succeeds - types are safe
+deactivate Compiler
+
+== Compile-Time Error Prevention ==
+Developer -> ActorRef: Attempts invalid message
+Developer -> ActorRef: actor_ref.ask("invalid string message")
+
+ActorRef -> Compiler: Type check: Can CounterActor handle &str?
+activate Compiler
+Compiler -> MacroGen: Check if Message<&str> is implemented for CounterActor
+activate MacroGen
+MacroGen --> Compiler: ❌ No Message<&str> implementation found
+deactivate MacroGen
+Compiler --> Developer: ❌ Compilation error: CounterActor doesn't implement Message<&str>
+deactivate Compiler
+
+== Runtime Type-Safe Execution ==
+note over Developer: After successful compilation
+Developer -> ActorRef: actor_ref.ask(IncrementMsg(5)).await
+activate ActorRef
+ActorRef -> Actor: Forward message (type already verified)
+activate Actor
+Actor -> MessageTrait: Call handle() method for IncrementMsg
+activate MessageTrait
+MessageTrait --> Actor: Returns u32 (reply type guaranteed by compiler)
+deactivate MessageTrait
+Actor --> ActorRef: Reply with u32
+deactivate Actor
+ActorRef --> Developer: Returns u32 (no runtime type checking needed)
+deactivate ActorRef
+
+note over Developer, MessageTrait
+  Zero Runtime Overhead:
+  - No dynamic type checking
+  - No boxing/unboxing for known types
+  - Direct method dispatch
+  - Compile-time verified type safety
+end note
+
+== Message Handler Generation ==
+Developer -> MacroGen: #[message_handlers] impl CounterActor { ... }
+activate MacroGen
+
+MacroGen -> MacroGen: Parse #[handler] methods
+MacroGen -> MacroGen: Generate Message<T> trait implementations
+MacroGen -> MacroGen: Generate MessageHandler trait implementation
+
+note right of MacroGen
+  For each #[handler] method:
+  1. Extract message type from parameter
+  2. Extract reply type from return type
+  3. Generate Message<MsgType> impl
+  4. Ensure type safety at compile time
+end note
+
+MacroGen --> Compiler: Generated trait implementations
+deactivate MacroGen
+
+== Benefits ==
+note over Developer, MessageTrait
+  Type Safety Benefits:
+  ✅ Compile-time message type verification
+  ✅ Reply type consistency guaranteed
+  ✅ No runtime type errors possible
+  ✅ Zero-cost abstractions
+  ✅ IDE autocomplete and error detection
+  ✅ Refactoring safety
+end note
+
+@enduml

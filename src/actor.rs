@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::actor_ref::ActorRef;
-use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage, Result};
+use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage};
 use log::{debug, error};
-use std::{any::Any, fmt::Debug, future::Future, time::Duration};
+use std::{fmt::Debug, future::Future, time::Duration};
 use tokio::sync::mpsc;
 
 #[cfg(feature = "tracing")]
-use tracing::{debug as trace_debug, warn as trace_warn};
+use tracing::debug as trace_debug;
 
 /// Defines the behavior of an actor.
 ///
@@ -87,7 +87,7 @@ pub trait Actor: Sized + Send + 'static {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rsactor::{Actor, ActorRef, Message, impl_message_handler, spawn, ActorResult};
+    /// use rsactor::{Actor, ActorRef, Message, spawn, ActorResult};
     /// use std::time::Duration;
     /// use anyhow::Result;
     ///
@@ -107,9 +107,6 @@ pub trait Actor: Sized + Send + 'static {
     ///         Ok(Self { name })
     ///     }
     /// }
-    ///
-    /// // Register message handlers
-    /// impl_message_handler!(SimpleActor, []);
     ///
     /// // Main function showing the basic lifecycle
     /// #[tokio::main]
@@ -188,7 +185,7 @@ pub trait Actor: Sized + Send + 'static {
     ///    would typically involve a single tick of an interval. The `Interval` itself
     ///    should be stored as a field in the actor\'s struct to persist across `on_run` invocations.
     ///    ```rust,no_run
-    ///    # use rsactor::{Actor, ActorRef, ActorWeak, Message, impl_message_handler, spawn};
+    ///    # use rsactor::{Actor, ActorRef, ActorWeak, Message, spawn};
     ///    # use anyhow::Result;
     ///    # use std::time::Duration;
     ///    # use tokio::time::{Interval, MissedTickBehavior};
@@ -357,36 +354,50 @@ pub trait Message<T: Send + 'static>: Actor {
     ) -> impl Future<Output = Self::Reply> + Send;
 }
 
-/// A trait for type-erased message handling within the actor system.
+/// Executes the complete lifecycle of an actor within its spawned task.
 ///
-/// This trait is typically implemented automatically by the [`impl_message_handler!`](crate::impl_message_handler) macro.
-/// It enables the actor system to handle messages of different types by downcasting
-/// them to their concrete types before passing them to the actor's specific [`Message::handle`](crate::actor::Message::handle)
-/// implementation. This trait powers the message processing capabilities of actors.
-pub trait MessageHandler: Actor + Send + 'static {
-    /// Handles a type-erased message.
-    ///
-    /// The implementation should attempt to downcast `msg_any` to one of the
-    /// message types the actor supports and then call the corresponding
-    /// [`Message::handle`](crate::actor::Message::handle) method.
-    fn handle(
-        &mut self,
-        msg_any: Box<dyn Any + Send>,
-        actor_ref: &ActorRef<Self>,
-    ) -> impl Future<Output = Result<Box<dyn Any + Send>>> + Send;
-}
-
-// This method encapsulates the actor's entire lifecycle within its spawned task.
-// It handles on_start, message processing, then returns the actor result.
-// Consumes self to return the actor.
-pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
+/// This function is the core runtime for an actor, handling the entire lifecycle from
+/// initialization through message processing to termination. It orchestrates:
+///
+/// 1. **Initialization**: Calls `on_start` to create the actor instance
+/// 2. **Runtime Loop**: Concurrently handles messages and executes `on_run`
+/// 3. **Termination**: Manages graceful/forceful shutdown and calls `on_stop`
+///
+/// # Arguments
+///
+/// * `args` - Initialization arguments passed to the actor's `on_start` method
+/// * `actor_ref` - Strong reference to the actor (dropped after initialization)
+/// * `receiver` - Channel receiver for incoming messages
+/// * `terminate_receiver` - Channel receiver for termination signals
+///
+/// # Returns
+///
+/// Returns an `ActorResult<T>` indicating the final state of the actor:
+/// - `ActorResult::Completed` if the actor terminated normally
+/// - `ActorResult::Failed` if an error occurred during any lifecycle phase
+///
+/// # Lifecycle Flow
+///
+/// ```text
+/// ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+/// │  on_start   │───▶│   Runtime   │───▶│   on_stop   │
+/// │ (create)    │    │   Loop      │    │ (cleanup)   │
+/// └─────────────┘    └─────────────┘    └─────────────┘
+///                           │
+///                           ▼
+///                    ┌─────────────┐
+///                    │ Message     │
+///                    │ Processing  │
+///                    │ + on_run    │
+///                    └─────────────┘
+/// ```
+pub(crate) async fn run_actor_lifecycle<T: Actor>(
     args: T::Args,
     actor_ref: ActorRef<T>,
-    mut receiver: mpsc::Receiver<MailboxMessage>,
+    mut receiver: mpsc::Receiver<MailboxMessage<T>>,
     mut terminate_receiver: mpsc::Receiver<ControlSignal>,
 ) -> ActorResult<T> {
     let actor_id = actor_ref.identity();
-
     let mut actor = match T::on_start(args, &actor_ref).await {
         Ok(actor) => {
             debug!("Actor {actor_id} on_start completed successfully.");
@@ -403,18 +414,22 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
         }
     };
 
-    debug!("Runtime for actor {actor_id} is running.");
+    debug!("Actor {actor_id} runtime starting - entering main processing loop.");
 
     let actor_weak = ActorRef::downgrade(&actor_ref);
-    drop(actor_ref); // Drop the strong reference to allow graceful shutdown
+    drop(actor_ref); // Drop the strong reference to allow graceful shutdown detection
 
     let mut killed = false;
 
-    // Message processing loop
+    // Main actor processing loop - handles three concurrent operations:
+    // 1. Termination signals (highest priority via biased select)
+    // 2. Incoming messages from the mailbox
+    // 3. Actor's on_run lifecycle method execution
     loop {
         tokio::select! {
-            // Handle Terminate signal with highest priority
-            biased; // Ensure Terminate is checked first if multiple conditions are ready
+            // Handle termination signals with highest priority using biased selection
+            // This ensures that termination requests are processed immediately when available
+            biased;
 
             maybe_terminate = terminate_receiver.recv() => {
                 match maybe_terminate {
@@ -445,81 +460,18 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                 break; // Exit the loop
             }
 
-            // Process incoming messages from the main mailbox
+            // Process incoming messages from the actor's mailbox
+            // Messages can be: regular message envelopes or graceful stop signals
             maybe_message = receiver.recv() => {
                 match maybe_message {
                     Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
-                        assert_eq!(actor_ref.identity().name(), std::any::type_name::<T>());
-
-                        let actor_ref = ActorRef::new(actor_ref);
-
                         #[cfg(feature = "tracing")]
                         let start_time = std::time::Instant::now();
 
-                        match actor.handle(payload, &actor_ref).await {
-                            Ok(reply) => {
-                                #[cfg(feature = "tracing")]
-                                let processing_duration = start_time.elapsed();
+                        payload.handle_message(&mut actor, actor_ref, reply_channel).await;
 
-                                #[cfg(feature = "tracing")]
-                                trace_debug!(
-                                    processing_duration_ms = processing_duration.as_millis(),
-                                    "Actor completed message processing successfully"
-                                );
-
-                                if let Some(tx) = reply_channel {
-                                    if tx.send(Ok(reply)).is_err() {
-                                        debug!("Actor {actor_id} failed to send reply: receiver dropped.");
-                                        #[cfg(feature = "tracing")]
-                                        trace_warn!("Failed to send reply: receiver dropped");
-                                    } else {
-                                        #[cfg(feature = "tracing")]
-                                        trace_debug!("Reply sent successfully");
-                                    }
-                                } else {
-                                    #[cfg(feature = "tracing")]
-                                    trace_debug!("No reply channel - tell message completed");
-                                }
-                            }
-                            Err(e) => { // e is crate::Error
-                                #[cfg(feature = "tracing")]
-                                let processing_duration = start_time.elapsed();
-
-                                error!("Actor {} error handling message: {:?}", actor_id, &e); // Log with a reference
-
-                                #[cfg(feature = "tracing")]
-                                trace_warn!(
-                                    error = %e,
-                                    processing_duration_ms = processing_duration.as_millis(),
-                                    "Actor error while processing message"
-                                );
-
-                                if let Some(tx) = reply_channel {
-                                    // Send the error back to the asker
-                                    if tx.send(Err(e)).is_err() {
-                                        error!("Actor {actor_id} failed to send error reply: receiver dropped.");
-                                        #[cfg(feature = "tracing")]
-                                        trace_warn!("Failed to send error reply: receiver dropped");
-                                    } else {
-                                        #[cfg(feature = "tracing")]
-                                        trace_debug!("Error reply sent successfully");
-                                    }
-                                } else {
-                                    // If no reply channel, we can't send an error back.
-                                    // This is a design choice: if the message was sent with 'tell',
-                                    // we don't have a reply channel to send errors back.
-                                    error!("Actor {actor_id} received message without reply channel, cannot send error reply.");
-                                    #[cfg(feature = "tracing")]
-                                    trace_warn!("Error in tell message - no reply channel to send error back");
-                                }
-                                // User send a wrong message type. So, we don't stop the actor in release mode.
-                                // In debug mode, we can panic to help the developer.
-                                #[cfg(debug_assertions)]
-                                {
-                                    panic!("Actor {actor_id} error handling message");
-                                }
-                            }
-                        }
+                        #[cfg(feature = "tracing")]
+                        trace_debug!("Actor {} processed message in {:?}", actor_id, start_time.elapsed());
                     }
                     Some(MailboxMessage::StopGracefully(_)) | None => {
                         #[cfg(feature = "tracing")]
@@ -541,12 +493,16 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
                 }
             }
 
+            // Execute the actor's on_run method concurrently with message processing
+            // This allows the actor to perform its primary work while staying responsive
             maybe_result = actor.on_run(&actor_weak) => {
                 match maybe_result {
                     Ok(_) => {
-                        // on_run completed successfully, continue processing messages.
+                        // on_run completed successfully, continue the processing loop
+                        // The actor runtime will call on_run again for the next iteration
                     }
-                    Err(e) => { // e is A::Error
+                    Err(e) => {
+                        // on_run returned an error - terminate the actor with failure status
                         let error_msg = format!("Actor {actor_id} on_run error: {e:?}");
                         error!("{error_msg}");
                         return ActorResult::Failed {
@@ -561,11 +517,12 @@ pub(crate) async fn run_actor_lifecycle<T: Actor + MessageHandler>(
         }
     }
 
-    receiver.close(); // Close the main mailbox
-    terminate_receiver.close(); // Close its own channel
+    // Cleanup: Close channels to signal shutdown completion
+    receiver.close(); // Close the message mailbox
+    terminate_receiver.close(); // Close the termination signal channel
 
-    debug!("Actor {actor_id} message loop ended.");
+    debug!("Actor {actor_id} lifecycle completed - exiting runtime loop.");
 
-    // Return completed actor result
+    // Return the final actor state - successful completion
     ActorResult::Completed { actor, killed }
 }

@@ -1,12 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
-#![allow(deprecated)]
 
-use std::any::TypeId;
-
-use rsactor::{
-    impl_message_handler, spawn, Actor, ActorRef, ActorResult, ActorWeak, FailurePhase, Message,
-};
+use rsactor::{spawn, Actor, ActorRef, ActorResult, ActorWeak, FailurePhase, Message};
 
 // Dummy message for test actors
 #[derive(Debug)]
@@ -40,8 +35,6 @@ impl Message<NoOpMsg> for TestActor {
     type Reply = ();
     async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef<Self>) -> Self::Reply {}
 }
-
-impl_message_handler!(TestActor, [NoOpMsg]);
 
 // Test actor that can be configured to fail in different phases
 #[derive(Debug)]
@@ -97,8 +90,6 @@ impl Message<NoOpMsg> for FailureTestActor {
     type Reply = ();
     async fn handle(&mut self, _msg: NoOpMsg, _: &ActorRef<Self>) -> Self::Reply {}
 }
-
-impl_message_handler!(FailureTestActor, [NoOpMsg]);
 
 // === ActorResult::Completed Tests ===
 
@@ -695,7 +686,7 @@ async fn test_error_runtime_ask_blocking_outside_runtime() {
 #[tokio::test]
 async fn test_error_runtime_display_format() {
     // Create a sample Error::Runtime for testing Display implementation
-    let identity = rsactor::Identity::new(TypeId::of::<TestActor>(), "TestActor");
+    let identity = rsactor::Identity::new(1, "TestActor");
     let error = rsactor::Error::Runtime {
         identity,
         details: "Test runtime error details".to_string(),

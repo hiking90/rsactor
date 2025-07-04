@@ -59,6 +59,7 @@ grcov ./target/coverage/profraws/ \
     --ignore "examples/*" \
     --ignore "**/build.rs" \
     --ignore "tests/*" \
+    --ignore "rsactor-derive/*" \
     -o ./target/coverage/report/
 
 echo "Coverage report generated at ./target/coverage/report/index.html"

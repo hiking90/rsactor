@@ -4,10 +4,9 @@ title Actor Creation and Spawning
 actor User
 participant "UserActor Struct" as UserActor
 participant "spawn()" as spawn_func
-participant "ActorRef" as ActorRef_type
+participant "ActorRef<T>" as ActorRef_type
 participant "mpsc::channel (mailbox)" as MailboxChannel
 participant "mpsc::channel (terminate)" as TerminateChannel
-participant "Runtime" as Runtime_type
 participant "tokio::spawn" as tokio_spawn
 participant "run_actor_lifecycle()" as run_lifecycle
 participant "Actor::on_start(Args)" as on_start_method
@@ -18,39 +17,50 @@ User -> UserActor: Uses #[message_handlers] macro for message handling
 User -> spawn_func: Calls spawn(actor_args)
 activate spawn_func
 
+spawn_func -> spawn_func: Generates unique actor ID (atomic)
 spawn_func -> MailboxChannel: Creates (mailbox_tx, mailbox_rx)
-spawn_func -> TerminateChannel: Creates (terminate_tx, terminate_rx)
-spawn_func -> ActorRef_type: Creates ActorRef (with id, mailbox_tx, terminate_tx)
-spawn_func -> tokio_spawn: Spawns run_actor_lifecycle(args, actor_ref, mailbox_rx, terminate_rx)\nactivate tokio_spawn
-spawn_func --> User: Returns (ActorRef, JoinHandle)
+spawn_func -> TerminateChannel: Creates (terminate_tx, terminate_rx) with buffer=1
+spawn_func -> ActorRef_type: Creates ActorRef<T> (with id, mailbox_tx, terminate_tx)
+spawn_func -> tokio_spawn: Spawns run_actor_lifecycle(args, actor_ref, mailbox_rx, terminate_rx)
+activate tokio_spawn
+spawn_func --> User: Returns (ActorRef<T>, JoinHandle<ActorResult<T>>)
 deactivate spawn_func
 
-tokio_spawn -> run_lifecycle: Executes
+tokio_spawn -> run_lifecycle: Executes in dedicated async task
 activate run_lifecycle
 run_lifecycle -> on_start_method: Calls T::on_start(args, &actor_ref).await
 activate on_start_method
 on_start_method --> run_lifecycle: Returns Result<ActorInstance, Error>
 deactivate on_start_method
 
-note right of run_lifecycle
-  If on_start is Ok, actor instance is created.
-  The runtime enters a tokio::select! loop that
-  concurrently handles: terminate signals, mailbox messages,
-  and periodic on_run() calls.
-end note
-run_lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await (in select! loop)
-activate on_run_method
-on_run_method --> run_lifecycle: Returns Result<(), Error>
-deactivate on_run_method
-note right of run_lifecycle
-  If on_run returns Ok(()), it will be called again.
-  If Err, actor terminates with ActorResult::Failed.
-  The select! loop also processes messages concurrently.
-end note
+alt on_start Success
+  run_lifecycle -> run_lifecycle: Creates ActorWeak from ActorRef (drops strong ref)
+  run_lifecycle -> run_lifecycle: Enters main tokio::select! loop
+  note right of run_lifecycle
+    Main loop concurrently handles:
+    1. Termination signals (biased priority)
+    2. Mailbox messages
+    3. Actor's on_run() execution
+  end note
 
-run_lifecycle --> tokio_spawn: (Eventually completes with ActorResult)
+  run_lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await (in select! loop)
+  activate on_run_method
+  on_run_method --> run_lifecycle: Returns Result<(), Error>
+  deactivate on_run_method
+
+  note right of run_lifecycle
+    If on_run returns Ok(()), it will be called again.
+    If Err, actor terminates with ActorResult::Failed.
+    The select! loop processes messages concurrently.
+  end note
+
+  run_lifecycle --> tokio_spawn: Eventually completes with ActorResult::Completed
+else on_start Failure
+  run_lifecycle --> tokio_spawn: Returns ActorResult::Failed { phase: OnStart, .. }
+end
+
 deactivate run_lifecycle
-tokio_spawn --> User: (JoinHandle resolves with ActorResult when task finishes)
+tokio_spawn --> User: JoinHandle resolves with ActorResult when task finishes
 deactivate tokio_spawn
 
 @enduml
