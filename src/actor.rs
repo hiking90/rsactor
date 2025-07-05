@@ -145,8 +145,8 @@ pub trait Actor: Sized + Send + 'static {
     /// The main processing loop for the actor. This method is called repeatedly after [`on_start`](Actor::on_start) completes.
     /// If this method returns `Ok(())`, it will be called again, allowing the actor to process
     /// ongoing or periodic tasks. The actor continues running as long as `on_run` returns `Ok(())`.
-    /// To stop the actor normally from within `on_run`, call [`actor_ref.stop()`](crate::actor_ref::ActorRef::stop)
-    /// or [`actor_ref.kill()`](crate::actor_ref::ActorRef::kill).
+    /// To stop the actor normally from within `on_run`, upgrade the `actor_weak` parameter and call
+    /// [`actor_ref.stop()`](crate::actor_ref::ActorRef::stop) or [`actor_ref.kill()`](crate::actor_ref::ActorRef::kill).
     ///
     /// `on_run`\'s execution is concurrent with the actor\'s message handling capabilities,
     /// enabling the actor to perform its primary processing while continuing to
@@ -157,7 +157,8 @@ pub trait Actor: Sized + Send + 'static {
     /// - **Lifecycle Management**: The actor continues its lifecycle by repeatedly executing the
     ///   `on_run` method. If `on_run` returns `Ok(())`, it will be called again, enabling
     ///   continuous processing. This supports the actor model's concept of independent,
-    ///   long-lived entities. For normal termination, use `actor_ref.stop()` or `actor_ref.kill()`.
+    ///   long-lived entities. For normal termination, upgrade the `actor_weak` parameter and call
+    ///   `actor_ref.stop()` or `actor_ref.kill()`.
     ///
     /// - **State Persistence Across Invocations**: Because `on_run` can be invoked multiple
     ///   times by the runtime (each time generating a new `Future`), any state intended
@@ -248,12 +249,12 @@ pub trait Actor: Sized + Send + 'static {
     ///   on how errors are handled.
     ///
     /// To stop the actor normally from within `on_run` (e.g., graceful shutdown),
-    /// the actor should explicitly call `actor_ref.stop().await?` or `actor_ref.kill()`.
+    /// the actor should explicitly upgrade the `actor_weak` parameter and call `actor_ref.stop().await?` or `actor_ref.kill()`.
     /// After such a call, `on_run` is unlikely to be invoked again by the runtime,
     /// as the actor will be in the process of shutting down.
     ///
-    /// The `actor_ref` parameter is a reference to the actor\'s own `ActorRef`.
-    /// It can be used, for example, to call `actor_ref.stop()` or `actor_ref.kill()`
+    /// The `actor_weak` parameter is a weak reference to the actor\'s own `ActorRef`.
+    /// It can be upgraded to a strong reference and used, for example, to call `actor_ref.stop()` or `actor_ref.kill()`
     /// to initiate actor termination from within `on_run`.
     ///
     /// The default implementation of `on_run` is a simple async block that sleeps for 1 second
@@ -262,7 +263,7 @@ pub trait Actor: Sized + Send + 'static {
     #[allow(unused_variables)]
     fn on_run(
         &mut self,
-        actor_ref: &ActorWeak<Self>,
+        actor_weak: &ActorWeak<Self>,
     ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // This sleep is critical - it creates an await point that allows
         // the Tokio runtime to switch tasks and process incoming messages.
@@ -299,12 +300,12 @@ pub trait Actor: Sized + Send + 'static {
     /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
     /// #         Ok(MyActor { /* ... */ })
     /// #     }
-    /// async fn on_stop(&mut self, actor_ref: &ActorWeak<Self>, killed: bool) -> std::result::Result<(), Self::Error> {
+    /// async fn on_stop(&mut self, actor_weak: &ActorWeak<Self>, killed: bool) -> std::result::Result<(), Self::Error> {
     ///     if killed {
-    ///         println!("Actor {} is being forcefully terminated, performing minimal cleanup", actor_ref.identity());
+    ///         println!("Actor {} is being forcefully terminated, performing minimal cleanup", actor_weak.identity());
     ///         // Perform minimal, fast cleanup
     ///     } else {
-    ///         println!("Actor {} is gracefully shutting down, performing full cleanup", actor_ref.identity());
+    ///         println!("Actor {} is gracefully shutting down, performing full cleanup", actor_weak.identity());
     ///         // Perform thorough cleanup
     ///     }
     ///     Ok(())
@@ -320,7 +321,7 @@ pub trait Actor: Sized + Send + 'static {
     #[allow(unused_variables)]
     fn on_stop(
         &mut self,
-        actor_ref: &ActorWeak<Self>,
+        actor_weak: &ActorWeak<Self>,
         killed: bool,
     ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
         // Default implementation does nothing on stop.

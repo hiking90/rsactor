@@ -45,62 +45,21 @@ rsactor = "0.9" # Check crates.io for the latest version
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
 
-### Optional Features
+### 2. Message Handling with `#[message_handlers]`
 
-#### Tracing Support
+rsActor uses the `#[message_handlers]` attribute macro combined with `#[handler]` method attributes for message handling. This is **required** for all actors and offers several advantages:
 
-rsActor provides optional tracing support for comprehensive observability into actor behavior. When enabled, the framework emits structured trace events for:
+- **Selective Processing**: Only methods marked with `#[handler]` are treated as message handlers.
+- **Clean Separation**: Regular methods can coexist with message handlers within the same `impl` block.
+- **Automatic Generation**: The macro automatically generates the necessary `Message` trait implementations and handler registrations.
+- **Type Safety**: Message handler signatures are verified at compile time.
+- **Reduced Boilerplate**: Eliminates the need to manually implement `Message` traits.
 
-- Actor lifecycle events (start, stop, termination scenarios)
-- Message sending and handling with timing information
-- Reply processing and error handling
-- Performance metrics (message processing duration)
+### 3. Choose Your Actor Creation Approach
 
-To enable tracing support, add the `tracing` feature to your dependencies:
+#### Option A: Simple Actor with `#[derive(Actor)]` (Recommended)
 
-```toml
-[dependencies]
-rsactor = { version = "0.9", features = ["tracing"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-```
-
-All examples include tracing support with feature detection. Here's the pattern used:
-
-```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("🚀 Demo: Tracing is ENABLED");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init();
-        println!("📝 Demo: Tracing is DISABLED");
-    }
-
-    // Your actor code here...
-    Ok(())
-}
-```
-
-Run any example with tracing enabled:
-```bash
-RUST_LOG=debug cargo run --example basic --features tracing
-```
-
-### 2. Choose Your Implementation Approach
-
-#### Option A: Using the Message Handlers Macro (Recommended)
-
-The `#[message_handlers]` attribute macro with `#[handler]` method attributes automatically generates Message trait implementations, reducing boilerplate:
+For simple actors that don't need complex initialization logic, use the `#[derive(Actor)]` macro:
 
 ```rust
 use rsactor::{Actor, ActorRef, message_handlers, spawn};
@@ -144,9 +103,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### Option B: Custom Actor Implementation with Initialization Arguments
+#### Option B: Custom Actor Implementation with Manual Initialization
 
-For actors that need custom initialization logic with the Actor trait:
+For actors that need custom initialization logic, implement the `Actor` trait manually:
 
 ```rust
 use rsactor::{Actor, ActorRef, message_handlers, spawn};
@@ -213,18 +172,6 @@ async fn main() -> Result<()> {
 }
 ```
 
-## Message Handling with `#[message_handlers]`
-
-rsActor simplifies message handling by using the `#[message_handlers]` attribute macro combined with `#[handler]` attributes on methods. This approach offers several advantages:
-
-- **Selective Processing**: Only methods marked with `#[handler]` are treated as message handlers.
-- **Clean Separation**: Regular methods can coexist with message handlers within the same `impl` block.
-- **Automatic Generation**: The macro automatically generates the necessary `Message` trait implementations and handler registrations.
-- **Type Safety**: Message handler signatures are verified at compile time.
-- **Reduced Boilerplate**: Eliminates the need to manually implement `Message` traits.
-
-This is the recommended way to handle messages in rsActor for most use cases, as it leads to more concise and maintainable code.
-
 ## Examples
 
 rsActor comes with several examples that demonstrate various features and use cases:
@@ -249,6 +196,57 @@ cargo run --example <example_name>
 All examples support tracing when enabled with the `tracing` feature:
 ```bash
 RUST_LOG=debug cargo run --example <example_name> --features tracing
+```
+
+## Optional Features
+
+### Tracing Support
+
+rsActor provides optional tracing support for comprehensive observability into actor behavior. When enabled, the framework emits structured trace events for:
+
+- Actor lifecycle events (start, stop, termination scenarios)
+- Message sending and handling with timing information
+- Reply processing and error handling
+- Performance metrics (message processing duration)
+
+To enable tracing support, add the `tracing` feature to your dependencies:
+
+```toml
+[dependencies]
+rsactor = { version = "0.9", features = ["tracing"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+```
+
+All examples include tracing support with feature detection. Here's the pattern used:
+
+```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing if the feature is enabled
+    #[cfg(feature = "tracing")]
+    {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_target(false)
+            .init();
+        println!("🚀 Demo: Tracing is ENABLED");
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+        env_logger::init();
+        println!("📝 Demo: Tracing is DISABLED");
+    }
+
+    // Your actor code here...
+    Ok(())
+}
+```
+
+Run any example with tracing enabled:
+```bash
+RUST_LOG=debug cargo run --example basic --features tracing
 ```
 
 ## Further Information

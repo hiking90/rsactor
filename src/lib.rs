@@ -43,9 +43,20 @@
 //!
 //! ## Getting Started
 //!
-//! ### Option A: Using Message Handlers Macro (Recommended)
+//! ### Message Handling with `#[message_handlers]`
 //!
-//! For the most concise approach, use the `#[message_handlers]` attribute macro with `#[handler]` method attributes:
+//! rsActor uses the `#[message_handlers]` attribute macro combined with `#[handler]` method attributes
+//! for message handling. This is **required** for all actors and offers several advantages:
+//!
+//! - **Selective Processing**: Only methods marked with `#[handler]` are treated as message handlers.
+//! - **Clean Separation**: Regular methods can coexist with message handlers within the same `impl` block.
+//! - **Automatic Generation**: The macro automatically generates the necessary `Message` trait implementations and handler registrations.
+//! - **Type Safety**: Message handler signatures are verified at compile time.
+//! - **Reduced Boilerplate**: Eliminates the need to manually implement `Message` traits.
+//!
+//! ### Option A: Simple Actor with `#[derive(Actor)]` (Recommended)
+//!
+//! For simple actors that don't need complex initialization logic, use the `#[derive(Actor)]` macro:
 //!
 //! ```rust
 //! use rsactor::{Actor, ActorRef, message_handlers, spawn};
@@ -92,46 +103,66 @@
 //! # }
 //! ```
 //!
-//! ### Option B: Manual Message Implementation
+//! ### Option B: Custom Actor Implementation with Manual Initialization
 //!
-//! For cases where you need more control over message handling, you can manually implement the Message trait:
+//! For actors that need custom initialization logic, implement the `Actor` trait manually:
 //!
 //! ```rust
-//! use rsactor::{Actor, ActorRef, Message, spawn};
+//! use rsactor::{Actor, ActorRef, message_handlers, spawn};
+//! use anyhow::Result;
 //!
-//! // 1. Define your actor struct and derive Actor
-//! #[derive(Actor)]
+//! // 1. Define your actor struct
+//! #[derive(Debug)] // Added Debug for printing the actor in ActorResult
 //! struct MyActor {
-//!     name: String,
+//!     data: String,
 //!     count: u32,
 //! }
 //!
-//! // 2. Define message types and implement Message<M> for each
-//! struct GetName;
-//! struct Increment;
+//! // 2. Implement the Actor trait manually
+//! impl Actor for MyActor {
+//!     type Args = String;
+//!     type Error = anyhow::Error;
 //!
-//! impl Message<GetName> for MyActor {
-//!     type Reply = String;
-//!     async fn handle(&mut self, _msg: GetName, _actor_ref: &ActorRef<Self>) -> Self::Reply {
-//!         self.name.clone()
+//!     // on_start is required and must be implemented.
+//!     // on_run and on_stop are optional and have default implementations.
+//!     async fn on_start(initial_data: Self::Args, actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+//!         println!("MyActor (id: {}) started with data: '{}'", actor_ref.identity(), initial_data);
+//!         Ok(MyActor {
+//!             data: initial_data,
+//!             count: 0,
+//!         })
 //!     }
 //! }
 //!
-//! impl Message<Increment> for MyActor {
-//!     type Reply = ();
-//!     async fn handle(&mut self, _msg: Increment, _actor_ref: &ActorRef<Self>) -> Self::Reply {
-//!         self.count += 1;
+//! // 3. Define message types
+//! struct GetData;
+//! struct IncrementMsg(u32);
+//!
+//! // 4. Use message_handlers macro for message handling
+//! #[message_handlers]
+//! impl MyActor {
+//!     #[handler]
+//!     async fn handle_get_data(&mut self, _msg: GetData, _actor_ref: &ActorRef<Self>) -> String {
+//!         self.data.clone()
+//!     }
+//!
+//!     #[handler]
+//!     async fn handle_increment(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef<Self>) -> u32 {
+//!         self.count += msg.0;
+//!         self.count
 //!     }
 //! }
 //!
-//! // 3. Usage
+//! // 5. Usage
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let actor_instance = MyActor { name: "Test".to_string(), count: 0 };
-//! let (actor_ref, _join_handle) = spawn::<MyActor>(actor_instance);
+//! let (actor_ref, join_handle) = spawn::<MyActor>("initial data".to_string());
 //!
-//! let name = actor_ref.ask(GetName).await?;
-//! actor_ref.tell(Increment).await?;
+//! let current_data: String = actor_ref.ask(GetData).await?;
+//! let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;
+//!
+//! actor_ref.stop().await?;
+//! let actor_result = join_handle.await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -169,90 +200,6 @@
 //!     async fn handle_complete(&mut self, msg: Complete, _: &ActorRef<Self>) -> () {
 //!         *self = StateActor::Completed(msg.0);
 //!     }
-//! }
-//! ```
-//!
-//! ### Option C: Manual Actor Implementation (Advanced Usage)
-//!
-//! For actors that need complex initialization logic, implement the Actor trait manually:
-//!
-//! ```rust
-//! use rsactor::{Actor, ActorRef, ActorWeak, message_handlers, spawn};
-//! use anyhow::Result;
-//!
-//! // 1. Define your actor struct
-//! #[derive(Debug)]
-//! struct MyActor {
-//!     data: String,
-//!     tick_300ms: tokio::time::Interval,
-//!     tick_1s: tokio::time::Interval,
-//! }
-//!
-//! // 2. Implement the Actor trait manually
-//! impl Actor for MyActor {
-//!     type Args = String;
-//!     type Error = anyhow::Error;
-//!
-//!     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
-//!         println!("MyActor (data: '{}') started!", args);
-//!         Ok(MyActor {
-//!             data: args,
-//!             tick_300ms: tokio::time::interval(std::time::Duration::from_millis(300)),
-//!             tick_1s: tokio::time::interval(std::time::Duration::from_secs(1)),
-//!         })
-//!     }
-//!
-//!     async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
-//!         tokio::select! {
-//!             _ = self.tick_300ms.tick() => {
-//!                 println!("Tick: 300ms");
-//!             }
-//!             _ = self.tick_1s.tick() => {
-//!                 println!("Tick: 1s");
-//!             }
-//!         }
-//!         Ok(())
-//!     }
-//! }
-//!
-//! // 3. Define message types
-//! struct GetData;
-//! struct UpdateData(String);
-//!
-//! // 4. Use message_handlers macro for message handling (recommended approach)
-//! #[message_handlers]
-//! impl MyActor {
-//!     #[handler]
-//!     async fn handle_get_data(&mut self, _msg: GetData, _actor_ref: &ActorRef<Self>) -> String {
-//!         self.data.clone()
-//!     }
-//!
-//!     #[handler]
-//!     async fn handle_update_data(&mut self, msg: UpdateData, _actor_ref: &ActorRef<Self>) -> () {
-//!         self.data = msg.0;
-//!         println!("MyActor data updated!");
-//!     }
-//! }
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<()> {
-//!     let (actor_ref, join_handle) = spawn::<MyActor>("initial data".to_string());
-//!
-//!     // Send messages
-//!     let current_data: String = actor_ref.ask(GetData).await?;
-//!     println!("Received data: {}", current_data);
-//!
-//!     actor_ref.tell(UpdateData("new data".to_string())).await?;
-//!
-//!     let updated_data: String = actor_ref.ask(GetData).await?;
-//!     println!("Updated data: {}", updated_data);
-//!
-//!     // Stop the actor
-//!     actor_ref.stop().await?;
-//!     let actor_result = join_handle.await?;
-//!     println!("Actor stopped with result: {:?}", actor_result);
-//!
-//!     Ok(())
 //! }
 //! ```
 //!

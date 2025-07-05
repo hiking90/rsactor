@@ -509,6 +509,7 @@ impl<T: Actor> Clone for ActorRef<T> {
 ///
 /// `ActorWeak<T>` is a weak reference that does not prevent the actor from being dropped
 /// and can be upgraded to a strong [`ActorRef<T>`] if the actor is still alive.
+/// Like [`ActorRef<T>`], it maintains compile-time type safety for the actor type `T`.
 ///
 /// ## Creating `ActorWeak<T>`
 ///
@@ -567,9 +568,13 @@ impl<T: Actor> ActorWeak<T> {
     /// Checks if the actor might still be alive.
     ///
     /// This method returns `true` if weak references can potentially be upgraded,
-    /// but does not guarantee that a subsequent [`upgrade`](ActorWeak::upgrade) call will succeed.
+    /// but does not guarantee that a subsequent [`upgrade`](ActorWeak::upgrade) call will succeed
+    /// due to potential race conditions.
     ///
     /// Returns `false` if the actor is definitely dead (all strong references dropped).
+    ///
+    /// **Note**: This is a heuristic check. For definitive actor state, always use
+    /// [`upgrade`](ActorWeak::upgrade) and check the returned `Option`.
     #[inline]
     pub fn is_alive(&self) -> bool {
         // Both channels must have strong references for the actor to be alive
