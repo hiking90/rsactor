@@ -57,7 +57,7 @@ rsActor uses the `#[message_handlers]` attribute macro combined with `#[handler]
 
 ### 3. Choose Your Actor Creation Approach
 
-#### Option A: Simple Actor with `#[derive(Actor)]` (Recommended)
+#### Option A: Simple Actor with `#[derive(Actor)]`
 
 For simple actors that don't need complex initialization logic, use the `#[derive(Actor)]` macro:
 

@@ -54,7 +54,7 @@
 //! - **Type Safety**: Message handler signatures are verified at compile time.
 //! - **Reduced Boilerplate**: Eliminates the need to manually implement `Message` traits.
 //!
-//! ### Option A: Simple Actor with `#[derive(Actor)]` (Recommended)
+//! ### Option A: Simple Actor with `#[derive(Actor)]`
 //!
 //! For simple actors that don't need complex initialization logic, use the `#[derive(Actor)]` macro:
 //!
