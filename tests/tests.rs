@@ -1049,42 +1049,7 @@ async fn test_tell_with_timeout() {
 
 // === UntypedActorRef Incompatible Message Tests ===
 
-// Test actor for UntypedActorRef incompatible message scenarios
-#[derive(Debug)]
-struct IncompatibleMessageTestActor {
-    messages_received: Arc<Mutex<Vec<String>>>,
-}
-
-impl Actor for IncompatibleMessageTestActor {
-    type Args = Arc<Mutex<Vec<String>>>;
-    type Error = anyhow::Error;
-
-    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        debug!(
-            "IncompatibleMessageTestActor (id: {}) started.",
-            actor_ref.identity()
-        );
-        Ok(Self {
-            messages_received: args,
-        })
-    }
-}
-
-// Define compatible messages for the test actor
-#[derive(Debug)]
-struct CompatibleMsg(String);
-
-impl Message<CompatibleMsg> for IncompatibleMessageTestActor {
-    type Reply = String;
-    async fn handle(&mut self, msg: CompatibleMsg, _: &ActorRef<Self>) -> Self::Reply {
-        let mut messages = self.messages_received.lock().await;
-        messages.push(format!("CompatibleMsg: {}", msg.0));
-        format!("Handled: {}", msg.0)
-    }
-}
-
 // === on_stop Error Handling Tests ===
-
 #[tokio::test]
 async fn test_actor_fail_on_stop_during_graceful_stop() {
     let on_start_attempted = Arc::new(Mutex::new(false));
