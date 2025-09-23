@@ -593,8 +593,8 @@ async fn test_all_boolean_combinations() {
 
 // === Error::Runtime Tests ===
 
-#[tokio::test]
-async fn test_error_runtime_tell_blocking_outside_runtime() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocking_tell_works_outside_runtime() {
     // Spawn an actor within a Tokio runtime
     let args = (String::from("runtime_test"), 42);
     let (actor_ref, handle) = spawn::<TestActor>(args);
@@ -605,29 +605,16 @@ async fn test_error_runtime_tell_blocking_outside_runtime() {
     // Create a thread that has no Tokio runtime context
     let actor_ref_clone = actor_ref.clone();
     let thread_handle = std::thread::spawn(move || {
-        // This should trigger Error::Runtime because we're calling tell_blocking
-        // from a thread that doesn't have a Tokio runtime handle
-        let result =
-            actor_ref_clone.tell_blocking(NoOpMsg, Some(std::time::Duration::from_millis(100)));
+        // With the new blocking_tell implementation, this should succeed
+        // because it doesn't require a Tokio runtime context
+        let result = actor_ref_clone.blocking_tell(NoOpMsg);
 
-        // Verify that we get Error::Runtime
+        // Verify that the call succeeds
         assert!(
-            result.is_err(),
-            "tell_blocking should fail outside runtime context"
+            result.is_ok(),
+            "blocking_tell should succeed outside runtime context: {:?}",
+            result
         );
-        if let Err(rsactor::Error::Runtime { identity, details }) = result {
-            assert_eq!(
-                identity,
-                actor_ref_clone.identity(),
-                "Identity should match"
-            );
-            assert!(
-                details.contains("Failed to get Tokio runtime handle for tell_blocking"),
-                "Error should mention runtime handle failure, got: {details}"
-            );
-        } else {
-            panic!("Expected Error::Runtime, got: {result:?}");
-        }
     });
 
     // Wait for the thread to complete
@@ -638,8 +625,8 @@ async fn test_error_runtime_tell_blocking_outside_runtime() {
     let _result = handle.await.expect("Actor task failed");
 }
 
-#[tokio::test]
-async fn test_error_runtime_ask_blocking_outside_runtime() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocking_ask_works_outside_runtime() {
     // Spawn an actor within a Tokio runtime
     let args = (String::from("runtime_test"), 42);
     let (actor_ref, handle) = spawn::<TestActor>(args);
@@ -650,29 +637,16 @@ async fn test_error_runtime_ask_blocking_outside_runtime() {
     // Create a thread that has no Tokio runtime context
     let actor_ref_clone = actor_ref.clone();
     let thread_handle = std::thread::spawn(move || {
-        // This should trigger Error::Runtime because we're calling ask_blocking
-        // from a thread that doesn't have a Tokio runtime handle
-        let result: Result<(), rsactor::Error> =
-            actor_ref_clone.ask_blocking(NoOpMsg, Some(std::time::Duration::from_millis(100)));
+        // With the new blocking_ask implementation, this should succeed
+        // because it doesn't require a Tokio runtime context
+        let result: Result<(), rsactor::Error> = actor_ref_clone.blocking_ask(NoOpMsg);
 
-        // Verify that we get Error::Runtime
+        // Verify that the call succeeds
         assert!(
-            result.is_err(),
-            "ask_blocking should fail outside runtime context"
+            result.is_ok(),
+            "blocking_ask should succeed outside runtime context: {:?}",
+            result
         );
-        if let Err(rsactor::Error::Runtime { identity, details }) = result {
-            assert_eq!(
-                identity,
-                actor_ref_clone.identity(),
-                "Identity should match"
-            );
-            assert!(
-                details.contains("Failed to get Tokio runtime handle for ask_blocking"),
-                "Error should mention runtime handle failure, got: {details}"
-            );
-        } else {
-            panic!("Expected Error::Runtime, got: {result:?}");
-        }
     });
 
     // Wait for the thread to complete

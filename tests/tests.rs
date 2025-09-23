@@ -636,22 +636,19 @@ async fn test_spawn_and_stop_dummy_actor() {
     );
 }
 
-#[tokio::test]
-async fn test_actor_ref_tell_blocking() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_actor_ref_blocking_tell() {
     let (actor_ref, handle, counter, last_processed) = setup_actor().await;
 
     let actor_ref_clone = actor_ref.clone();
     let counter_clone = counter.clone();
     let last_processed_clone = last_processed.clone();
 
-    // Spawn a blocking task to call tell_blocking
+    // Spawn a blocking task to call blocking_tell
     let join_handle = tokio::task::spawn_blocking(move || {
         actor_ref_clone
-            .tell_blocking(
-                UpdateCounterMsg(7),
-                Some(std::time::Duration::from_millis(100)),
-            )
-            .expect("tell_blocking failed");
+            .blocking_tell(UpdateCounterMsg(7))
+            .expect("blocking_tell failed");
     });
 
     join_handle.await.expect("Blocking task panicked");
@@ -667,50 +664,44 @@ async fn test_actor_ref_tell_blocking() {
     handle.await.expect("Actor task failed");
 }
 
-#[tokio::test]
-async fn test_actor_ref_ask_blocking() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_actor_ref_blocking_ask() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     let actor_ref_clone = actor_ref.clone();
-    // Spawn a blocking task to call ask_blocking
+    // Spawn a blocking task to call blocking_ask
     let join_handle = tokio::task::spawn_blocking(move || {
         let reply: String = actor_ref_clone
-            .ask_blocking(
-                PingMsg("hello_blocking".to_string()),
-                Some(std::time::Duration::from_millis(100)),
-            )
-            .expect("ask_blocking failed for PingMsg");
+            .blocking_ask(PingMsg("hello_blocking".to_string()))
+            .expect("blocking_ask failed for PingMsg");
         assert_eq!(reply, "pong: hello_blocking");
 
         let count: i32 = actor_ref_clone
-            .ask_blocking(GetCounterMsg, Some(std::time::Duration::from_millis(100)))
-            .expect("ask_blocking failed for GetCounterMsg");
+            .blocking_ask(GetCounterMsg)
+            .expect("blocking_ask failed for GetCounterMsg");
         assert_eq!(count, 0);
 
         let _: () = actor_ref_clone
-            .ask_blocking(
-                UpdateCounterMsg(15),
-                Some(std::time::Duration::from_millis(100)),
-            )
-            .expect("ask_blocking failed for UpdateCounterMsg");
+            .blocking_ask(UpdateCounterMsg(15))
+            .expect("blocking_ask failed for UpdateCounterMsg");
 
         let count_after_update: i32 = actor_ref_clone
-            .ask_blocking(GetCounterMsg, Some(std::time::Duration::from_millis(100)))
-            .expect("ask_blocking failed for GetCounterMsg after update");
+            .blocking_ask(GetCounterMsg)
+            .expect("blocking_ask failed for GetCounterMsg after update");
         assert_eq!(count_after_update, 15);
     });
 
     // Added to increase the test coverage
     let actor_ref_clone = actor_ref.clone();
     let thread_handle = std::thread::spawn(move || {
-        // Explicitly specify the message type M=PingMsg and reply type R=String
-        // PingMsg is defined to reply with String.
+        // With the new blocking implementation, these should succeed
+        // because they don't require a Tokio runtime context
         assert!(actor_ref_clone
-            .ask_blocking(PingMsg("hello_blocking".to_string()), None)
-            .is_err());
+            .blocking_ask(PingMsg("hello_blocking".to_string()))
+            .is_ok());
         assert!(actor_ref_clone
-            .tell_blocking(PingMsg("hello_blocking".to_string()), None)
-            .is_err());
+            .blocking_tell(PingMsg("hello_blocking".to_string()))
+            .is_ok());
     });
 
     thread_handle.join().expect("Thread panicked");
@@ -721,154 +712,39 @@ async fn test_actor_ref_ask_blocking() {
     handle.await.expect("Actor task failed");
 }
 
-#[tokio::test]
-async fn test_actor_ref_ask_blocking_timeout() {
-    let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
+// NOTE: Timeout test disabled because new blocking_ask doesn't support timeout
+// #[tokio::test]
+// async fn test_actor_ref_blocking_ask_timeout() {
+//     // This test is no longer applicable since blocking_ask doesn't support timeout
+// }
 
-    // SlowMsg handler sleeps for 100ms. ask_blocking timeout is 10ms.
-    let actor_ref_clone = actor_ref.clone();
-    let join_handle = tokio::task::spawn_blocking(move || {
-        let result: Result<(), _> =
-            actor_ref_clone.ask_blocking(SlowMsg, Some(std::time::Duration::from_millis(10))); // Timeout 10ms
-        assert!(result.is_err(), "ask_blocking should have timed out");
-        if let Err(e) = result {
-            // The error message format includes actor ID and timeout duration
-            // Just check that it contains "timed out" which is what we care about
-            assert!(
-                e.to_string().contains("timed out"),
-                "Error should indicate a timeout: {e}"
-            );
-        }
-    });
+// NOTE: Timeout test disabled because new blocking_tell doesn't support timeout
+// #[tokio::test]
+// async fn test_actor_ref_blocking_tell_timeout_when_mailbox_full() {
+//     // This test is no longer applicable since blocking_tell doesn't support timeout
+// }
 
-    join_handle
-        .await
-        .expect("Blocking task panicked for ask timeout test");
-
-    actor_ref.stop().await.expect("Failed to stop actor");
-    handle.await.expect("Actor task failed");
-}
-
-#[tokio::test]
-async fn test_actor_ref_tell_blocking_timeout_when_mailbox_full() {
-    // Spawn an actor with a mailbox capacity of 1.
-    let counter = Arc::new(Mutex::new(0));
-    let last_processed_message_type = Arc::new(Mutex::new(None));
-
-    let actor_args = TestArgs {
-        counter: counter.clone(),
-        last_processed_message_type: last_processed_message_type.clone(),
-    };
-    // Spawn with capacity 1
-    let (actor_ref, handle) = spawn_with_mailbox_capacity::<TestActor>(actor_args, 1);
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await; // on_start
-
-    // 1. Send SlowMsg to make the actor busy. Handler sleeps for 100ms.
-    actor_ref.tell(SlowMsg).await.expect("Tell SlowMsg failed");
-
-    // 2. Send UpdateCounterMsg(1). This will fill the mailbox (capacity 1)
-    //    because the actor is busy with SlowMsg.
-    actor_ref
-        .tell(UpdateCounterMsg(1))
-        .await
-        .expect("Tell UpdateCounterMsg(1) to fill mailbox failed");
-
-    // 3. Try to send multiple messages with progressively longer timeouts
-    // to increase reliability in CI environments while still testing timeout behavior
-    let mut timeout_occurred = false;
-    let timeouts = [1, 2, 5, 10, 15]; // Progressive timeouts in milliseconds
-
-    for (idx, timeout_ms) in timeouts.iter().enumerate() {
-        let i = idx + 2; // Start from UpdateCounterMsg(2)
-        let actor_ref_clone = actor_ref.clone();
-        let timeout_duration = std::time::Duration::from_millis(*timeout_ms);
-
-        let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
-            actor_ref_clone.tell_blocking(UpdateCounterMsg(i as i32), Some(timeout_duration))
-        });
-
-        match join_handle_blocking_task
-            .await
-            .expect("Blocking task panicked")
-        {
-            Err(e) if e.to_string().contains("timed out") => {
-                timeout_occurred = true;
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    // If none of the short timeouts worked, try a more aggressive approach
-    if !timeout_occurred {
-        // Send several more messages to definitely fill any buffers
-        for i in 10..=20 {
-            let actor_ref_clone = actor_ref.clone();
-            let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
-                actor_ref_clone.tell_blocking(
-                    UpdateCounterMsg(i),
-                    Some(std::time::Duration::from_millis(1)), // Very aggressive timeout
-                )
-            });
-
-            match join_handle_blocking_task
-                .await
-                .expect("Blocking task panicked")
-            {
-                Err(e) if e.to_string().contains("timed out") => {
-                    timeout_occurred = true;
-                    break;
-                }
-                _ => {}
-            }
-        }
-    }
-
-    assert!(
-        timeout_occurred,
-        "At least one tell_blocking should have timed out when mailbox is full"
-    );
-
-    // Allow the actor to process messages (SlowMsg, then UpdateCounterMsg(1), and potentially others)
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await; // Wait for all processing
-
-    actor_ref.stop().await.expect("Failed to stop actor");
-    let result = handle.await.expect("Actor task failed");
-    let (actor, _) = result.into();
-    if let Some(actor) = actor {
-        // Verify that at least the first UpdateCounterMsg(1) was processed.
-        // Due to the timeout test, we might have processed more than 1
-        let counter_value = *actor.counter.lock().await;
-        assert!(
-            counter_value >= 1,
-            "Counter should be at least 1 after SlowMsg and UpdateCounterMsg(1), got: {counter_value}"
-        );
-    } else {
-        panic!("Actor state should not be None");
-    }
-}
-
-#[tokio::test]
-async fn test_actor_ref_ask_blocking_no_timeout() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_actor_ref_blocking_ask_no_timeout() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     let actor_ref_clone = actor_ref.clone();
-    // Spawn a blocking task to call ask_blocking with None timeout
+    // Spawn a blocking task to call blocking_ask with None timeout
     let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
         let reply: String = actor_ref_clone
-            .ask_blocking(PingMsg("hello_no_timeout".to_string()), None)
-            .expect("ask_blocking with None timeout failed for PingMsg");
+            .blocking_ask(PingMsg("hello_no_timeout".to_string()))
+            .expect("blocking_ask with None timeout failed for PingMsg");
         assert_eq!(reply, "pong: hello_no_timeout");
 
         let count: i32 = actor_ref_clone
-            .ask_blocking(GetCounterMsg, None)
-            .expect("ask_blocking with None timeout failed for GetCounterMsg");
+            .blocking_ask(GetCounterMsg)
+            .expect("blocking_ask with None timeout failed for GetCounterMsg");
         assert_eq!(count, 0);
     });
 
     join_handle_blocking_task
         .await
-        .expect("Blocking task for ask_blocking with None timeout panicked");
+        .expect("Blocking task for blocking_ask with None timeout panicked");
 
     actor_ref.stop().await.expect("Failed to stop actor");
     handle.await.expect("Actor task failed");

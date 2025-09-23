@@ -6,7 +6,6 @@ use crate::Identity;
 use crate::{Actor, ControlSignal, MailboxMessage, MailboxSender, Message};
 use log::warn;
 use std::time::Duration;
-use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 
 #[cfg(feature = "tracing")]
@@ -34,11 +33,13 @@ use tracing::{debug as trace_debug, info, warn as trace_warn};
 ///   - [`tell`](ActorRef::tell): Send a message without waiting for a reply.
 ///   - [`tell_with_timeout`](ActorRef::tell_with_timeout): Send a message without waiting for a reply with a timeout.
 ///
-/// - **Blocking Methods for Tokio Blocking Contexts**:
-///   - [`ask_blocking`](ActorRef::ask_blocking): Send a message and block until a typed reply is received.
-///   - [`tell_blocking`](ActorRef::tell_blocking): Send a message and block until it is sent.
+/// - **Blocking Methods**:
+///   - [`blocking_ask`](ActorRef::blocking_ask): Send a message and block until a typed reply is received (no runtime context required).
+///   - [`blocking_tell`](ActorRef::blocking_tell): Send a message and block until it is sent (no runtime context required).
+///   - [`ask_blocking`](ActorRef::ask_blocking): *(Deprecated)* Send a message and block until a typed reply is received.
+///   - [`tell_blocking`](ActorRef::tell_blocking): *(Deprecated)* Send a message and block until it is sent.
 ///
-///   These methods are for use within `tokio::task::spawn_blocking` contexts.
+///   The new `blocking_*` methods use Tokio's underlying `blocking_send` and `blocking_recv` and can be used from any thread.
 ///
 /// - **Control Methods**:
 ///   - [`stop`](ActorRef::stop): Gracefully stop the actor.
@@ -399,7 +400,132 @@ impl<T: Actor> ActorRef<T> {
 
     /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
     ///
+    /// This method uses the underlying Tokio channel's `blocking_send` method and does not
+    /// require a Tokio runtime context. It can be used from any thread, including non-async contexts.
+    /// This method does not support timeouts.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_blocking_tell",
+        fields(
+            actor_id = %self.identity(),
+            message_type = %std::any::type_name::<M>()
+        ),
+        skip(self, msg)
+    ))]
+    pub fn blocking_tell<M>(&self, msg: M) -> Result<()>
+    where
+        M: Send + 'static,
+        T: Message<M>,
+    {
+        let envelope = MailboxMessage::Envelope {
+            payload: Box::new(msg),
+            reply_channel: None,     // reply_channel is None for tell
+            actor_ref: self.clone(), // Include the actor ref for context
+        };
+
+        #[cfg(feature = "tracing")]
+        trace_debug!("Sending blocking tell message (fire-and-forget)");
+
+        let result = self
+            .sender
+            .blocking_send(envelope)
+            .map_err(|_| Error::Send {
+                identity: self.identity(),
+                details: "Mailbox channel closed".to_string(),
+            });
+
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => trace_debug!("Blocking tell message sent successfully"),
+            Err(e) => trace_warn!(error = %e, "Failed to send blocking tell message"),
+        }
+
+        result
+    }
+
+    /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
+    ///
+    /// This method uses the underlying Tokio channel's `blocking_send` and `blocking_recv` methods
+    /// and does not require a Tokio runtime context. It can be used from any thread, including
+    /// non-async contexts. This method does not support timeouts.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_blocking_ask",
+        fields(
+            actor_id = %self.identity(),
+            message_type = %std::any::type_name::<M>(),
+            reply_type = %std::any::type_name::<T::Reply>()
+        ),
+        skip(self, msg)
+    ))]
+    pub fn blocking_ask<M>(&self, msg: M) -> Result<T::Reply>
+    where
+        T: Message<M>,
+        M: Send + 'static,
+        T::Reply: Send + 'static,
+    {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let envelope = MailboxMessage::Envelope {
+            payload: Box::new(msg),
+            reply_channel: Some(reply_tx),
+            actor_ref: self.clone(), // Include the actor ref for context
+        };
+
+        #[cfg(feature = "tracing")]
+        trace_debug!("Sending blocking ask message and waiting for reply");
+
+        self.sender.blocking_send(envelope).map_err(|_| {
+            #[cfg(feature = "tracing")]
+            trace_warn!("Failed to send blocking ask message: mailbox channel closed");
+
+            Error::Send {
+                identity: self.identity(),
+                details: "Mailbox channel closed".to_string(),
+            }
+        })?;
+
+        match reply_rx.blocking_recv() {
+            Ok(reply_any) => {
+                // Successfully received reply from actor
+                match reply_any.downcast::<T::Reply>() {
+                    Ok(reply) => {
+                        #[cfg(feature = "tracing")]
+                        trace_debug!("Blocking ask reply received successfully");
+                        Ok(*reply)
+                    }
+                    Err(_) => {
+                        #[cfg(feature = "tracing")]
+                        trace_warn!(
+                            expected_type = %std::any::type_name::<T::Reply>(),
+                            "Blocking ask reply type downcast failed"
+                        );
+                        Err(Error::Downcast {
+                            identity: self.identity(),
+                            expected_type: std::any::type_name::<T::Reply>().to_string(),
+                        })
+                    }
+                }
+            }
+            Err(_recv_err) => {
+                #[cfg(feature = "tracing")]
+                trace_warn!("Blocking ask reply channel closed unexpectedly");
+                Err(Error::Receive {
+                    identity: self.identity(),
+                    details: "Reply channel closed unexpectedly".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
+    ///
     /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
+    ///
+    /// **Deprecated**: Use [`blocking_tell`](ActorRef::blocking_tell) instead. The timeout parameter is ignored.
+    #[deprecated(
+        since = "0.10.0",
+        note = "Use `blocking_tell` instead. Timeout parameter is ignored."
+    )]
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_tell_blocking",
@@ -416,37 +542,23 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
     {
         #[cfg(feature = "tracing")]
-        trace_debug!("Executing tell_blocking");
+        trace_debug!("Executing deprecated tell_blocking, delegating to blocking_tell");
 
-        let rt = Handle::try_current().map_err(|e| Error::Runtime {
-            identity: self.identity(),
-            details: format!("Failed to get Tokio runtime handle for tell_blocking: {e}"),
-        })?;
+        // Ignore timeout parameter as documented in deprecation notice
+        let _ = timeout;
 
-        let result = match timeout {
-            Some(duration) => {
-                rt.block_on(tokio::time::timeout(duration, self.tell(msg)))
-                    .map_err(|_| Error::Timeout {
-                        identity: self.identity(),
-                        timeout: duration,
-                        operation: "tell_blocking".to_string(),
-                    })? // Unwrap nested Result
-            }
-            None => rt.block_on(self.tell(msg)),
-        };
-
-        #[cfg(feature = "tracing")]
-        match &result {
-            Ok(_) => trace_debug!("Tell blocking completed successfully"),
-            Err(e) => trace_warn!(error = %e, "Tell blocking failed"),
-        }
-
-        result
+        self.blocking_tell(msg)
     }
 
     /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
     ///
     /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
+    ///
+    /// **Deprecated**: Use [`blocking_ask`](ActorRef::blocking_ask) instead. The timeout parameter is ignored.
+    #[deprecated(
+        since = "0.10.0",
+        note = "Use `blocking_ask` instead. Timeout parameter is ignored."
+    )]
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_ask_blocking",
@@ -465,32 +577,12 @@ impl<T: Actor> ActorRef<T> {
         T::Reply: Send + 'static,
     {
         #[cfg(feature = "tracing")]
-        trace_debug!("Executing ask_blocking");
+        trace_debug!("Executing deprecated ask_blocking, delegating to blocking_ask");
 
-        let rt = Handle::try_current().map_err(|e| Error::Runtime {
-            identity: self.identity(),
-            details: format!("Failed to get Tokio runtime handle for ask_blocking: {e}"),
-        })?;
+        // Ignore timeout parameter as documented in deprecation notice
+        let _ = timeout;
 
-        let result = match timeout {
-            Some(duration) => {
-                rt.block_on(tokio::time::timeout(duration, self.ask(msg)))
-                    .map_err(|_| Error::Timeout {
-                        identity: self.identity(),
-                        timeout: duration,
-                        operation: "ask_blocking".to_string(),
-                    })? // Unwrap nested Result
-            }
-            None => rt.block_on(self.ask(msg)),
-        };
-
-        #[cfg(feature = "tracing")]
-        match &result {
-            Ok(_) => trace_debug!("Ask blocking completed successfully"),
-            Err(e) => trace_warn!(error = %e, "Ask blocking failed"),
-        }
-
-        result
+        self.blocking_ask(msg)
     }
 }
 
