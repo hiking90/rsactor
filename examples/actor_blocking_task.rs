@@ -98,13 +98,10 @@ impl Actor for SyncDataProcessorActor {
 
                 // Use tell_blocking which is designed for tokio blocking contexts
                 // Note: This requires access to a tokio runtime, which is available inside spawn_blocking
-                if let Err(e) = task_actor_ref.tell_blocking(
-                    ProcessedData {
-                        value: raw_value,
-                        timestamp: std::time::Instant::now(),
-                    },
-                    None,
-                ) {
+                if let Err(e) = task_actor_ref.blocking_tell(ProcessedData {
+                    value: raw_value,
+                    timestamp: std::time::Instant::now(),
+                }) {
                     info!("Failed to send data to actor: {e}");
                     running = false;
                 }

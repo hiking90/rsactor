@@ -6,8 +6,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex; // Ensure 'log' crate is a dev-dependency or available
 
 use rsactor::{
-    set_default_mailbox_capacity, spawn, spawn_with_mailbox_capacity, Actor, ActorRef, ActorResult,
-    ActorWeak, Error, Identity, Message,
+    set_default_mailbox_capacity, spawn, Actor, ActorRef, ActorResult, ActorWeak, Error, Identity,
+    Message,
 };
 
 // Test Actor Setup
