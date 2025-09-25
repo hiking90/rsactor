@@ -499,7 +499,9 @@ version = "0.10.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "rsactor",
  "syn",
+ "tokio",
 ]
 
 [[package]]

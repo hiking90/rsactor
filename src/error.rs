@@ -53,6 +53,13 @@ pub enum Error {
         /// Detailed error message describing the mailbox capacity issue
         message: String,
     },
+    /// Error when awaiting a JoinHandle fails
+    Join {
+        /// ID of the actor that spawned the task
+        identity: Identity,
+        /// The original JoinError from tokio
+        source: tokio::task::JoinError,
+    },
 }
 
 /// Implementation of the Display trait for Error enum.
@@ -116,6 +123,14 @@ impl std::fmt::Display for Error {
             Error::MailboxCapacity { message } => {
                 write!(f, "Mailbox capacity error: {message}")
             }
+            Error::Join { identity, source } => {
+                write!(
+                    f,
+                    "Failed to join spawned task from actor {}: {}",
+                    identity.name(),
+                    source
+                )
+            }
         }
     }
 }
@@ -123,7 +138,14 @@ impl std::fmt::Display for Error {
 /// Implementation of the standard Error trait for rsactor Error enum.
 ///
 /// This allows Error to be used with standard error handling mechanisms.
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Join { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 /// A Result type specialized for rsactor operations.
 ///

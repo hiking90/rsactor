@@ -88,6 +88,9 @@
 //!     count: u32,
 //! }
 //!
+//! struct Increment;
+//! struct GetCount;
+//!
 //! #[message_handlers]
 //! impl MyActor {
 //!     #[handler]
@@ -236,6 +239,9 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// struct MyActor {
 ///     count: u32,
 /// }
+///
+/// struct Increment;
+/// struct Decrement;
 ///
 /// #[message_handlers]
 /// impl MyActor {

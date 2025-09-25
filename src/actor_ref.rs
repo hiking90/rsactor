@@ -48,6 +48,7 @@ use tracing::{debug as trace_debug, info, warn as trace_warn};
 /// - **Utility Methods**:
 ///   - [`identity`](ActorRef::identity): Get the unique ID of the actor.
 ///   - [`is_alive`](ActorRef::is_alive): Check if the actor is still running.
+///   - [`ask_join`](ActorRef::ask_join): Send a message expecting a JoinHandle and await its completion.
 ///
 /// ## Recommended Usage
 ///
@@ -583,6 +584,107 @@ impl<T: Actor> ActorRef<T> {
         let _ = timeout;
 
         self.blocking_ask(msg)
+    }
+
+    /// Sends a message to an actor expecting a JoinHandle reply and awaits its completion.
+    ///
+    /// This method is specifically designed for the pattern where message handlers spawn
+    /// long-running asynchronous tasks using `tokio::spawn` and return the `JoinHandle`.
+    /// Instead of manually handling the `JoinHandle`, this method automatically awaits
+    /// the spawned task and returns the final result.
+    ///
+    /// # Common Pattern
+    ///
+    /// This method supports the following actor pattern:
+    ///
+    /// ```rust,no_run
+    /// use rsactor::{Actor, ActorRef, message_handlers};
+    /// use tokio::task::JoinHandle;
+    /// use std::time::Duration;
+    ///
+    /// #[derive(Actor)]
+    /// struct WorkerActor;
+    ///
+    /// struct HeavyTask {
+    ///     data: String,
+    /// }
+    ///
+    /// #[message_handlers]
+    /// impl WorkerActor {
+    ///     #[handler]
+    ///     async fn handle_heavy_task(
+    ///         &mut self,
+    ///         msg: HeavyTask,
+    ///         _: &ActorRef<Self>
+    ///     ) -> JoinHandle<String> {
+    ///         let data = msg.data.clone();
+    ///         // Spawn a long-running task to avoid blocking the actor
+    ///         tokio::spawn(async move {
+    ///             tokio::time::sleep(Duration::from_secs(5)).await;
+    ///             format!("Processed: {}", data)
+    ///         })
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Usage Examples
+    ///
+    /// See the `examples/ask_join_demo.rs` file for a complete working example that demonstrates:
+    /// - Handlers that return `JoinHandle<T>` from spawned tasks
+    /// - Using `ask_join` vs regular `ask` with manual await
+    /// - Error handling for panicked and cancelled tasks
+    /// - Concurrent task execution patterns
+    ///
+    /// # Error Handling
+    ///
+    /// This method can return errors in several scenarios:
+    /// - Communication errors (actor not available, channels closed): [`Error::Send`], [`Error::Receive`]
+    /// - Task execution errors (task panicked, cancelled): [`Error::Join`]
+    /// - Type casting errors: [`Error::Downcast`]
+    ///
+    /// The [`Error::Join`] variant includes the original [`tokio::task::JoinError`]
+    /// which provides detailed information about task failures, such as whether
+    /// the task was cancelled or panicked.
+    ///
+    /// # Type Safety
+    ///
+    /// This method enforces compile-time type safety:
+    /// - The message type `M` must be handled by actor `T`
+    /// - The handler must return `tokio::task::JoinHandle<R>`
+    /// - The final return type `R` is automatically inferred and type-checked
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_ask_join",
+        fields(
+            actor_id = %self.identity(),
+            message_type = %std::any::type_name::<M>(),
+            result_type = %std::any::type_name::<R>()
+        ),
+        skip(self, msg)
+    ))]
+    pub async fn ask_join<M, R>(&self, msg: M) -> crate::Result<R>
+    where
+        T: Message<M, Reply = tokio::task::JoinHandle<R>>,
+        M: Send + 'static,
+        R: Send + 'static,
+    {
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Sending ask_join message and waiting for task completion");
+
+        let join_handle = self.ask(msg).await?;
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Received JoinHandle, awaiting task completion");
+
+        let result = join_handle.await.map_err(|join_error| crate::Error::Join {
+            identity: self.identity(),
+            source: join_error,
+        })?;
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Task completed successfully");
+
+        Ok(result)
     }
 }
 
