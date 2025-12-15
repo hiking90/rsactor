@@ -53,7 +53,7 @@ jobs:
           toolchain: ${{ needs.extract-msrv.outputs.msrv }}
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -160,7 +160,7 @@ jobs:
           toolchain: ${{ needs.extract-msrv.outputs.msrv }}
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -191,7 +191,7 @@ jobs:
           components: clippy
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
