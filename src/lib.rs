@@ -268,6 +268,9 @@ pub use actor_result::{ActorResult, FailurePhase};
 mod actor;
 pub use actor::{Actor, Message};
 
+mod handler;
+pub use handler::{AskHandler, TellHandler, WeakAskHandler, WeakTellHandler};
+
 use futures::FutureExt;
 // Re-export derive macros for convenient access
 pub use rsactor_derive::{message_handlers, Actor};
@@ -325,7 +328,10 @@ where
     ) -> BoxFuture<'_, ()>;
 }
 
-type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+/// A boxed future that is Send and can be stored in collections.
+///
+/// This type alias is used throughout the handler traits for object-safe async methods.
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 impl<A, T> PayloadHandler<A> for T
 where
