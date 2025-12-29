@@ -48,7 +48,7 @@ struct CounterActor {
 #[message_handlers]
 impl CounterActor {
     #[handler]
-    async fn handle_ping(&mut self, msg: Ping, _: &ActorRef<Self>) -> () {
+    async fn handle_ping(&mut self, msg: Ping, _: &ActorRef<Self>) {
         self.count += 1;
         println!(
             "[{}] Received ping with timestamp: {} (total: {})",
@@ -78,7 +78,7 @@ struct LoggerActor {
 #[message_handlers]
 impl LoggerActor {
     #[handler]
-    async fn handle_ping(&mut self, msg: Ping, _: &ActorRef<Self>) -> () {
+    async fn handle_ping(&mut self, msg: Ping, _: &ActorRef<Self>) {
         self.log_count += 1;
         println!(
             "[{}] LOG: Ping received at {} (logged {} times)",
