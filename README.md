@@ -255,6 +255,28 @@ RUST_LOG=debug cargo run --example basic --features tracing
 
 Handler traits (`TellHandler`, `AskHandler`, `WeakTellHandler`, `WeakAskHandler`) enable unified management of different actor types handling the same message in a single collection. See the [Handler Traits Documentation](./docs/handler_traits_design.md) for details.
 
+## Claude Code Skills
+
+rsActor provides [Claude Code](https://claude.ai/code) skills to help AI assistants write correct rsactor code. These skills teach Claude the proper patterns for creating actors, handling messages, and using the framework effectively.
+
+### Installation
+
+```bash
+# Global installation (recommended)
+curl -sSL https://raw.githubusercontent.com/hiking90/rsactor/main/install-skills.sh | bash
+
+# Project-local installation
+curl -sSL https://raw.githubusercontent.com/hiking90/rsactor/main/install-skills.sh | bash -s -- --local
+```
+
+### Available Skills
+
+- **rsactor-actor**: Create new actors with proper patterns
+- **rsactor-handler**: Add message handlers to existing actors
+- **rsactor-guide**: API reference and troubleshooting guide
+
+After installation, restart Claude Code to use the new skills.
+
 ## Further Information
 
 For more detailed questions and answers, please see the [FAQ](./docs/FAQ.md).
