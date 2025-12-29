@@ -143,8 +143,16 @@ async fn main() -> Result<()> {
 
     // Send messages to all handlers
     for (i, handler) in tell_handlers.iter().enumerate() {
-        println!("Sending ping to handler {} (identity: {})", i, handler.identity());
-        handler.tell(Ping { timestamp: 1000 + i as u64 }).await?;
+        println!(
+            "Sending ping to handler {} (identity: {})",
+            i,
+            handler.identity()
+        );
+        handler
+            .tell(Ping {
+                timestamp: 1000 + i as u64,
+            })
+            .await?;
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -154,10 +162,8 @@ async fn main() -> Result<()> {
     // =========================================================================
     println!("\n--- Demo 2: AskHandler (Request-Response) ---\n");
 
-    let ask_handlers: Vec<Box<dyn AskHandler<GetStatus, Status>>> = vec![
-        (&counter_actor).into(),
-        (&logger_actor).into(),
-    ];
+    let ask_handlers: Vec<Box<dyn AskHandler<GetStatus, Status>>> =
+        vec![(&counter_actor).into(), (&logger_actor).into()];
 
     // Collect status from all handlers
     println!("Querying status from all handlers:");
@@ -181,7 +187,10 @@ async fn main() -> Result<()> {
     let handlers_vec_clone = handlers_vec.clone();
 
     println!("Original handler identity: {}", handlers_vec[0].identity());
-    println!("Cloned handler identity: {}", handlers_vec_clone[0].identity());
+    println!(
+        "Cloned handler identity: {}",
+        handlers_vec_clone[0].identity()
+    );
 
     handler_clone.tell(Ping { timestamp: 2000 }).await?;
 
@@ -202,7 +211,11 @@ async fn main() -> Result<()> {
     for (i, weak_handler) in weak_handlers.iter().enumerate() {
         if let Some(strong) = weak_handler.upgrade() {
             println!("  Handler {} upgraded successfully, sending ping...", i);
-            strong.tell(Ping { timestamp: 3000 + i as u64 }).await?;
+            strong
+                .tell(Ping {
+                    timestamp: 3000 + i as u64,
+                })
+                .await?;
         } else {
             println!("  Handler {} failed to upgrade (actor dead)", i);
         }
@@ -220,7 +233,11 @@ async fn main() -> Result<()> {
     if let Some(strong) = weak_handler.upgrade() {
         println!("Upgraded weak handler, sending batch of 3 pings:");
         for i in 0..3 {
-            strong.tell(Ping { timestamp: 4000 + i }).await?;
+            strong
+                .tell(Ping {
+                    timestamp: 4000 + i,
+                })
+                .await?;
         }
     }
 
@@ -272,7 +289,8 @@ async fn main() -> Result<()> {
     println!("\n--- Demo 8: Debug Formatting ---\n");
 
     let tell_handler: Box<dyn TellHandler<Ping>> = (&counter_actor).into();
-    let weak_tell_handler: Box<dyn WeakTellHandler<Ping>> = ActorRef::downgrade(&counter_actor).into();
+    let weak_tell_handler: Box<dyn WeakTellHandler<Ping>> =
+        ActorRef::downgrade(&counter_actor).into();
 
     println!("TellHandler debug: {:?}", tell_handler);
     println!("WeakTellHandler debug: {:?}", weak_tell_handler);
@@ -290,8 +308,14 @@ async fn main() -> Result<()> {
     let counter_result = counter_handle.await?;
     let logger_result = logger_handle.await?;
 
-    println!("Counter actor stopped: {:?}", counter_result.stopped_normally());
-    println!("Logger actor stopped: {:?}", logger_result.stopped_normally());
+    println!(
+        "Counter actor stopped: {:?}",
+        counter_result.stopped_normally()
+    );
+    println!(
+        "Logger actor stopped: {:?}",
+        logger_result.stopped_normally()
+    );
 
     // Demonstrate weak handler after actor stop
     println!("\nWeak handler after actor stop:");
