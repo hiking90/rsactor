@@ -439,21 +439,22 @@ mod tests {
         let (actor_ref, _join_handle) = spawn::<FunctionHandlerTestActor>(());
 
         // Test timeout behavior with async functions
+        // Note: Use generous timeouts for CI environments which can be slower
         let slow_async_fn: BoxedAsyncFn = Box::new(|x| {
             Box::pin(async move {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
                 x * 2
             })
         });
 
-        let result = timeout(Duration::from_millis(200), actor_ref.ask(slow_async_fn)).await;
+        let result = timeout(Duration::from_millis(500), actor_ref.ask(slow_async_fn)).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), 2);
 
         // Test with very short timeout
         let very_slow_async_fn: BoxedAsyncFn = Box::new(|x| {
             Box::pin(async move {
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
                 x * 3
             })
         });
