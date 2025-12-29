@@ -28,6 +28,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
     *   `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
 *   **Strong Type Safety**: Provides compile-time (`ActorRef<T>`) type safety, ensuring message handling consistency and preventing type-related runtime errors.
+*   **Handler Traits**: `TellHandler<M>` and `AskHandler<M, R>` traits enable unified management of different actor types handling the same message in a single collection.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `#[message_handlers]` macro) are also required, but they don't add any additional constraints on the actor's fields.
 *   **Optional Tracing Support**: Built-in support for detailed observability using the `tracing` crate. When enabled via the `tracing` feature flag, provides comprehensive logging of actor lifecycle events, message handling, and performance metrics.
 
@@ -37,10 +38,10 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
 ```toml
 [dependencies]
-rsactor = "0.9" # Check crates.io for the latest version
+rsactor = "0.11" # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.9", features = ["tracing"] }
+# rsactor = { version = "0.11", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
@@ -187,6 +188,7 @@ rsActor comes with several examples that demonstrate various features and use ca
 * **[actor_blocking_task](./examples/actor_blocking_task.rs)** - Using blocking APIs with actors
 * **[dining_philosophers](./examples/dining_philosophers.rs)** - Classic concurrency problem implementation
 * **[weak_reference_demo](./examples/weak_reference_demo.rs)** - Working with weak actor references and lifecycle management
+* **[handler_demo](./examples/handler_demo.rs)** - Using handler traits for unified actor management
 
 Run any example with:
 ```bash
@@ -213,7 +215,7 @@ To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.9", features = ["tracing"] }
+rsactor = { version = "0.11", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -248,6 +250,10 @@ Run any example with tracing enabled:
 ```bash
 RUST_LOG=debug cargo run --example basic --features tracing
 ```
+
+## Handler Traits
+
+Handler traits (`TellHandler`, `AskHandler`, `WeakTellHandler`, `WeakAskHandler`) enable unified management of different actor types handling the same message in a single collection. See the [Handler Traits Documentation](./docs/handler_traits_design.md) for details.
 
 ## Further Information
 
