@@ -47,7 +47,7 @@ struct Status {
 #[message_handlers]
 impl ActorA {
     #[handler]
-    async fn handle_ping(&mut self, _msg: Ping, _: &ActorRef<Self>) -> () {
+    async fn handle_ping(&mut self, _msg: Ping, _: &ActorRef<Self>) {
         // Fire-and-forget, just acknowledge
     }
 
@@ -63,7 +63,7 @@ impl ActorA {
 #[message_handlers]
 impl ActorB {
     #[handler]
-    async fn handle_ping(&mut self, _msg: Ping, _: &ActorRef<Self>) -> () {
+    async fn handle_ping(&mut self, _msg: Ping, _: &ActorRef<Self>) {
         // Fire-and-forget, just acknowledge
     }
 
