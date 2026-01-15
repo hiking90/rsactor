@@ -42,7 +42,9 @@
 //! }
 //! ```
 
-use crate::{Actor, ActorRef, ActorWeak, BoxFuture, Identity, Message, Result};
+use crate::{
+    Actor, ActorControl, ActorRef, ActorWeak, BoxFuture, Message, Result, WeakActorControl,
+};
 use futures::FutureExt;
 use std::fmt;
 use std::time::Duration;
@@ -85,17 +87,10 @@ pub trait TellHandler<M: Send + 'static>: Send + Sync {
     /// Downgrade to a weak handler.
     fn downgrade(&self) -> Box<dyn WeakTellHandler<M>>;
 
-    /// Returns the unique identity of the actor.
-    fn identity(&self) -> Identity;
-
-    /// Checks if the actor is still alive.
-    fn is_alive(&self) -> bool;
-
-    /// Gracefully stops the actor.
-    fn stop(&self) -> BoxFuture<'_, Result<()>>;
-
-    /// Immediately terminates the actor.
-    fn kill(&self) -> Result<()>;
+    /// Returns a reference to ActorControl for lifecycle management.
+    ///
+    /// Use this to access `identity()`, `is_alive()`, `stop()`, `kill()`, etc.
+    fn as_control(&self) -> &dyn ActorControl;
 
     /// Debug formatting support for trait objects.
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
@@ -136,17 +131,10 @@ pub trait AskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     /// Downgrade to a weak handler.
     fn downgrade(&self) -> Box<dyn WeakAskHandler<M, R>>;
 
-    /// Returns the unique identity of the actor.
-    fn identity(&self) -> Identity;
-
-    /// Checks if the actor is still alive.
-    fn is_alive(&self) -> bool;
-
-    /// Gracefully stops the actor.
-    fn stop(&self) -> BoxFuture<'_, Result<()>>;
-
-    /// Immediately terminates the actor.
-    fn kill(&self) -> Result<()>;
+    /// Returns a reference to ActorControl for lifecycle management.
+    ///
+    /// Use this to access `identity()`, `is_alive()`, `stop()`, `kill()`, etc.
+    fn as_control(&self) -> &dyn ActorControl;
 
     /// Debug formatting support for trait objects.
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
@@ -183,11 +171,10 @@ pub trait WeakTellHandler<M: Send + 'static>: Send + Sync {
     /// Clone this handler into a new boxed instance.
     fn clone_boxed(&self) -> Box<dyn WeakTellHandler<M>>;
 
-    /// Returns the unique identity of the actor.
-    fn identity(&self) -> Identity;
-
-    /// Checks if the actor might still be alive (heuristic, not guaranteed).
-    fn is_alive(&self) -> bool;
+    /// Returns a reference to WeakActorControl for lifecycle management.
+    ///
+    /// Use this to access `identity()`, `is_alive()`, `upgrade()`, etc.
+    fn as_weak_control(&self) -> &dyn WeakActorControl;
 
     /// Debug formatting support for trait objects.
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
@@ -221,11 +208,10 @@ pub trait WeakAskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     /// Clone this handler into a new boxed instance.
     fn clone_boxed(&self) -> Box<dyn WeakAskHandler<M, R>>;
 
-    /// Returns the unique identity of the actor.
-    fn identity(&self) -> Identity;
-
-    /// Checks if the actor might still be alive (heuristic, not guaranteed).
-    fn is_alive(&self) -> bool;
+    /// Returns a reference to WeakActorControl for lifecycle management.
+    ///
+    /// Use this to access `identity()`, `is_alive()`, `upgrade()`, etc.
+    fn as_weak_control(&self) -> &dyn WeakActorControl;
 
     /// Debug formatting support for trait objects.
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
@@ -314,26 +300,14 @@ where
         Box::new(ActorRef::downgrade(self))
     }
 
-    fn identity(&self) -> Identity {
-        ActorRef::identity(self)
-    }
-
-    fn is_alive(&self) -> bool {
-        ActorRef::is_alive(self)
-    }
-
-    fn stop(&self) -> BoxFuture<'_, Result<()>> {
-        ActorRef::stop(self).boxed()
-    }
-
-    fn kill(&self) -> Result<()> {
-        ActorRef::kill(self)
+    fn as_control(&self) -> &dyn ActorControl {
+        self
     }
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TellHandler")
-            .field("identity", &self.identity())
-            .field("alive", &self.is_alive())
+            .field("identity", &ActorRef::identity(self))
+            .field("alive", &ActorRef::is_alive(self))
             .finish()
     }
 }
@@ -368,26 +342,14 @@ where
         Box::new(ActorRef::downgrade(self))
     }
 
-    fn identity(&self) -> Identity {
-        ActorRef::identity(self)
-    }
-
-    fn is_alive(&self) -> bool {
-        ActorRef::is_alive(self)
-    }
-
-    fn stop(&self) -> BoxFuture<'_, Result<()>> {
-        ActorRef::stop(self).boxed()
-    }
-
-    fn kill(&self) -> Result<()> {
-        ActorRef::kill(self)
+    fn as_control(&self) -> &dyn ActorControl {
+        self
     }
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AskHandler")
-            .field("identity", &self.identity())
-            .field("alive", &self.is_alive())
+            .field("identity", &ActorRef::identity(self))
+            .field("alive", &ActorRef::is_alive(self))
             .finish()
     }
 }
@@ -409,18 +371,14 @@ where
         Box::new(self.clone())
     }
 
-    fn identity(&self) -> Identity {
-        ActorWeak::identity(self)
-    }
-
-    fn is_alive(&self) -> bool {
-        ActorWeak::is_alive(self)
+    fn as_weak_control(&self) -> &dyn WeakActorControl {
+        self
     }
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WeakTellHandler")
-            .field("identity", &self.identity())
-            .field("alive", &self.is_alive())
+            .field("identity", &ActorWeak::identity(self))
+            .field("alive", &ActorWeak::is_alive(self))
             .finish()
     }
 }
@@ -440,18 +398,14 @@ where
         Box::new(self.clone())
     }
 
-    fn identity(&self) -> Identity {
-        ActorWeak::identity(self)
-    }
-
-    fn is_alive(&self) -> bool {
-        ActorWeak::is_alive(self)
+    fn as_weak_control(&self) -> &dyn WeakActorControl {
+        self
     }
 
     fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WeakAskHandler")
-            .field("identity", &self.identity())
-            .field("alive", &self.is_alive())
+            .field("identity", &ActorWeak::identity(self))
+            .field("alive", &ActorWeak::is_alive(self))
             .finish()
     }
 }

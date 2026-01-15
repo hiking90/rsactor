@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
         println!(
             "Sending ping to handler {} (identity: {})",
             i,
-            handler.identity()
+            handler.as_control().identity()
         );
         handler
             .tell(Ping {
@@ -186,10 +186,13 @@ async fn main() -> Result<()> {
     let handlers_vec: Vec<Box<dyn TellHandler<Ping>>> = vec![handler];
     let handlers_vec_clone = handlers_vec.clone();
 
-    println!("Original handler identity: {}", handlers_vec[0].identity());
+    println!(
+        "Original handler identity: {}",
+        handlers_vec[0].as_control().identity()
+    );
     println!(
         "Cloned handler identity: {}",
-        handlers_vec_clone[0].identity()
+        handlers_vec_clone[0].as_control().identity()
     );
 
     handler_clone.tell(Ping { timestamp: 2000 }).await?;
@@ -249,13 +252,25 @@ async fn main() -> Result<()> {
     println!("\n--- Demo 6: Downgrade Strong to Weak ---\n");
 
     let strong_handler: Box<dyn TellHandler<Ping>> = (&counter_actor).into();
-    println!("Strong handler identity: {}", strong_handler.identity());
-    println!("Strong handler is_alive: {}", strong_handler.is_alive());
+    println!(
+        "Strong handler identity: {}",
+        strong_handler.as_control().identity()
+    );
+    println!(
+        "Strong handler is_alive: {}",
+        strong_handler.as_control().is_alive()
+    );
 
     // Downgrade to weak
     let weak_from_strong: Box<dyn WeakTellHandler<Ping>> = strong_handler.downgrade();
-    println!("Weak handler identity: {}", weak_from_strong.identity());
-    println!("Weak handler is_alive: {}", weak_from_strong.is_alive());
+    println!(
+        "Weak handler identity: {}",
+        weak_from_strong.as_weak_control().identity()
+    );
+    println!(
+        "Weak handler is_alive: {}",
+        weak_from_strong.as_weak_control().is_alive()
+    );
 
     // Round-trip: upgrade back to strong
     if let Some(upgraded) = weak_from_strong.upgrade() {
@@ -322,8 +337,8 @@ async fn main() -> Result<()> {
     for weak_handler in &weak_handlers {
         println!(
             "  - identity: {}, is_alive: {}, can_upgrade: {}",
-            weak_handler.identity(),
-            weak_handler.is_alive(),
+            weak_handler.as_weak_control().identity(),
+            weak_handler.as_weak_control().is_alive(),
             weak_handler.upgrade().is_some()
         );
     }

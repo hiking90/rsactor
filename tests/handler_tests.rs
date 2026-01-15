@@ -94,12 +94,12 @@ async fn test_tell_handler_from_actor_ref() {
     // Use the handler
     handler.tell(Ping).await.expect("tell should succeed");
 
-    // Verify handler properties
-    assert_eq!(handler.identity(), actor_ref.identity());
-    assert!(handler.is_alive());
+    // Verify handler properties via as_control()
+    assert_eq!(handler.as_control().identity(), actor_ref.identity());
+    assert!(handler.as_control().is_alive());
 
-    // Stop via handler
-    handler.stop().await.expect("stop should succeed");
+    // Stop via actor_ref (lifecycle control is separate from handler)
+    actor_ref.stop().await.expect("stop should succeed");
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -123,13 +123,12 @@ async fn test_tell_handler_multiple_actors_same_message() {
 
     // Verify all handlers are alive
     for handler in &handlers {
-        assert!(handler.is_alive());
+        assert!(handler.as_control().is_alive());
     }
 
-    // Stop all actors via handlers
-    for handler in &handlers {
-        handler.stop().await.expect("stop should succeed");
-    }
+    // Stop all actors via actor_ref
+    actor_a.stop().await.expect("stop should succeed");
+    actor_b.stop().await.expect("stop should succeed");
 
     let result_a = handle_a.await.expect("actor A should complete");
     let result_b = handle_b.await.expect("actor B should complete");
@@ -151,7 +150,10 @@ async fn test_tell_handler_clone_boxed() {
     let handler_clone = handler.clone_boxed();
 
     // Both should have the same identity
-    assert_eq!(handler.identity(), handler_clone.identity());
+    assert_eq!(
+        handler.as_control().identity(),
+        handler_clone.as_control().identity()
+    );
 
     // Both should work
     handler
@@ -181,7 +183,10 @@ async fn test_tell_handler_clone_trait() {
     // Clone via Clone trait on Box<dyn TellHandler<M>>
     let handlers_clone = handlers.clone();
 
-    assert_eq!(handlers[0].identity(), handlers_clone[0].identity());
+    assert_eq!(
+        handlers[0].as_control().identity(),
+        handlers_clone[0].as_control().identity()
+    );
 
     handlers[0].tell(Ping).await.expect("should work");
     handlers_clone[0].tell(Ping).await.expect("should work");
@@ -218,10 +223,10 @@ async fn test_tell_handler_kill() {
         name: "kill_test".to_string(),
     });
 
-    let handler: Box<dyn TellHandler<Ping>> = (&actor_ref).into();
+    let _handler: Box<dyn TellHandler<Ping>> = (&actor_ref).into();
 
-    // Kill via handler
-    handler.kill().expect("kill should succeed");
+    // Kill via actor_ref (lifecycle control is separate from handler)
+    actor_ref.kill().expect("kill should succeed");
 
     let result = handle.await.expect("actor should complete");
     assert!(result.was_killed());
@@ -248,7 +253,7 @@ async fn test_ask_handler_from_actor_ref() {
     assert_eq!(status.name, "ask_test");
     assert!(status.alive);
 
-    handler.stop().await.expect("stop should succeed");
+    actor_ref.stop().await.expect("stop should succeed");
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -277,10 +282,9 @@ async fn test_ask_handler_multiple_actors_same_reply_type() {
     assert_eq!(responses[0].name, "ActorA");
     assert_eq!(responses[1].name, "ActorB-100");
 
-    // Stop all actors
-    for handler in &handlers {
-        handler.stop().await.expect("stop should succeed");
-    }
+    // Stop all actors via actor_ref
+    actor_a.stop().await.expect("stop should succeed");
+    actor_b.stop().await.expect("stop should succeed");
 
     let _ = handle_a.await;
     let _ = handle_b.await;
@@ -324,9 +328,9 @@ async fn test_weak_tell_handler_from_actor_weak() {
     // Convert ActorWeak to Box<dyn WeakTellHandler<Ping>>
     let weak_handler: Box<dyn WeakTellHandler<Ping>> = actor_weak.into();
 
-    // Verify identity
-    assert_eq!(weak_handler.identity(), actor_ref.identity());
-    assert!(weak_handler.is_alive());
+    // Verify identity via as_weak_control()
+    assert_eq!(weak_handler.as_weak_control().identity(), actor_ref.identity());
+    assert!(weak_handler.as_weak_control().is_alive());
 
     // Upgrade and use
     let strong = weak_handler
@@ -361,7 +365,7 @@ async fn test_weak_tell_handler_upgrade_after_stop() {
 
     // Upgrade should fail now
     assert!(weak_handler.upgrade().is_none());
-    assert!(!weak_handler.is_alive());
+    assert!(!weak_handler.as_weak_control().is_alive());
 }
 
 #[tokio::test]
@@ -428,7 +432,10 @@ async fn test_weak_tell_handler_clone() {
     let weak_clone = weak_handler.clone();
 
     // Both should have same identity
-    assert_eq!(weak_handler.identity(), weak_clone.identity());
+    assert_eq!(
+        weak_handler.as_weak_control().identity(),
+        weak_clone.as_weak_control().identity()
+    );
 
     // Both should be able to upgrade
     assert!(weak_handler.upgrade().is_some());
@@ -498,6 +505,92 @@ async fn test_weak_ask_handler_multiple_actors() {
 }
 
 // ============================================================================
+// as_control() Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_tell_handler_as_control() {
+    init_test_logger();
+
+    let (actor_ref, handle) = spawn::<ActorA>(ActorA {
+        name: "as_control_test".to_string(),
+    });
+
+    let handler: Box<dyn TellHandler<Ping>> = (&actor_ref).into();
+
+    // Get ActorControl from handler
+    let control = handler.as_control();
+
+    // Verify same identity
+    assert_eq!(actor_ref.identity(), control.identity());
+    assert!(control.is_alive());
+
+    // Stop via control
+    control.stop().await.expect("stop should succeed");
+
+    let result = handle.await.expect("actor should complete");
+    assert!(result.stopped_normally());
+}
+
+#[tokio::test]
+async fn test_ask_handler_as_control() {
+    init_test_logger();
+
+    let (actor_ref, handle) = spawn::<ActorA>(ActorA {
+        name: "ask_as_control".to_string(),
+    });
+
+    let handler: Box<dyn AskHandler<GetName, Status>> = (&actor_ref).into();
+
+    // Get ActorControl from handler
+    let control = handler.as_control();
+
+    // Verify same identity
+    assert_eq!(actor_ref.identity(), control.identity());
+
+    // Can still use handler
+    let status = handler.ask(GetName).await.expect("ask should succeed");
+    assert_eq!(status.name, "ask_as_control");
+
+    // Kill via control
+    control.kill().expect("kill should succeed");
+
+    let result = handle.await.expect("actor should complete");
+    assert!(result.was_killed());
+}
+
+#[tokio::test]
+async fn test_handler_as_control_multiple_actors() {
+    init_test_logger();
+
+    let (actor_a, handle_a) = spawn::<ActorA>(ActorA {
+        name: "ControlA".to_string(),
+    });
+    let (actor_b, handle_b) = spawn::<ActorB>(ActorB { id: 99 });
+
+    // Create handlers for different actor types
+    let tell_handler_a: Box<dyn TellHandler<Ping>> = (&actor_a).into();
+    let tell_handler_b: Box<dyn TellHandler<Ping>> = (&actor_b).into();
+
+    // Convert to controls - now they can be stored together without message type parameter
+    // Use clone_boxed() to get Box<dyn ActorControl> from &dyn ActorControl
+    let controls: Vec<Box<dyn rsactor::ActorControl>> = vec![
+        tell_handler_a.as_control().clone_boxed(),
+        tell_handler_b.as_control().clone_boxed(),
+    ];
+
+    // Stop all via unified control interface
+    for control in &controls {
+        control.stop().await.expect("stop should succeed");
+    }
+
+    let result_a = handle_a.await.expect("actor A should complete");
+    let result_b = handle_b.await.expect("actor B should complete");
+    assert!(result_a.stopped_normally());
+    assert!(result_b.stopped_normally());
+}
+
+// ============================================================================
 // Interop Tests (Strong <-> Weak)
 // ============================================================================
 
@@ -514,8 +607,11 @@ async fn test_downgrade_from_tell_handler() {
     // Downgrade strong handler to weak handler
     let weak_handler: Box<dyn WeakTellHandler<Ping>> = strong_handler.downgrade();
 
-    assert_eq!(strong_handler.identity(), weak_handler.identity());
-    assert!(weak_handler.is_alive());
+    assert_eq!(
+        strong_handler.as_control().identity(),
+        weak_handler.as_weak_control().identity()
+    );
+    assert!(weak_handler.as_weak_control().is_alive());
 
     // Upgrade back and use
     let upgraded = weak_handler.upgrade().expect("should be able to upgrade");
@@ -538,7 +634,10 @@ async fn test_downgrade_from_ask_handler() {
     // Downgrade strong handler to weak handler
     let weak_handler: Box<dyn WeakAskHandler<GetName, Status>> = strong_handler.downgrade();
 
-    assert_eq!(strong_handler.identity(), weak_handler.identity());
+    assert_eq!(
+        strong_handler.as_control().identity(),
+        weak_handler.as_weak_control().identity()
+    );
 
     // Upgrade back and ask
     let upgraded = weak_handler.upgrade().expect("should be able to upgrade");
@@ -568,8 +667,14 @@ async fn test_roundtrip_strong_weak_strong() {
     let strong2 = weak.upgrade().expect("should upgrade");
 
     // All should have same identity
-    assert_eq!(strong1.identity(), weak.identity());
-    assert_eq!(weak.identity(), strong2.identity());
+    assert_eq!(
+        strong1.as_control().identity(),
+        weak.as_weak_control().identity()
+    );
+    assert_eq!(
+        weak.as_weak_control().identity(),
+        strong2.as_control().identity()
+    );
 
     // All should work
     strong1.tell(Ping).await.expect("should work");

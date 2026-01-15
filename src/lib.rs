@@ -271,6 +271,9 @@ pub use actor::{Actor, Message};
 mod handler;
 pub use handler::{AskHandler, TellHandler, WeakAskHandler, WeakTellHandler};
 
+mod actor_control;
+pub use actor_control::{ActorControl, WeakActorControl};
+
 use futures::FutureExt;
 // Re-export derive macros for convenient access
 pub use rsactor_derive::{message_handlers, Actor};
