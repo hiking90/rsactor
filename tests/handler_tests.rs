@@ -329,7 +329,10 @@ async fn test_weak_tell_handler_from_actor_weak() {
     let weak_handler: Box<dyn WeakTellHandler<Ping>> = actor_weak.into();
 
     // Verify identity via as_weak_control()
-    assert_eq!(weak_handler.as_weak_control().identity(), actor_ref.identity());
+    assert_eq!(
+        weak_handler.as_weak_control().identity(),
+        actor_ref.identity()
+    );
     assert!(weak_handler.as_weak_control().is_alive());
 
     // Upgrade and use
