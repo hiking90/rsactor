@@ -29,6 +29,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 *   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
 *   **Strong Type Safety**: Provides compile-time (`ActorRef<T>`) type safety, ensuring message handling consistency and preventing type-related runtime errors.
 *   **Handler Traits**: `TellHandler<M>` and `AskHandler<M, R>` traits enable unified management of different actor types handling the same message in a single collection.
+*   **Actor Control Traits**: `ActorControl` and `WeakActorControl` traits provide type-erased lifecycle management, allowing different actor types to be stored and controlled in a single collection without knowing their message types.
 *   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `#[message_handlers]` macro) are also required, but they don't add any additional constraints on the actor's fields.
 *   **Optional Tracing Support**: Built-in support for detailed observability using the `tracing` crate. When enabled via the `tracing` feature flag, provides comprehensive logging of actor lifecycle events, message handling, and performance metrics.
 
@@ -254,6 +255,10 @@ RUST_LOG=debug cargo run --example basic --features tracing
 ## Handler Traits
 
 Handler traits (`TellHandler`, `AskHandler`, `WeakTellHandler`, `WeakAskHandler`) enable unified management of different actor types handling the same message in a single collection. See the [Handler Traits Documentation](./docs/handler_traits_design.md) for details.
+
+## Actor Control Traits
+
+Actor control traits (`ActorControl`, `WeakActorControl`) provide type-erased lifecycle management for different actor types in a single collection. Handler traits provide `as_control()` and `as_weak_control()` methods to access lifecycle operations.
 
 ## Claude Code Skills
 

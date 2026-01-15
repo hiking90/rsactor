@@ -4,12 +4,13 @@ Handler traits enable unified management of different Actor types that handle th
 
 ## Overview
 
-Handler traits are divided into two categories:
+Handler traits are divided into three categories:
 
 | Category | Traits | Description |
 |----------|--------|-------------|
 | **Strong Handlers** | `TellHandler<M>`, `AskHandler<M, R>` | Maintain strong references, keeping actors alive |
 | **Weak Handlers** | `WeakTellHandler<M>`, `WeakAskHandler<M, R>` | Weak references that don't affect actor lifetime |
+| **Control Traits** | `ActorControl`, `WeakActorControl` | Type-erased lifecycle management without message type knowledge |
 
 ## Quick Start
 
@@ -45,10 +46,7 @@ pub trait TellHandler<M: Send + 'static>: Send + Sync {
     fn clone_boxed(&self) -> Box<dyn TellHandler<M>>;
     fn downgrade(&self) -> Box<dyn WeakTellHandler<M>>;
 
-    fn identity(&self) -> Identity;
-    fn is_alive(&self) -> bool;
-    fn stop(&self) -> BoxFuture<'_, Result<()>>;
-    fn kill(&self) -> Result<()>;
+    fn as_control(&self) -> &dyn ActorControl;  // Access lifecycle control
 }
 ```
 
@@ -86,10 +84,7 @@ pub trait AskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     fn clone_boxed(&self) -> Box<dyn AskHandler<M, R>>;
     fn downgrade(&self) -> Box<dyn WeakAskHandler<M, R>>;
 
-    fn identity(&self) -> Identity;
-    fn is_alive(&self) -> bool;
-    fn stop(&self) -> BoxFuture<'_, Result<()>>;
-    fn kill(&self) -> Result<()>;
+    fn as_control(&self) -> &dyn ActorControl;  // Access lifecycle control
 }
 ```
 
@@ -121,8 +116,7 @@ Weak Handlers follow the **upgrade-only** pattern. They do not provide `tell`/`a
 pub trait WeakTellHandler<M: Send + 'static>: Send + Sync {
     fn upgrade(&self) -> Option<Box<dyn TellHandler<M>>>;
     fn clone_boxed(&self) -> Box<dyn WeakTellHandler<M>>;
-    fn identity(&self) -> Identity;
-    fn is_alive(&self) -> bool;
+    fn as_weak_control(&self) -> &dyn WeakActorControl;  // Access lifecycle control
 }
 ```
 
@@ -132,8 +126,7 @@ pub trait WeakTellHandler<M: Send + 'static>: Send + Sync {
 pub trait WeakAskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     fn upgrade(&self) -> Option<Box<dyn AskHandler<M, R>>>;
     fn clone_boxed(&self) -> Box<dyn WeakAskHandler<M, R>>;
-    fn identity(&self) -> Identity;
-    fn is_alive(&self) -> bool;
+    fn as_weak_control(&self) -> &dyn WeakActorControl;  // Access lifecycle control
 }
 ```
 
@@ -167,11 +160,59 @@ assert!(weak_handlers[0].upgrade().is_none());
 
 ---
 
+## Control Traits
+
+Control traits provide type-erased lifecycle management without requiring knowledge of the actor's message types.
+
+### ActorControl
+
+```rust
+pub trait ActorControl: Send + Sync {
+    fn identity(&self) -> Identity;
+    fn is_alive(&self) -> bool;
+    fn stop(&self) -> BoxFuture<'_, Result<()>>;
+    fn kill(&self) -> Result<()>;
+    fn downgrade(&self) -> Box<dyn WeakActorControl>;
+    fn clone_boxed(&self) -> Box<dyn ActorControl>;
+}
+```
+
+### WeakActorControl
+
+```rust
+pub trait WeakActorControl: Send + Sync {
+    fn identity(&self) -> Identity;
+    fn is_alive(&self) -> bool;
+    fn upgrade(&self) -> Option<Box<dyn ActorControl>>;
+    fn clone_boxed(&self) -> Box<dyn WeakActorControl>;
+}
+```
+
+**Usage Example:**
+
+```rust
+use rsactor::ActorControl;
+
+// Store different actor types for unified lifecycle management
+let controls: Vec<Box<dyn ActorControl>> = vec![
+    (&worker_actor).into(),
+    (&logger_actor).into(),
+];
+
+// Check status and stop all
+for control in &controls {
+    println!("Actor {} alive: {}", control.identity(), control.is_alive());
+    control.stop().await?;
+}
+```
+
+---
+
 ## Conversions
 
 ### From Trait Support
 
-Both Strong and Weak Handlers support conversions via the `From` trait:
+Handler traits, Control traits support conversions via the `From` trait:
 
 | From | To | Description |
 |------|----|-------------|
@@ -179,10 +220,14 @@ Both Strong and Weak Handlers support conversions via the `From` trait:
 | `&ActorRef<T>` | `Box<dyn TellHandler<M>>` | Clone reference |
 | `ActorRef<T>` | `Box<dyn AskHandler<M, R>>` | Ownership transfer |
 | `&ActorRef<T>` | `Box<dyn AskHandler<M, R>>` | Clone reference |
+| `ActorRef<T>` | `Box<dyn ActorControl>` | Ownership transfer |
+| `&ActorRef<T>` | `Box<dyn ActorControl>` | Clone reference |
 | `ActorWeak<T>` | `Box<dyn WeakTellHandler<M>>` | Ownership transfer |
 | `&ActorWeak<T>` | `Box<dyn WeakTellHandler<M>>` | Clone reference |
 | `ActorWeak<T>` | `Box<dyn WeakAskHandler<M, R>>` | Ownership transfer |
 | `&ActorWeak<T>` | `Box<dyn WeakAskHandler<M, R>>` | Clone reference |
+| `ActorWeak<T>` | `Box<dyn WeakActorControl>` | Ownership transfer |
+| `&ActorWeak<T>` | `Box<dyn WeakActorControl>` | Clone reference |
 
 ```rust
 // Ownership transfer
@@ -237,9 +282,9 @@ Weak Handlers do not provide `tell`/`ask` methods directly:
 - **Efficient**: Single upgrade enables multiple operations
 - **Consistent**: Matches `std::sync::Weak::upgrade()` pattern
 
-### 3. No Lifecycle Control for Weak Handlers
+### 3. Lifecycle Control via Control Traits
 
-`stop()` and `kill()` methods are only available on Strong Handlers. Actor lifecycle control should only be performed through strong references.
+Lifecycle methods (`stop()`, `kill()`) are accessed via `as_control()` on Strong Handlers. Weak Handlers provide `as_weak_control()` for read-only access (`identity()`, `is_alive()`). Actor lifecycle control should only be performed through strong references.
 
 ### 4. clone_boxed Method
 
@@ -267,6 +312,7 @@ cargo run --example handler_demo
 use rsactor::{
     message_handlers, spawn, Actor, ActorRef,
     AskHandler, TellHandler, WeakTellHandler,
+    ActorControl,
 };
 
 struct Ping { timestamp: u64 }
