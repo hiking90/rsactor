@@ -50,6 +50,8 @@ async fn main() -> anyhow::Result<()> {
 | `ActorRef<T>` | Strong reference for sending messages |
 | `ActorWeak<T>` | Weak reference (won't keep actor alive) |
 | `ActorResult` | Enum for actor completion status |
+| `ActorControl` | Type-erased lifecycle control (strong) |
+| `WeakActorControl` | Type-erased lifecycle control (weak) |
 | `UntypedActorRef` | Runtime type-checked reference |
 
 ## Actor Lifecycle
@@ -167,10 +169,44 @@ let handlers: Vec<Box<dyn TellHandler<Ping>>> = vec![
     (&actor_b).into(),
 ];
 
+// Access lifecycle control via as_control()
+for handler in &handlers {
+    println!("Actor {} alive: {}", handler.as_control().identity(), handler.as_control().is_alive());
+    handler.tell(Ping).await?;
+}
+
 // Weak handlers (don't keep actors alive)
 let weak: Box<dyn WeakTellHandler<Ping>> = ActorRef::downgrade(&actor_ref).into();
+
+// Access weak control via as_weak_control()
+println!("Weak identity: {}", weak.as_weak_control().identity());
+
 if let Some(strong) = weak.upgrade() {
     strong.tell(Ping).await?;
+}
+```
+
+## ActorControl (Type-Erased Lifecycle Management)
+
+Manage different actor types without knowing their message types:
+
+```rust
+use rsactor::ActorControl;
+
+// Store different actor types in one collection
+let controls: Vec<Box<dyn ActorControl>> = vec![
+    (&worker_actor).into(),
+    (&logger_actor).into(),
+];
+
+// Unified lifecycle management
+for control in &controls {
+    println!("Actor {} alive: {}", control.identity(), control.is_alive());
+}
+
+// Stop all actors
+for control in &controls {
+    control.stop().await?;
 }
 ```
 
@@ -260,6 +296,8 @@ use rsactor::{
     spawn,
     // Handler traits (for polymorphism)
     TellHandler, AskHandler, WeakTellHandler, WeakAskHandler,
+    // Control traits (for type-erased lifecycle management)
+    ActorControl, WeakActorControl,
     // Untyped (advanced)
     UntypedActorRef,
 };

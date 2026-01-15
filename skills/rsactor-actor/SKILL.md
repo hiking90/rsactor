@@ -181,5 +181,9 @@ use rsactor::{
     ActorResult,     // Result of actor lifecycle
     message_handlers, // Macro for handler impl block
     spawn,           // Function to create actors
+    // For polymorphic handler collections
+    TellHandler, AskHandler, WeakTellHandler, WeakAskHandler,
+    // For type-erased lifecycle management
+    ActorControl, WeakActorControl,
 };
 ```

@@ -127,8 +127,9 @@ let handlers: Vec<Box<dyn TellHandler<Ping>>> = vec![
     (&actor_b).into(),
 ];
 
-// Send to all
+// Send to all (access lifecycle via as_control())
 for handler in &handlers {
+    println!("Sending to actor: {}", handler.as_control().identity());
     handler.tell(Ping).await?;
 }
 
@@ -137,6 +138,13 @@ let ask_handlers: Vec<Box<dyn AskHandler<GetStatus, Status>>> = vec![
     (&actor_a).into(),
     (&actor_b).into(),
 ];
+
+// Access lifecycle control
+for handler in &ask_handlers {
+    if handler.as_control().is_alive() {
+        let status = handler.ask(GetStatus).await?;
+    }
+}
 ```
 
 ## Weak Handlers
@@ -148,9 +156,32 @@ use rsactor::{WeakTellHandler, WeakAskHandler, ActorRef};
 
 let weak_handler: Box<dyn WeakTellHandler<Ping>> = ActorRef::downgrade(&actor_ref).into();
 
+// Access identity via as_weak_control()
+println!("Weak handler identity: {}", weak_handler.as_weak_control().identity());
+
 // Must upgrade before use
 if let Some(strong) = weak_handler.upgrade() {
     strong.tell(Ping).await?;
+}
+```
+
+## ActorControl for Lifecycle Management
+
+When you only need lifecycle control without message sending:
+
+```rust
+use rsactor::ActorControl;
+
+// Store different actor types for lifecycle management only
+let controls: Vec<Box<dyn ActorControl>> = vec![
+    (&actor_a).into(),
+    (&actor_b).into(),
+];
+
+// Check status and stop all
+for control in &controls {
+    println!("Actor {} alive: {}", control.identity(), control.is_alive());
+    control.stop().await?;
 }
 ```
 
