@@ -13,12 +13,12 @@
 //! They are NOT intended for use in general synchronous code or threads created with std::thread::spawn.
 
 use anyhow::Result;
-use log::{debug, info};
 use rsactor::{message_handlers, Actor, ActorRef};
 use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc; // Using tokio channels for communication
 use tokio::task;
+use tracing::{debug, info};
 
 // Define message types for our actor
 
@@ -98,10 +98,13 @@ impl Actor for SyncDataProcessorActor {
 
                 // Use tell_blocking which is designed for tokio blocking contexts
                 // Note: This requires access to a tokio runtime, which is available inside spawn_blocking
-                if let Err(e) = task_actor_ref.blocking_tell(ProcessedData {
-                    value: raw_value,
-                    timestamp: std::time::Instant::now(),
-                }) {
+                if let Err(e) = task_actor_ref.blocking_tell(
+                    ProcessedData {
+                        value: raw_value,
+                        timestamp: std::time::Instant::now(),
+                    },
+                    None,
+                ) {
                     info!("Failed to send data to actor: {e}");
                     running = false;
                 }
@@ -207,25 +210,10 @@ impl SyncDataProcessorActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("🚀 Blocking Task Demo: Tracing is ENABLED");
-        println!("You should see detailed trace logs for all actor operations\n");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        // Initialize logger with debug level for our example
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-        println!("📝 Blocking Task Demo: Tracing is DISABLED\n");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     info!("Starting actor-sync-task communication example");
 

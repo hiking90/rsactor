@@ -10,12 +10,12 @@
 //! - Tests for supervision patterns
 
 use anyhow::Result;
-use log::info;
 use rsactor::{spawn, Actor, ActorRef, ActorResult, ActorWeak, Message};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
+use tracing::info;
 
 // Test messages
 #[derive(Debug)]

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use log::info; // ADDED
-use rsactor::{message_handlers, Actor, ActorRef, ActorWeak}; // MODIFIED: Added message macro, removed Message
-use tokio::time::{interval, Duration}; // MODIFIED: Added MissedTickBehavior
+use rsactor::{message_handlers, Actor, ActorRef, ActorWeak};
+use tokio::time::{interval, Duration};
+use tracing::info;
 
 // Message types
 struct Increment; // Message to increment the actor's counter
@@ -77,22 +77,10 @@ impl MyActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        use tracing_subscriber;
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .init();
-        println!("🚀 Basic Demo: Tracing is ENABLED (TRACE level)");
-        println!("You should see detailed trace logs for all actor operations");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init(); // Initialize the logger only when tracing is disabled
-        println!("📝 Basic Demo: Tracing is DISABLED");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     println!("Spawning MyActor...");
 

@@ -68,22 +68,10 @@ impl<T: Send + std::fmt::Debug + Clone + 'static> GenericActor<T> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("🚀 Unified Macro Demo: Tracing is ENABLED");
-        println!("You should see detailed trace logs for all actor operations");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init();
-        println!("📝 Unified Macro Demo: Tracing is DISABLED");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     println!("🚀 Unified Macro Demo");
     println!("=====================");

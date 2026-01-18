@@ -607,7 +607,7 @@ async fn test_blocking_tell_works_outside_runtime() {
     let thread_handle = std::thread::spawn(move || {
         // With the new blocking_tell implementation, this should succeed
         // because it doesn't require a Tokio runtime context
-        let result = actor_ref_clone.blocking_tell(NoOpMsg);
+        let result = actor_ref_clone.blocking_tell(NoOpMsg, None);
 
         // Verify that the call succeeds
         assert!(
@@ -639,7 +639,7 @@ async fn test_blocking_ask_works_outside_runtime() {
     let thread_handle = std::thread::spawn(move || {
         // With the new blocking_ask implementation, this should succeed
         // because it doesn't require a Tokio runtime context
-        let result: Result<(), rsactor::Error> = actor_ref_clone.blocking_ask(NoOpMsg);
+        let result: Result<(), rsactor::Error> = actor_ref_clone.blocking_ask(NoOpMsg, None);
 
         // Verify that the call succeeds
         assert!(

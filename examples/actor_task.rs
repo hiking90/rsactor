@@ -9,9 +9,9 @@
 //! 3. Send data from the background task back to the actor using actor messages
 
 use anyhow::Result;
-use log::{debug, info};
 use rsactor::{message_handlers, Actor, ActorRef, ActorWeak};
 use std::time::Duration;
+use tracing::{debug, info};
 
 // Define message types for our actor
 
@@ -153,25 +153,10 @@ impl DataProcessorActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("🚀 Actor Task Demo: Tracing is ENABLED");
-        println!("You should see detailed trace logs for all actor operations\n");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        // Initialize logger with debug level for our example
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-        println!("📝 Actor Task Demo: Tracing is DISABLED\n");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     info!("Starting actor-task communication example");
 

@@ -32,6 +32,13 @@
 //!   - Message handling with timing and performance metrics
 //!   - Reply processing and error handling tracing
 //!   - Structured, non-redundant logs for easier debugging and monitoring
+//! - **Dead Letter Tracking**: Automatic logging of undelivered messages via [`DeadLetterReason`]:
+//!   - All failed message deliveries are logged with actor and message type information
+//!   - Helps identify stopped actors, timeouts, and dropped replies
+//!   - Zero overhead on successful message delivery (hot path optimization)
+//! - **Enhanced Error Debugging**: Rich error information via [`Error::debugging_tips()`](Error::debugging_tips) and [`Error::is_retryable()`](Error::is_retryable):
+//!   - Actionable debugging tips for each error type
+//!   - Retry classification for timeout errors
 //!
 //! ## Core Concepts
 //!
@@ -220,34 +227,30 @@
 //! - Reply processing and error handling
 //! - Performance metrics (message processing duration)
 //!
-//! All examples support tracing with conditional compilation. Here's the integration pattern:
+//! All examples support tracing. Here's the integration pattern:
 //!
 //! ```rust,no_run
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Initialize tracing if the feature is enabled
-//!     #[cfg(feature = "tracing")]
-//!     {
-//!         tracing_subscriber::fmt()
-//!             .with_max_level(tracing::Level::DEBUG)
-//!             .with_target(false)
-//!             .init();
-//!         println!("🚀 Demo: Tracing is ENABLED");
-//!     }
-//!
-//!     #[cfg(not(feature = "tracing"))]
-//!     {
-//!         env_logger::init();
-//!         println!("📝 Demo: Tracing is DISABLED");
-//!     }
+//!     // Initialize tracing subscriber to see logs
+//!     // The `tracing` crate is always available for logging
+//!     tracing_subscriber::fmt()
+//!         .with_max_level(tracing::Level::DEBUG)
+//!         .with_target(false)
+//!         .init();
 //!
 //!     // Your existing actor code here...
-//!     // When tracing is enabled, you'll see detailed logs automatically
+//!     // Logs are automatically emitted via tracing::warn!, tracing::error!, etc.
 //!     Ok(())
 //! }
 //! ```
 //!
-//! Run any example with tracing enabled:
+//! Run any example with debug logging:
+//! ```bash
+//! RUST_LOG=debug cargo run --example basic
+//! ```
+//!
+//! Enable instrumentation spans with the `tracing` feature:
 //! ```bash
 //! RUST_LOG=debug cargo run --example basic --features tracing
 //! ```
@@ -258,6 +261,13 @@
 
 mod error;
 pub use error::{Error, Result};
+
+mod dead_letter;
+pub use dead_letter::DeadLetterReason;
+
+// Re-export test utilities when test-utils feature is enabled
+#[cfg(any(test, feature = "test-utils"))]
+pub use dead_letter::{dead_letter_count, reset_dead_letter_count};
 
 mod actor_ref;
 pub use actor_ref::{ActorRef, ActorWeak};
@@ -359,15 +369,10 @@ where
                         );
                     }
                     Err(_) => {
-                        #[cfg(feature = "tracing")]
                         tracing::error!(
                             actor = %actor_ref.identity(),
+                            message_type = %std::any::type_name::<T>(),
                             "Failed to send reply - receiver dropped"
-                        );
-                        log::error!(
-                            "Failed to send reply for actor {}: {} - receiver dropped",
-                            std::any::type_name::<A>(),
-                            std::any::type_name::<T>()
                         );
                     }
                 }

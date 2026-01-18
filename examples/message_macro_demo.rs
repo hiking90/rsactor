@@ -56,22 +56,10 @@ impl Calculator {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("🚀 Calculator Demo: Tracing is ENABLED");
-        println!("You should see detailed trace logs for all actor operations\n");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init();
-        println!("📝 Calculator Demo: Tracing is DISABLED\n");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     println!("🧮 Calculator Actor Demo with #[message_handlers] macro");
 

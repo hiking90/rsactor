@@ -1,9 +1,9 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use log::debug;
 use std::sync::Arc;
-use tokio::sync::Mutex; // Ensure 'log' crate is a dev-dependency or available
+use tokio::sync::Mutex;
+use tracing::debug;
 
 use rsactor::{
     set_default_mailbox_capacity, spawn, Actor, ActorRef, ActorResult, ActorWeak, Error, Identity,
@@ -647,7 +647,7 @@ async fn test_actor_ref_blocking_tell() {
     // Spawn a blocking task to call blocking_tell
     let join_handle = tokio::task::spawn_blocking(move || {
         actor_ref_clone
-            .blocking_tell(UpdateCounterMsg(7))
+            .blocking_tell(UpdateCounterMsg(7), None)
             .expect("blocking_tell failed");
     });
 
@@ -672,21 +672,21 @@ async fn test_actor_ref_blocking_ask() {
     // Spawn a blocking task to call blocking_ask
     let join_handle = tokio::task::spawn_blocking(move || {
         let reply: String = actor_ref_clone
-            .blocking_ask(PingMsg("hello_blocking".to_string()))
+            .blocking_ask(PingMsg("hello_blocking".to_string()), None)
             .expect("blocking_ask failed for PingMsg");
         assert_eq!(reply, "pong: hello_blocking");
 
         let count: i32 = actor_ref_clone
-            .blocking_ask(GetCounterMsg)
+            .blocking_ask(GetCounterMsg, None)
             .expect("blocking_ask failed for GetCounterMsg");
         assert_eq!(count, 0);
 
         let _: () = actor_ref_clone
-            .blocking_ask(UpdateCounterMsg(15))
+            .blocking_ask(UpdateCounterMsg(15), None)
             .expect("blocking_ask failed for UpdateCounterMsg");
 
         let count_after_update: i32 = actor_ref_clone
-            .blocking_ask(GetCounterMsg)
+            .blocking_ask(GetCounterMsg, None)
             .expect("blocking_ask failed for GetCounterMsg after update");
         assert_eq!(count_after_update, 15);
     });
@@ -697,10 +697,10 @@ async fn test_actor_ref_blocking_ask() {
         // With the new blocking implementation, these should succeed
         // because they don't require a Tokio runtime context
         assert!(actor_ref_clone
-            .blocking_ask(PingMsg("hello_blocking".to_string()))
+            .blocking_ask(PingMsg("hello_blocking".to_string()), None)
             .is_ok());
         assert!(actor_ref_clone
-            .blocking_tell(PingMsg("hello_blocking".to_string()))
+            .blocking_tell(PingMsg("hello_blocking".to_string()), None)
             .is_ok());
     });
 
@@ -732,12 +732,12 @@ async fn test_actor_ref_blocking_ask_no_timeout() {
     // Spawn a blocking task to call blocking_ask with None timeout
     let join_handle_blocking_task = tokio::task::spawn_blocking(move || {
         let reply: String = actor_ref_clone
-            .blocking_ask(PingMsg("hello_no_timeout".to_string()))
+            .blocking_ask(PingMsg("hello_no_timeout".to_string()), None)
             .expect("blocking_ask with None timeout failed for PingMsg");
         assert_eq!(reply, "pong: hello_no_timeout");
 
         let count: i32 = actor_ref_clone
-            .blocking_ask(GetCounterMsg)
+            .blocking_ask(GetCounterMsg, None)
             .expect("blocking_ask with None timeout failed for GetCounterMsg");
         assert_eq!(count, 0);
     });

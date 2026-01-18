@@ -1,76 +1,90 @@
 #!/bin/bash
 
+set -e
+
 # Function to check if a command exists
-command_exists () {
-    type "$1" &> /dev/null ;
+command_exists() {
+    type "$1" &> /dev/null
 }
 
-# Check if grcov is installed
-if ! command_exists grcov ; then
-    echo "grcov is not installed."
-    read -p "Do you want to install grcov? (y/N): " choice
+# Check if cargo-llvm-cov is installed
+if ! command_exists cargo-llvm-cov; then
+    echo "cargo-llvm-cov is not installed."
+    read -p "Do you want to install cargo-llvm-cov? (y/N): " choice
     case "$choice" in
-      y|Y )
-        echo "Installing grcov..."
-        cargo install grcov
-        if ! command_exists grcov ; then
-            echo "Failed to install grcov. Please install it manually and try again."
+        y|Y)
+            echo "Installing cargo-llvm-cov..."
+            cargo install cargo-llvm-cov
+            if ! command_exists cargo-llvm-cov; then
+                echo "Failed to install cargo-llvm-cov. Please install it manually and try again."
+                exit 1
+            fi
+            ;;
+        *)
+            echo "cargo-llvm-cov is required to generate coverage reports. Please install it and try again."
+            echo "You can install it with: cargo install cargo-llvm-cov"
+            echo "Or with rustup: rustup component add llvm-tools-preview"
             exit 1
-        fi
-        ;;
-      * )
-        echo "grcov is required to generate coverage reports. Please install it and try again."
-        exit 1
-        ;;
+            ;;
     esac
 fi
 
-# Set environment variables for coverage
-# CARGO_INCREMENTAL=0 is recommended for consistent coverage results
-export CARGO_INCREMENTAL=0
-# RUSTFLAGS tells rustc to instrument the code for coverage
-export RUSTFLAGS="-C instrument-coverage"
-# LLVM_PROFILE_FILE specifies the pattern for the raw coverage data files
-# %p creates a file per process, and %m adds a unique hash per module
-export LLVM_PROFILE_FILE="target/coverage/profraws/coverage-%p-%m.profraw"
+# Check if llvm-tools is installed (component name varies: llvm-tools-preview or llvm-tools)
+if ! rustup component list | grep -q "llvm-tools.*installed"; then
+    echo "llvm-tools component is not installed."
+    read -p "Do you want to install it via rustup? (y/N): " choice
+    case "$choice" in
+        y|Y)
+            echo "Installing llvm-tools..."
+            rustup component add llvm-tools
+            ;;
+        *)
+            echo "llvm-tools is required for coverage. Please install it and try again."
+            echo "You can install it with: rustup component add llvm-tools"
+            exit 1
+            ;;
+    esac
+fi
 
-# Create directories for coverage data and report
-echo "Creating coverage directories..."
-mkdir -p target/coverage/profraws
-mkdir -p target/coverage/report
+# Create output directory
+OUTPUT_DIR="target/coverage"
+mkdir -p "$OUTPUT_DIR"
 
-# Clean and rebuild the project with coverage instrumentation
-echo "Cleaning and rebuilding the project with coverage instrumentation..."
-cargo clean
-cargo build
+echo "========================================"
+echo "Running tests with coverage collection"
+echo "========================================"
 
-# Run tests - this generates .profraw files in target/coverage/profraws/
-echo "Running tests..."
-cargo test
+# Clean previous coverage data
+echo "Cleaning previous coverage data..."
+cargo llvm-cov clean --workspace
 
-# Generate coverage report using grcov
-echo "Generating coverage report..."
-grcov ./target/coverage/profraws/ \
-    --binary-path ./target/debug/ \
-    -s . \
-    -t html \
-    --ignore-not-existing \
-    --ignore "target/*" \
-    --ignore "examples/*" \
-    --ignore "**/build.rs" \
-    --ignore "tests/*" \
-    --ignore "rsactor-derive/*" \
-    -o ./target/coverage/report/
+# Run all tests with all features enabled to ensure complete coverage
+# --all-features includes 'test-utils' which is required for debugging_tools_tests
+echo ""
+echo "Running tests with --all-features..."
+cargo llvm-cov --all-features --workspace \
+    --ignore-filename-regex '(tests/|examples/|rsactor-derive/)' \
+    --html --output-dir "$OUTPUT_DIR/report"
 
-echo "Coverage report generated at ./target/coverage/report/index.html"
-echo "Note: Some files like build scripts or test utility code might be ignored by default."
-echo "You might need to adjust grcov arguments (e.g., --ignore patterns) for your specific needs."
+# Also generate a text summary
+echo ""
+echo "========================================"
+echo "Coverage Summary"
+echo "========================================"
+cargo llvm-cov report --ignore-filename-regex '(tests/|examples/|rsactor-derive/)'
 
-# Unset environment variables
-unset CARGO_INCREMENTAL
-unset RUSTFLAGS
-unset LLVM_PROFILE_FILE
+# Generate lcov format for CI integration (optional)
+cargo llvm-cov report --ignore-filename-regex '(tests/|examples/|rsactor-derive/)' \
+    --lcov --output-path "$OUTPUT_DIR/lcov.info" 2>/dev/null || true
 
-rm -rf ./target/debug/*
-
+echo ""
+echo "========================================"
+echo "Coverage report generated!"
+echo "========================================"
+echo "HTML report: $OUTPUT_DIR/report/html/index.html"
+echo "LCOV format: $OUTPUT_DIR/lcov.info"
+echo ""
+echo "Open the HTML report with:"
+echo "  open $OUTPUT_DIR/report/html/index.html"
+echo ""
 echo "Done."
