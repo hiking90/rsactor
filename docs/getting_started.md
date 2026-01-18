@@ -8,10 +8,10 @@ Add rsActor to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rsactor = "0.9"  # Check crates.io for the latest version
+rsactor = "0.12"  # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.9", features = ["tracing"] }
+# rsactor = { version = "0.12", features = ["tracing"] }
 ```
 
 ## Your First Actor
@@ -177,7 +177,7 @@ async fn main() -> Result<()> {
 - **`tell`**: Fire-and-forget messaging
 - **`ask`**: Request-reply messaging
 - **`tell_with_timeout`/`ask_with_timeout`**: Variants with timeout support
-- **`tell_blocking`/`ask_blocking`**: Blocking variants for `spawn_blocking` contexts
+- **`blocking_tell`/`blocking_ask`**: Blocking variants for use from any thread (no runtime context required)
 
 ### Actor Termination
 
@@ -211,7 +211,7 @@ Enable comprehensive observability:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.9", features = ["tracing"] }
+rsactor = { version = "0.12", features = ["tracing"] }
 tracing-subscriber = "0.3"
 ```
 

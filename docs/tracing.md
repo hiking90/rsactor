@@ -8,7 +8,7 @@ Add the tracing feature to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.9", features = ["tracing"] }
+rsactor = { version = "0.12", features = ["tracing"] }
 tracing-subscriber = "0.3"  # For setting up a subscriber
 ```
 
@@ -48,10 +48,10 @@ When the tracing feature is enabled, rsActor automatically traces:
 - **`actor_tell_with_timeout`** and **`actor_ask_with_timeout`** spans:
   - All of the above plus timeout duration in milliseconds
 
-- **`actor_tell_blocking`** and **`actor_ask_blocking`** spans:
-  - Blocking operations for use in `tokio::task::spawn_blocking` contexts
-  - Runtime handle acquisition status
-  - Timeout handling (if specified)
+- **`actor_blocking_tell`** and **`actor_blocking_ask`** spans:
+  - Blocking operations for use from any thread (no runtime context required)
+  - Timeout handling via `Option<Duration>` parameter
+  - Note: Deprecated `actor_tell_blocking` and `actor_ask_blocking` spans still exist for backwards compatibility
 
 ### Actor Lifecycle Events
 - **Actor Start**: When `on_start` completes successfully
@@ -78,11 +78,11 @@ When the tracing feature is enabled, rsActor automatically traces:
   - Error handling and error reply sending
 
 ### Error Handling
-- **Unhandled Message Types**: Warnings when actors receive unsupported message types
-  - Expected message types list
-  - Actual message type information
+- **Downcast Failures**: Warnings when reply type downcasting fails
+  - Expected type information logged
 - **Timeout Events**: When operations exceed specified time limits
 - **Channel Errors**: When actor mailboxes are closed or receivers drop
+- **Dead Letters**: Messages that cannot be delivered are logged at WARN level (see Dead Letter Tracking)
 
 ## Example Trace Output
 

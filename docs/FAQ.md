@@ -196,15 +196,25 @@ A7: `rsActor` provides several methods for sending messages to actors:
     actor_ref.tell_with_timeout(MyMessage, Duration::from_secs(1)).await?;
     ```
 
-5.  **`ask_blocking`**: Blocking version of `ask` for use in `tokio::task::spawn_blocking` tasks.
+5.  **`blocking_ask`**: Blocking version of `ask` for use from any thread (no runtime context required).
     ```rust
-    let result = actor_ref.ask_blocking(MyMessage, Some(timeout))?;
+    // Without timeout (blocks indefinitely)
+    let result = actor_ref.blocking_ask(MyMessage, None)?;
+
+    // With timeout
+    let result = actor_ref.blocking_ask(MyMessage, Some(Duration::from_secs(5)))?;
     ```
 
-6.  **`tell_blocking`**: Blocking version of `tell` for use in `tokio::task::spawn_blocking` tasks.
+6.  **`blocking_tell`**: Blocking version of `tell` for use from any thread (no runtime context required).
     ```rust
-    actor_ref.tell_blocking(MyMessage, Some(timeout))?;
+    // Without timeout (blocks indefinitely)
+    actor_ref.blocking_tell(MyMessage, None)?;
+
+    // With timeout
+    actor_ref.blocking_tell(MyMessage, Some(Duration::from_secs(5)))?;
     ```
+
+**Note:** The `ask_blocking` and `tell_blocking` methods are deprecated since v0.10.0. Use `blocking_ask` and `blocking_tell` instead.
 
 **Q8: How do I stop an actor?**
 
@@ -402,14 +412,14 @@ A14: Yes, `rsActor` provides mechanisms for working with blocking code:
     ```
 
 2.  **Sending Messages from Blocking Contexts:**
-    If you need to send messages to actors from within a blocking context, use the `ask_blocking` and `tell_blocking` methods:
+    If you need to send messages to actors from within a blocking context, use the `blocking_ask` and `blocking_tell` methods:
 
     ```rust
     tokio::task::spawn_blocking(move || {
         // Some blocking work...
 
         // Send message and get response, blocking until response is received
-        let result = actor_ref.ask_blocking::<Query, QueryResult>(
+        let result = actor_ref.blocking_ask(
             Query { id: 123 },
             Some(Duration::from_secs(5))
         );
@@ -441,37 +451,45 @@ A15: Testing actors can be done in several ways:
     ```
 
 2.  **Test message handlers directly**:
-    You can instantiate your actor struct and call message handlers directly:
+    You can instantiate your actor struct and call the Message trait's handle method directly by spawning a temporary actor:
 
     ```rust
     #[tokio::test]
     async fn test_message_handlers() {
-        let mut actor = CounterActor { count: 0 };
-        let actor_ref = ActorRef::for_test(); // Create a dummy ActorRef for testing
+        // Spawn a real actor for testing
+        let (actor_ref, _handle) = spawn::<CounterActor>(0);
 
-        // Test increment handler
-        let result = actor.handle(Increment(5), &actor_ref).await;
+        // Test increment handler via the actor
+        let result = actor_ref.ask(Increment(5)).await.unwrap();
         assert_eq!(result, 5);
-        assert_eq!(actor.count, 5);
+
+        // Test current count
+        let count = actor_ref.ask(GetCount).await.unwrap();
+        assert_eq!(count, 5);
+
+        actor_ref.stop().await.unwrap();
     }
     ```
 
 3.  **Test lifecycle methods**:
-    You can test `on_start`, `on_run`, and `on_stop` directly:
+    For testing lifecycle hooks, spawn the actor and observe behavior:
 
     ```rust
     #[tokio::test]
     async fn test_lifecycle() {
-        let actor_ref = ActorRef::for_test();
+        // Spawn actor - on_start is called automatically
+        let (actor_ref, handle) = spawn::<CounterActor>(10); // Initial count = 10
 
-        // Test on_start
-        let actor = CounterActor::on_start(10, &actor_ref).await.unwrap();
-        assert_eq!(actor.count, 10);
+        // Verify initialization worked
+        let count = actor_ref.ask(GetCount).await.unwrap();
+        assert_eq!(count, 10);
 
-        // Test on_run
-        let mut actor = CounterActor { count: 0 };
-        let result = actor.on_run(&actor_ref).await;
-        assert!(result.is_ok());
+        // Stop actor gracefully - on_stop is called
+        actor_ref.stop().await.unwrap();
+
+        // Await handle to get ActorResult
+        let result = handle.await.unwrap();
+        assert!(result.is_completed());
     }
     ```
 
@@ -905,7 +923,7 @@ A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
     impl Actor for EventProcessorActor {
         // ...
 
-        async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
             tokio::select! {
                 Some(event) = self.events_rx.recv() => {
                     self.process_event(event)?;
@@ -923,7 +941,7 @@ A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
 *   **Background Processing:** Use `on_run` for continuous background processing tasks:
 
     ```rust
-    async fn on_run(&mut self, _actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
         // Process one batch of work items
         if let Some(work_item) = self.queue.pop() {
             self.process_work_item(work_item)?;
@@ -938,7 +956,7 @@ A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
 *   **Combine multiple sources with `tokio::select!`:** You can wait on multiple event sources concurrently:
 
     ```rust
-    async fn on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
         tokio::select! {
             Some(msg) = self.command_rx.recv() => {
                 self.handle_command(msg)?;
@@ -966,8 +984,8 @@ A23: Backpressure is important to prevent overwhelming actors with more messages
     When spawning an actor, you can specify the mailbox size:
 
     ```rust
-    let mailbox_size = 100;
-    let (actor_ref, handle) = spawn_with_mailbox::<MyActor>(args, mailbox_size);
+    let mailbox_capacity = 100;
+    let (actor_ref, handle) = spawn_with_mailbox_capacity::<MyActor>(args, mailbox_capacity);
     ```
 
     When the mailbox is full, `ask` and `tell` operations will return an error, allowing the sender to implement backpressure strategies.
@@ -1064,25 +1082,37 @@ A24: rsActor provides a comprehensive type safety system for actor messaging thr
      actor_ref.tell(ResetMsg).await?;
      ```
 
-2. **Runtime Type Safety with `UntypedActorRef`**:
-   - Provides type erasure when you need to store different actor types together
-   - Useful for dynamic actor management, plugin systems, or heterogeneous actor collections
-   - Type checking happens at runtime when sending messages
-   - Returns error if the message type doesn't match what the actor can handle
-   - Slightly higher overhead due to runtime checks
-   - Developer is responsible for ensuring correct message types
+2. **Type-Erased Actor Management with Traits**:
+   - `ActorControl` trait: Type-erased lifecycle management (stop, kill, is_alive)
+   - `TellHandler<M>` / `AskHandler<M, R>`: Type-erased message sending for specific message types
+   - Useful for storing different actor types in collections while maintaining message type safety
    - Example:
      ```rust
-     // Convert to an untyped reference
-     let untyped_ref = actor_ref.untyped_actor_ref();
+     use rsactor::{ActorControl, TellHandler, AskHandler};
 
-     // Store different actor types in the same collection
-     let actors: Vec<UntypedActorRef> = vec![actor1.untyped_actor_ref(), actor2.untyped_actor_ref()];
+     // Store different actor types with unified lifecycle control
+     let controls: Vec<Box<dyn ActorControl>> = vec![
+         (&actor1).into(),
+         (&actor2).into(),
+     ];
 
-     // Runtime checked - will return error if actor doesn't handle this message type
-     untyped_ref.ask::<ResetMsg, ()>(ResetMsg).await?;
+     // Stop all actors gracefully
+     for control in &controls {
+         control.stop().await?;
+     }
+
+     // Or store handlers for specific message types
+     let handlers: Vec<Box<dyn TellHandler<PingMsg>>> = vec![
+         (&actor1).into(),
+         (&actor2).into(),
+     ];
+
+     // Send same message to all actors that handle it
+     for handler in &handlers {
+         handler.tell(PingMsg).await?;
+     }
      ```
 
-The dual approach ensures you get the benefits of Rust's strong type system in normal usage, while still enabling flexibility when needed for more dynamic patterns. This balance of static and dynamic typing provides both safety and versatility, making it suitable for a wide range of actor system designs.
+The combination of compile-time type safety with `ActorRef<T>` and type-erased traits provides both safety and flexibility, making it suitable for a wide range of actor system designs.
 
 *This FAQ is based on the state of the `rsActor` project as of its `README.md` and `src/lib.rs` on May 25, 2025. Features and behaviors may change in future versions.*

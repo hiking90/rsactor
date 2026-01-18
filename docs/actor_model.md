@@ -247,7 +247,7 @@ This approach doesn't just reduce the risk of deadlocks; it can also lead to sys
 *   **Easier to reason about:** The state of an actor is local, and its interactions are explicit (messages).
 *   **More modular:** Actors are self-contained units.
 *   **More testable:** Individual actors can often be tested in isolation by sending them messages and observing their responses or side effects (like messages sent to other (mocked) actors).
-*   **Type-safe:** Libraries like `rsactor` provide both compile-time type safety through `ActorRef<T>` and runtime type safety through `UntypedActorRef`, ensuring message handling consistency while supporting flexible actor management patterns.
+*   **Type-safe:** Libraries like `rsactor` provide compile-time type safety through `ActorRef<T>`, and type-erased management through `ActorControl` trait and handler traits (`TellHandler`, `AskHandler`), ensuring message handling consistency while supporting flexible actor management patterns.
 
 While `Mutex`es and other locking primitives still have their place for very fine-grained synchronization or specific low-level data structures, adopting an actor-based approach for the broader application architecture can significantly improve robustness and maintainability.
 

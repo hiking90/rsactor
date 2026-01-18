@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2025-01-18
+
 ### ⚠️ BREAKING CHANGES
 
 - **Logging Unification**: `tracing` is now a required dependency
@@ -24,17 +26,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ReplyDropped` - Reply channel was dropped before response
 - Dead letter tracking with structured `tracing::warn!` logging for all failed message deliveries
 - `test-utils` feature with `dead_letter_count()` and `reset_dead_letter_count()` for testing
+- `metrics` feature for actor performance monitoring:
+  - `MetricsSnapshot` - Comprehensive metrics data structure
+  - Per-actor metrics: message count, processing times, error count, uptime
+  - Accessible via `ActorRef::metrics()` and convenience methods
 
 ### Changed
 
 - Replaced `log` crate with `tracing` for all internal logging
 - `tracing` feature now only controls `#[tracing::instrument]` attributes
+- **Documentation updates**:
+  - Updated all version references from 0.9/0.11 to 0.12
+  - Fixed deprecated `ask_blocking`/`tell_blocking` references to use `blocking_ask`/`blocking_tell`
+  - Corrected blocking API signatures with `Option<Duration>` timeout parameter
 
 ### Removed
 
 - `log` crate dependency
+- Premature v0.12 migration guide from debugging_guide.md (now current version)
+
+### Deprecated
+
+- `ask_blocking` and `tell_blocking` methods (since v0.10.0) - Use `blocking_ask` and `blocking_tell` instead
 
 ### Migration Guide
+
+#### Blocking API Changes
+
+```rust
+// Old (deprecated)
+actor_ref.ask_blocking(msg, timeout);
+actor_ref.tell_blocking(msg, timeout);
+
+// New (recommended)
+actor_ref.blocking_ask(msg, None);              // No timeout
+actor_ref.blocking_ask(msg, Some(timeout));     // With timeout
+actor_ref.blocking_tell(msg, None);             // No timeout
+actor_ref.blocking_tell(msg, Some(timeout));    // With timeout
+```
 
 #### If you were using default features (no `tracing`)
 

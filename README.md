@@ -282,9 +282,12 @@ curl -sSL https://raw.githubusercontent.com/hiking90/rsactor/main/install-skills
 
 After installation, restart Claude Code to use the new skills.
 
-## Further Information
+## Documentation
 
-For more detailed questions and answers, please see the [FAQ](./docs/FAQ.md).
+- **[Debugging Guide](./docs/debugging_guide.md)** - Error handling, dead letter tracking, and troubleshooting
+- **[Metrics Guide](./docs/metrics.md)** - Actor performance monitoring
+- **[Tracing Guide](./docs/tracing.md)** - Detailed observability with tracing
+- **[FAQ](./docs/FAQ.md)** - Common questions and answers
 
 ## License
 

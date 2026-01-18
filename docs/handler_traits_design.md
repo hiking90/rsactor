@@ -41,7 +41,7 @@ Trait for fire-and-forget message sending.
 pub trait TellHandler<M: Send + 'static>: Send + Sync {
     fn tell(&self, msg: M) -> BoxFuture<'_, Result<()>>;
     fn tell_with_timeout(&self, msg: M, timeout: Duration) -> BoxFuture<'_, Result<()>>;
-    fn blocking_tell(&self, msg: M) -> Result<()>;
+    fn blocking_tell(&self, msg: M, timeout: Option<Duration>) -> Result<()>;
 
     fn clone_boxed(&self) -> Box<dyn TellHandler<M>>;
     fn downgrade(&self) -> Box<dyn WeakTellHandler<M>>;
@@ -79,7 +79,7 @@ Trait for request-response message sending.
 pub trait AskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     fn ask(&self, msg: M) -> BoxFuture<'_, Result<R>>;
     fn ask_with_timeout(&self, msg: M, timeout: Duration) -> BoxFuture<'_, Result<R>>;
-    fn blocking_ask(&self, msg: M) -> Result<R>;
+    fn blocking_ask(&self, msg: M, timeout: Option<Duration>) -> Result<R>;
 
     fn clone_boxed(&self) -> Box<dyn AskHandler<M, R>>;
     fn downgrade(&self) -> Box<dyn WeakAskHandler<M, R>>;
