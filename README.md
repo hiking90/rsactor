@@ -18,10 +18,10 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 - **Actor Derive Macro**: `#[derive(Actor)]` for simple actors that don't need complex initialization
 
 ### Message Passing
-| Method | Description |
-|--------|-------------|
-| `ask` / `ask_with_timeout` | Send a message and asynchronously await a reply |
-| `tell` / `tell_with_timeout` | Send a message without waiting for a reply (fire-and-forget) |
+| Method                           | Description                                                  |
+| -------------------------------- | ------------------------------------------------------------ |
+| `ask` / `ask_with_timeout`       | Send a message and asynchronously await a reply              |
+| `tell` / `tell_with_timeout`     | Send a message without waiting for a reply (fire-and-forget) |
 | `blocking_ask` / `blocking_tell` | Blocking versions for `tokio::task::spawn_blocking` contexts |
 
 - **Macro-Assisted Handlers**: `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
@@ -49,21 +49,11 @@ Supports **graceful termination** (`stop()`) and **immediate termination** (`kil
 ### Focused Scope
 Unlike broader frameworks like Actix, rsActor specializes exclusively in **local, in-process actor systems**. This focused approach eliminates complexity from unused features like remote actors or clustering, resulting in a cleaner API and smaller footprint.
 
-### Comparison with Other Frameworks
-
-| Feature | rsActor | Actix | Kameo |
-|---------|:-------:|:-----:|:-----:|
-| In-Process Focus | Yes | No (distributed) | Yes |
-| `ActorRef<T>` Type Safety | Yes | No | No |
-| Explicit Lifecycle Hooks | Yes | No | Yes |
-| Built-in Tracing | Yes | No | No |
-| Metrics Support | Yes | Limited | No |
-| Learning Curve | Easy | Moderate | Easy |
-
 ### Key Advantages
 
 - **Simplicity First**: Minimal API surface with sensible defaults
 - **Type-Safe by Default**: `ActorRef<T>` ensures compile-time message validation with zero runtime overhead
+- **Flexible Type Erasure**: Handler traits enable managing heterogeneous actor collections without sacrificing type safety
 - **Production-Ready Observability**: Integrated tracing and metrics support
 - **Deadlock-Free Design**: Message-passing architecture naturally prevents deadlocks
 
