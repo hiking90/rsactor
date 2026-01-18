@@ -469,6 +469,15 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                         #[cfg(feature = "tracing")]
                         let start_time = std::time::Instant::now();
 
+                        // Create metrics guard to automatically record processing time
+                        // Clone actor_ref first to preserve ownership for handle_message
+                        #[cfg(feature = "metrics")]
+                        let metrics_ref = actor_ref.clone();
+                        #[cfg(feature = "metrics")]
+                        let _metrics_guard = crate::metrics::collector::MessageProcessingGuard::new(
+                            metrics_ref.metrics_collector()
+                        );
+
                         payload.handle_message(&mut actor, actor_ref, reply_channel).await;
 
                         #[cfg(feature = "tracing")]
