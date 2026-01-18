@@ -4,8 +4,8 @@
 //! Example demonstrating the different termination scenarios with tracing.
 
 use anyhow::Result;
-use log::info;
 use rsactor::{message_handlers, Actor, ActorRef, ActorWeak};
+use tracing::info;
 
 // Simple actor for demonstration
 #[derive(Debug)]
@@ -60,22 +60,10 @@ impl DemoActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        use tracing_subscriber;
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .init();
-        println!("🚀 Kill Demo: Tracing is ENABLED (TRACE level)");
-        println!("You should see detailed trace logs for kill termination");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init();
-        println!("📝 Kill Demo: Tracing is DISABLED");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     println!("=== Kill Termination Demo ===\n");
 

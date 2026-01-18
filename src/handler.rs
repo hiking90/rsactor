@@ -79,7 +79,13 @@ pub trait TellHandler<M: Send + 'static>: Send + Sync {
     fn tell_with_timeout(&self, msg: M, timeout: Duration) -> BoxFuture<'_, Result<()>>;
 
     /// Blocking version of tell.
-    fn blocking_tell(&self, msg: M) -> Result<()>;
+    ///
+    /// # Timeout Behavior
+    ///
+    /// - **`timeout: None`**: Uses Tokio's `blocking_send` directly. Most efficient but blocks indefinitely.
+    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary runtime.
+    ///   Has overhead (~50-200μs for thread + ~1-10μs for runtime) but guarantees bounded waiting.
+    fn blocking_tell(&self, msg: M, timeout: Option<Duration>) -> Result<()>;
 
     /// Clone this handler into a new boxed instance.
     fn clone_boxed(&self) -> Box<dyn TellHandler<M>>;
@@ -123,7 +129,13 @@ pub trait AskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     fn ask_with_timeout(&self, msg: M, timeout: Duration) -> BoxFuture<'_, Result<R>>;
 
     /// Blocking version of ask.
-    fn blocking_ask(&self, msg: M) -> Result<R>;
+    ///
+    /// # Timeout Behavior
+    ///
+    /// - **`timeout: None`**: Uses Tokio's `blocking_send`/`blocking_recv` directly. Most efficient but blocks indefinitely.
+    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary runtime.
+    ///   Has overhead (~50-200μs for thread + ~1-10μs for runtime) but guarantees bounded waiting.
+    fn blocking_ask(&self, msg: M, timeout: Option<Duration>) -> Result<R>;
 
     /// Clone this handler into a new boxed instance.
     fn clone_boxed(&self) -> Box<dyn AskHandler<M, R>>;
@@ -288,8 +300,8 @@ where
         ActorRef::tell_with_timeout(self, msg, timeout).boxed()
     }
 
-    fn blocking_tell(&self, msg: M) -> Result<()> {
-        ActorRef::blocking_tell(self, msg)
+    fn blocking_tell(&self, msg: M, timeout: Option<Duration>) -> Result<()> {
+        ActorRef::blocking_tell(self, msg, timeout)
     }
 
     fn clone_boxed(&self) -> Box<dyn TellHandler<M>> {
@@ -330,8 +342,8 @@ where
         ActorRef::ask_with_timeout(self, msg, timeout).boxed()
     }
 
-    fn blocking_ask(&self, msg: M) -> Result<<T as Message<M>>::Reply> {
-        ActorRef::blocking_ask(self, msg)
+    fn blocking_ask(&self, msg: M, timeout: Option<Duration>) -> Result<<T as Message<M>>::Reply> {
+        ActorRef::blocking_ask(self, msg, timeout)
     }
 
     fn clone_boxed(&self) -> Box<dyn AskHandler<M, <T as Message<M>>::Reply>> {

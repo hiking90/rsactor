@@ -101,21 +101,10 @@ impl LoggerActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing/logging
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("Handler Demo: Tracing is ENABLED");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init();
-        println!("Handler Demo: Tracing is DISABLED");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     println!("\n=== Handler Traits Demo ===\n");
 

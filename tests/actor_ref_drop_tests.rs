@@ -1,17 +1,17 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-use log::debug;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 use rsactor::{spawn, Actor, ActorRef, Identity, Message};
 
 // Initialize logger for tests with configurable level
 fn init_test_logger() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Trace)
-        .is_test(true)
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_test_writer()
         .try_init();
 }
 

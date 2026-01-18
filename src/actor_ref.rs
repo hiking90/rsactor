@@ -4,9 +4,9 @@
 use crate::error::{Error, Result};
 use crate::Identity;
 use crate::{Actor, ControlSignal, MailboxMessage, MailboxSender, Message};
-use log::warn;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
+use tracing::warn;
 
 #[cfg(feature = "tracing")]
 use tracing::{debug as trace_debug, info, warn as trace_warn};
@@ -138,6 +138,11 @@ impl<T: Actor> ActorRef<T> {
         trace_debug!("Sending tell message (fire-and-forget)");
 
         let result = if self.sender.send(envelope).await.is_err() {
+            crate::dead_letter::record::<M>(
+                self.identity(),
+                crate::dead_letter::DeadLetterReason::ActorStopped,
+                "tell",
+            );
             Err(Error::Send {
                 identity: self.identity(),
                 details: "Mailbox channel closed".to_string(),
@@ -184,10 +189,17 @@ impl<T: Actor> ActorRef<T> {
 
         let result = tokio::time::timeout(timeout, self.tell(msg))
             .await
-            .map_err(|_| Error::Timeout {
-                identity: self.identity(),
-                timeout,
-                operation: "tell".to_string(),
+            .map_err(|_| {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::Timeout,
+                    "tell",
+                );
+                Error::Timeout {
+                    identity: self.identity(),
+                    timeout,
+                    operation: "tell".to_string(),
+                }
             })?;
 
         #[cfg(feature = "tracing")]
@@ -233,6 +245,12 @@ impl<T: Actor> ActorRef<T> {
         trace_debug!("Sending ask message and waiting for reply");
 
         if self.sender.send(envelope).await.is_err() {
+            crate::dead_letter::record::<M>(
+                self.identity(),
+                crate::dead_letter::DeadLetterReason::ActorStopped,
+                "ask",
+            );
+
             #[cfg(feature = "tracing")]
             trace_warn!("Failed to send ask message: mailbox channel closed");
 
@@ -265,6 +283,12 @@ impl<T: Actor> ActorRef<T> {
                 }
             }
             Err(_recv_err) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::ReplyDropped,
+                    "ask",
+                );
+
                 #[cfg(feature = "tracing")]
                 trace_warn!("Ask reply channel closed unexpectedly");
                 Err(Error::Receive {
@@ -306,10 +330,17 @@ impl<T: Actor> ActorRef<T> {
 
         let result = tokio::time::timeout(timeout, self.ask(msg))
             .await
-            .map_err(|_| Error::Timeout {
-                identity: self.identity(),
-                timeout,
-                operation: "ask".to_string(),
+            .map_err(|_| {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::Timeout,
+                    "ask",
+                );
+                Error::Timeout {
+                    identity: self.identity(),
+                    timeout,
+                    operation: "ask".to_string(),
+                }
             })?;
 
         #[cfg(feature = "tracing")]
@@ -401,19 +432,57 @@ impl<T: Actor> ActorRef<T> {
 
     /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
     ///
-    /// This method uses the underlying Tokio channel's `blocking_send` method and does not
-    /// require a Tokio runtime context. It can be used from any thread, including non-async contexts.
-    /// This method does not support timeouts.
+    /// This method can be used from any thread, including non-async contexts.
+    /// It does not require a Tokio runtime context.
+    ///
+    /// # Timeout Behavior
+    ///
+    /// - **`timeout: None`**: Uses Tokio's `blocking_send` directly. This is the most efficient
+    ///   option but will block indefinitely if the mailbox is full.
+    ///
+    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary Tokio runtime
+    ///   to handle the timeout. This approach has additional overhead but guarantees the call
+    ///   will return within the specified duration.
+    ///
+    /// # Performance Considerations
+    ///
+    /// When using a timeout, this method incurs the following overhead:
+    /// - **Thread creation**: ~50-200μs depending on the platform
+    /// - **Tokio runtime creation**: ~1-10μs for a single-threaded runtime
+    /// - **Channel synchronization**: Minimal overhead for result passing
+    ///
+    /// For performance-critical code paths where timeout is not required, pass `None` to avoid
+    /// this overhead. The timeout variant is designed for scenarios where bounded waiting is
+    /// more important than raw performance.
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is safe to call from within an existing Tokio runtime context because
+    /// the timeout implementation spawns a separate thread with its own runtime, avoiding
+    /// the "cannot start a runtime from within a runtime" panic.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_blocking_tell",
         fields(
             actor_id = %self.identity(),
-            message_type = %std::any::type_name::<M>()
+            message_type = %std::any::type_name::<M>(),
+            timeout_ms = timeout.map(|t| t.as_millis())
         ),
         skip(self, msg)
     ))]
-    pub fn blocking_tell<M>(&self, msg: M) -> Result<()>
+    pub fn blocking_tell<M>(&self, msg: M, timeout: Option<Duration>) -> Result<()>
+    where
+        M: Send + 'static,
+        T: Message<M>,
+    {
+        match timeout {
+            Some(timeout_duration) => self.blocking_tell_with_timeout_impl(msg, timeout_duration),
+            None => self.blocking_tell_no_timeout(msg),
+        }
+    }
+
+    /// Internal implementation of blocking_tell without timeout.
+    fn blocking_tell_no_timeout<M>(&self, msg: M) -> Result<()>
     where
         M: Send + 'static,
         T: Message<M>,
@@ -427,13 +496,17 @@ impl<T: Actor> ActorRef<T> {
         #[cfg(feature = "tracing")]
         trace_debug!("Sending blocking tell message (fire-and-forget)");
 
-        let result = self
-            .sender
-            .blocking_send(envelope)
-            .map_err(|_| Error::Send {
+        let result = self.sender.blocking_send(envelope).map_err(|_| {
+            crate::dead_letter::record::<M>(
+                self.identity(),
+                crate::dead_letter::DeadLetterReason::ActorStopped,
+                "blocking_tell",
+            );
+            Error::Send {
                 identity: self.identity(),
                 details: "Mailbox channel closed".to_string(),
-            });
+            }
+        });
 
         #[cfg(feature = "tracing")]
         match &result {
@@ -444,22 +517,108 @@ impl<T: Actor> ActorRef<T> {
         result
     }
 
+    /// Internal implementation of blocking_tell with timeout using a separate thread and runtime.
+    fn blocking_tell_with_timeout_impl<M>(&self, msg: M, timeout: Duration) -> Result<()>
+    where
+        M: Send + 'static,
+        T: Message<M>,
+    {
+        let self_clone = self.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build();
+
+            let result = match rt {
+                Ok(runtime) => runtime.block_on(async {
+                    tokio::time::timeout(timeout, self_clone.tell(msg))
+                        .await
+                        .map_err(|_| {
+                            crate::dead_letter::record::<M>(
+                                self_clone.identity(),
+                                crate::dead_letter::DeadLetterReason::Timeout,
+                                "blocking_tell",
+                            );
+                            Error::Timeout {
+                                identity: self_clone.identity(),
+                                timeout,
+                                operation: "blocking_tell".to_string(),
+                            }
+                        })?
+                }),
+                Err(e) => Err(Error::Send {
+                    identity: self_clone.identity(),
+                    details: format!("Failed to create runtime: {}", e),
+                }),
+            };
+
+            let _ = tx.send(result);
+        });
+
+        rx.recv().map_err(|_| Error::Send {
+            identity: self.identity(),
+            details: "Timeout thread terminated unexpectedly".to_string(),
+        })?
+    }
+
     /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
     ///
-    /// This method uses the underlying Tokio channel's `blocking_send` and `blocking_recv` methods
-    /// and does not require a Tokio runtime context. It can be used from any thread, including
-    /// non-async contexts. This method does not support timeouts.
+    /// This method can be used from any thread, including non-async contexts.
+    /// It does not require a Tokio runtime context.
+    ///
+    /// # Timeout Behavior
+    ///
+    /// - **`timeout: None`**: Uses Tokio's `blocking_send` and `blocking_recv` directly.
+    ///   This is the most efficient option but will block indefinitely if the actor
+    ///   never responds.
+    ///
+    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary Tokio runtime
+    ///   to handle the timeout. This approach has additional overhead but guarantees the call
+    ///   will return within the specified duration.
+    ///
+    /// # Performance Considerations
+    ///
+    /// When using a timeout, this method incurs the following overhead:
+    /// - **Thread creation**: ~50-200μs depending on the platform
+    /// - **Tokio runtime creation**: ~1-10μs for a single-threaded runtime
+    /// - **Channel synchronization**: Minimal overhead for result passing
+    ///
+    /// For performance-critical code paths where timeout is not required, pass `None` to avoid
+    /// this overhead. The timeout variant is designed for scenarios where bounded waiting is
+    /// more important than raw performance.
+    ///
+    /// # Thread Safety
+    ///
+    /// This method is safe to call from within an existing Tokio runtime context because
+    /// the timeout implementation spawns a separate thread with its own runtime, avoiding
+    /// the "cannot start a runtime from within a runtime" panic.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_blocking_ask",
         fields(
             actor_id = %self.identity(),
             message_type = %std::any::type_name::<M>(),
-            reply_type = %std::any::type_name::<T::Reply>()
+            reply_type = %std::any::type_name::<T::Reply>(),
+            timeout_ms = timeout.map(|t| t.as_millis())
         ),
         skip(self, msg)
     ))]
-    pub fn blocking_ask<M>(&self, msg: M) -> Result<T::Reply>
+    pub fn blocking_ask<M>(&self, msg: M, timeout: Option<Duration>) -> Result<T::Reply>
+    where
+        T: Message<M>,
+        M: Send + 'static,
+        T::Reply: Send + 'static,
+    {
+        match timeout {
+            Some(timeout_duration) => self.blocking_ask_with_timeout_impl(msg, timeout_duration),
+            None => self.blocking_ask_no_timeout(msg),
+        }
+    }
+
+    /// Internal implementation of blocking_ask without timeout.
+    fn blocking_ask_no_timeout<M>(&self, msg: M) -> Result<T::Reply>
     where
         T: Message<M>,
         M: Send + 'static,
@@ -476,6 +635,12 @@ impl<T: Actor> ActorRef<T> {
         trace_debug!("Sending blocking ask message and waiting for reply");
 
         self.sender.blocking_send(envelope).map_err(|_| {
+            crate::dead_letter::record::<M>(
+                self.identity(),
+                crate::dead_letter::DeadLetterReason::ActorStopped,
+                "blocking_ask",
+            );
+
             #[cfg(feature = "tracing")]
             trace_warn!("Failed to send blocking ask message: mailbox channel closed");
 
@@ -508,6 +673,12 @@ impl<T: Actor> ActorRef<T> {
                 }
             }
             Err(_recv_err) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::ReplyDropped,
+                    "blocking_ask",
+                );
+
                 #[cfg(feature = "tracing")]
                 trace_warn!("Blocking ask reply channel closed unexpectedly");
                 Err(Error::Receive {
@@ -516,6 +687,53 @@ impl<T: Actor> ActorRef<T> {
                 })
             }
         }
+    }
+
+    /// Internal implementation of blocking_ask with timeout using a separate thread and runtime.
+    fn blocking_ask_with_timeout_impl<M>(&self, msg: M, timeout: Duration) -> Result<T::Reply>
+    where
+        T: Message<M>,
+        M: Send + 'static,
+        T::Reply: Send + 'static,
+    {
+        let self_clone = self.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build();
+
+            let result = match rt {
+                Ok(runtime) => runtime.block_on(async {
+                    tokio::time::timeout(timeout, self_clone.ask(msg))
+                        .await
+                        .map_err(|_| {
+                            crate::dead_letter::record::<M>(
+                                self_clone.identity(),
+                                crate::dead_letter::DeadLetterReason::Timeout,
+                                "blocking_ask",
+                            );
+                            Error::Timeout {
+                                identity: self_clone.identity(),
+                                timeout,
+                                operation: "blocking_ask".to_string(),
+                            }
+                        })?
+                }),
+                Err(e) => Err(Error::Send {
+                    identity: self_clone.identity(),
+                    details: format!("Failed to create runtime: {}", e),
+                }),
+            };
+
+            let _ = tx.send(result);
+        });
+
+        rx.recv().map_err(|_| Error::Send {
+            identity: self.identity(),
+            details: "Timeout thread terminated unexpectedly".to_string(),
+        })?
     }
 
     /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
@@ -548,7 +766,7 @@ impl<T: Actor> ActorRef<T> {
         // Ignore timeout parameter as documented in deprecation notice
         let _ = timeout;
 
-        self.blocking_tell(msg)
+        self.blocking_tell(msg, None)
     }
 
     /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
@@ -583,7 +801,7 @@ impl<T: Actor> ActorRef<T> {
         // Ignore timeout parameter as documented in deprecation notice
         let _ = timeout;
 
-        self.blocking_ask(msg)
+        self.blocking_ask(msg, None)
     }
 
     /// Sends a message to an actor expecting a JoinHandle reply and awaits its completion.

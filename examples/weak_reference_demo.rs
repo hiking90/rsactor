@@ -10,10 +10,10 @@
 //! - Proper cleanup when actors are dropped
 
 use anyhow::Error as AnyError;
-use log::info;
 use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorWeak, Result};
 use std::time::Duration;
 use tokio::time::sleep;
+use tracing::info;
 
 // Simple actor that responds to ping messages
 #[derive(Debug)]
@@ -91,22 +91,10 @@ impl PingActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        use tracing_subscriber;
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .init();
-        println!("🚀 Weak Reference Demo: Tracing is ENABLED (TRACE level)");
-        println!("You should see detailed trace logs for all actor operations");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init(); // Initialize the logger only when tracing is disabled
-        println!("📝 Weak Reference Demo: Tracing is DISABLED");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     println!("=== UntypedActorWeak Demo ===\n");
 

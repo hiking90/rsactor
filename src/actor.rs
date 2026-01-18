@@ -3,9 +3,9 @@
 
 use crate::actor_ref::ActorRef;
 use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage};
-use log::{debug, error};
 use std::{fmt::Debug, future::Future, time::Duration};
 use tokio::sync::mpsc;
+use tracing::{debug, error};
 
 #[cfg(feature = "tracing")]
 use tracing::debug as trace_debug;

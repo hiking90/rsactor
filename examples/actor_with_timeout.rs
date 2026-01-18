@@ -5,9 +5,9 @@
 //! with timeout functionality.
 
 use anyhow::Result;
-use log::{debug, info};
 use rsactor::{message_handlers, spawn, Actor, ActorRef};
 use std::time::Duration;
+use tracing::{debug, info};
 
 // Define an actor that can process requests with varying response times
 struct TimeoutDemoActor {
@@ -82,7 +82,7 @@ async fn demonstrate_ask_with_timeout(
         delay_ms: expected_delay_ms,
     };
 
-    let result: Result<String, _> = actor_ref
+    let result: Result<_, rsactor::Error> = actor_ref
         .ask_with_timeout(query_msg, Duration::from_millis(timeout_ms))
         .await;
     match result {
@@ -127,25 +127,10 @@ async fn demonstrate_tell_with_timeout(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("🚀 Timeout Demo: Tracing is ENABLED");
-        println!("You should see detailed trace logs for all actor operations\n");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        // Setup logger for the example
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .format_timestamp_millis()
-            .init();
-        println!("📝 Timeout Demo: Tracing is DISABLED\n");
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     info!("Starting actor_with_timeout example");
 
@@ -154,7 +139,7 @@ async fn main() -> Result<()> {
 
     // Fast query with plenty of time - should succeed
     info!("\n=== Test 1: Fast query with long timeout (100ms) ===");
-    let result1: Result<String, _> = actor_ref
+    let result1: Result<_, rsactor::Error> = actor_ref
         .ask_with_timeout(
             FastQuery("What is your name?".to_string()),
             Duration::from_millis(100),
@@ -171,7 +156,7 @@ async fn main() -> Result<()> {
 
     // Slow query with insufficient time - should timeout
     info!("\n=== Test 2: Slow query with short timeout (100ms < 500ms) ===");
-    let result2: Result<String, _> = actor_ref
+    let result2: Result<_, rsactor::Error> = actor_ref
         .ask_with_timeout(
             SlowQuery("How old are you?".to_string()),
             Duration::from_millis(100),
@@ -188,7 +173,7 @@ async fn main() -> Result<()> {
 
     // Slow query with enough time - should succeed
     info!("\n=== Test 3: Slow query with sufficient timeout (1000ms > 500ms) ===");
-    let result3: Result<String, _> = actor_ref
+    let result3: Result<_, rsactor::Error> = actor_ref
         .ask_with_timeout(
             SlowQuery("What's your favorite color?".to_string()),
             Duration::from_millis(1000),

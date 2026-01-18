@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### ⚠️ BREAKING CHANGES
+
+- **Logging Unification**: `tracing` is now a required dependency
+  - Previously: `log` was required, `tracing` was optional via feature flag
+  - Now: `tracing` is always included for core logging
+  - The `tracing` feature flag now controls **instrumentation only** (spans, `#[instrument]`), not the logging system itself
+
+### Added
+
+- `Error::is_retryable()` - Check if an error can be retried (only `Timeout` errors are retryable)
+- `Error::debugging_tips()` - Get actionable debugging tips for all error types
+- `DeadLetterReason` enum - Categorize why messages couldn't be delivered:
+  - `ActorStopped` - Actor's mailbox channel was closed
+  - `Timeout` - Send or ask operation exceeded its timeout
+  - `ReplyDropped` - Reply channel was dropped before response
+- Dead letter tracking with structured `tracing::warn!` logging for all failed message deliveries
+- `test-utils` feature with `dead_letter_count()` and `reset_dead_letter_count()` for testing
+
+### Changed
+
+- Replaced `log` crate with `tracing` for all internal logging
+- `tracing` feature now only controls `#[tracing::instrument]` attributes
+
+### Removed
+
+- `log` crate dependency
+
+### Migration Guide
+
+#### If you were using default features (no `tracing`)
+
+Add `tracing-subscriber` to see logs:
+
+```rust
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+    // Your actor code
+}
+```
+
+#### If you were using `env_logger`
+
+Option A: Use `tracing-log` bridge:
+```toml
+[dependencies]
+tracing-log = "0.2"
+```
+
+```rust
+fn main() {
+    tracing_log::LogTracer::init().expect("Failed to set logger");
+    env_logger::init();
+    // Your actor code
+}
+```
+
+Option B: Switch to `tracing-subscriber` (recommended):
+```toml
+[dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
 ## [0.9.0] - 2025-06-28
 
 ### Added

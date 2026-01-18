@@ -147,6 +147,125 @@ impl std::error::Error for Error {
     }
 }
 
+impl Error {
+    /// Returns whether this error might succeed if retried.
+    ///
+    /// # ⚠️ Important Caveat
+    ///
+    /// This method checks the error type only and does **not** account for elapsed time.
+    /// If you store an error instance and check `is_retryable()` later, it will still
+    /// return `true` for `Timeout` errors even if significant time has passed.
+    ///
+    /// **Best Practice:** Always use fresh error instances for retry decisions.
+    /// Do not cache error instances for later retry logic.
+    ///
+    /// # Retryable Errors
+    ///
+    /// | Error Type | Retryable | Reason |
+    /// |------------|-----------|--------|
+    /// | `Timeout` | ✓ Yes | Transient; may succeed with longer timeout |
+    /// | `Send` | ✗ No | Actor stopped; channel permanently closed |
+    /// | `Receive` | ✗ No | Reply channel dropped; cannot recover |
+    /// | `Downcast` | ✗ No | Type mismatch; programming error |
+    /// | `Runtime` | ✗ No | Actor lifecycle failure |
+    /// | `MailboxCapacity` | ✗ No | Configuration error |
+    /// | `Join` | ✗ No | Task panic or cancellation |
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rsactor::{ActorRef, Actor, Error, Message};
+    /// use std::time::Duration;
+    ///
+    /// async fn send_with_retry<T, M>(
+    ///     actor: &ActorRef<T>,
+    ///     msg: M,
+    ///     max_attempts: usize,
+    /// ) -> Result<(), Error>
+    /// where
+    ///     T: Actor + Message<M>,
+    ///     M: Clone + Send + 'static,
+    /// {
+    ///     let mut attempts = 0;
+    ///     loop {
+    ///         // Always get a fresh error from the current attempt
+    ///         match actor.tell(msg.clone()).await {
+    ///             Ok(()) => return Ok(()),
+    ///             Err(e) if e.is_retryable() && attempts < max_attempts => {
+    ///                 attempts += 1;
+    ///                 tokio::time::sleep(Duration::from_millis(100 * attempts as u64)).await;
+    ///             }
+    ///             Err(e) => return Err(e),
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Error::Timeout { .. })
+    }
+
+    /// Returns actionable debugging tips for this error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rsactor::Error;
+    ///
+    /// fn log_error(err: &Error) {
+    ///     eprintln!("Error: {}", err);
+    ///     for tip in err.debugging_tips() {
+    ///         eprintln!("  - {}", tip);
+    ///     }
+    /// }
+    /// ```
+    #[must_use]
+    pub fn debugging_tips(&self) -> &'static [&'static str] {
+        match self {
+            Error::Send { .. } => &[
+                "Verify the actor is still running with `actor_ref.is_alive()`",
+                "The actor's mailbox is closed - the actor has terminated",
+                "Consider using `ActorWeak` for long-lived references",
+            ],
+            Error::Receive { .. } => &[
+                "The actor dropped the reply channel before responding",
+                "Check if the message handler panicked or returned early",
+                "Verify the handler correctly awaits async operations",
+            ],
+            Error::Timeout { .. } => &[
+                "Consider increasing the timeout duration",
+                "Check if the actor is processing a slow operation",
+                "Verify there's no deadlock in the message handler",
+                "Use `tell` instead if you don't need a response",
+            ],
+            Error::Downcast { .. } => &[
+                "The handler returned a different type than expected",
+                "Verify the Message trait impl returns correct Reply type",
+                "This usually indicates a bug in handler implementation",
+            ],
+            Error::Runtime { .. } => &[
+                "Check if on_start() or on_run() returned an error",
+                "Look for panic messages in the error details field",
+                "Use `ActorResult::is_start_failed()` or `is_run_failed()` to identify failure phase",
+                "Call `ActorResult::error()` to get the underlying error details",
+                "Initialize tracing-subscriber and set RUST_LOG=debug for lifecycle diagnostics",
+            ],
+            Error::MailboxCapacity { .. } => &[
+                "Mailbox capacity must be greater than 0",
+                "set_default_mailbox_capacity() can only be called once",
+                "Call it early in main() before spawning actors",
+            ],
+            Error::Join { .. } => &[
+                "The spawned task panicked or was cancelled by the runtime",
+                "Run with RUST_BACKTRACE=1 or RUST_BACKTRACE=full for panic details",
+                "Use `ActorResult::is_join_failed()` to confirm this failure type",
+                "Check for unwrap(), expect(), or panic!() calls in actor code",
+                "Verify tokio runtime wasn't shut down while actor was running",
+            ],
+        }
+    }
+}
+
 /// A Result type specialized for rsactor operations.
 ///
 /// This type is returned by most actor operations like [`tell`](crate::actor_ref::ActorRef::tell),
