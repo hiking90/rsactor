@@ -269,6 +269,11 @@ pub use dead_letter::DeadLetterReason;
 #[cfg(any(test, feature = "test-utils"))]
 pub use dead_letter::{dead_letter_count, reset_dead_letter_count};
 
+#[cfg(feature = "metrics")]
+mod metrics;
+#[cfg(feature = "metrics")]
+pub use metrics::MetricsSnapshot;
+
 mod actor_ref;
 pub use actor_ref::{ActorRef, ActorWeak};
 
@@ -471,8 +476,9 @@ pub fn spawn<T: Actor + 'static>(
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
 /// to control the actor's mailbox capacity.
+#[cfg(not(feature = "metrics"))]
 pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
-    args: T::Args, // Actor initialization arguments
+    args: T::Args,
     mailbox_capacity: usize,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     if mailbox_capacity == 0 {
@@ -487,13 +493,51 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
     );
 
     let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
-
-    // Create a dedicated high-priority channel for terminate signals.
-    // This ensures that kill signals can be sent even when the main mailbox is full,
-    // allowing for immediate actor termination regardless of mailbox state.
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
 
     let actor_ref = ActorRef::new(actor_id, mailbox_tx, terminate_tx);
+
+    let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
+        args,
+        actor_ref.clone(),
+        mailbox_rx,
+        terminate_rx,
+    ));
+
+    (actor_ref, join_handle)
+}
+
+/// Spawns a new actor with a specified mailbox capacity and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
+///
+/// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
+/// The `JoinHandle` can be used to await the actor's termination and retrieve
+/// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
+/// to control the actor's mailbox capacity.
+#[cfg(feature = "metrics")]
+pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
+    args: T::Args,
+    mailbox_capacity: usize,
+) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
+    use std::sync::Arc;
+
+    if mailbox_capacity == 0 {
+        panic!("Mailbox capacity must be greater than 0");
+    }
+
+    static ACTOR_IDS: AtomicU32 = AtomicU32::new(1);
+
+    let actor_id = Identity::new(
+        ACTOR_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        std::any::type_name::<T>(),
+    );
+
+    let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
+    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
+
+    // Create metrics collector for this actor
+    let metrics = Arc::new(metrics::MetricsCollector::new());
+
+    let actor_ref = ActorRef::new(actor_id, mailbox_tx, terminate_tx, metrics);
 
     let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
         args,

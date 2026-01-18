@@ -11,6 +11,11 @@ use tracing::warn;
 #[cfg(feature = "tracing")]
 use tracing::{debug as trace_debug, info, warn as trace_warn};
 
+#[cfg(feature = "metrics")]
+use crate::metrics::MetricsCollector;
+#[cfg(feature = "metrics")]
+use std::sync::Arc;
+
 /// A type-safe reference to an actor of type `T`.
 ///
 /// `ActorRef<T>` provides type-safe message passing to actors, ensuring that only
@@ -68,10 +73,14 @@ pub struct ActorRef<T: Actor> {
     sender: MailboxSender<T>,
     /// Channel for sending control signals (e.g., terminate) to the actor
     pub(crate) terminate_sender: mpsc::Sender<ControlSignal>,
+    /// Per-actor metrics collector (when metrics feature is enabled)
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics: Arc<MetricsCollector>,
 }
 
 impl<T: Actor> ActorRef<T> {
     /// Creates a new type-safe ActorRef.
+    #[cfg(not(feature = "metrics"))]
     pub(crate) fn new(
         id: Identity,
         sender: MailboxSender<T>,
@@ -81,6 +90,22 @@ impl<T: Actor> ActorRef<T> {
             id,
             sender,
             terminate_sender,
+        }
+    }
+
+    /// Creates a new type-safe ActorRef with metrics collector.
+    #[cfg(feature = "metrics")]
+    pub(crate) fn new(
+        id: Identity,
+        sender: MailboxSender<T>,
+        terminate_sender: mpsc::Sender<ControlSignal>,
+        metrics: Arc<MetricsCollector>,
+    ) -> Self {
+        ActorRef {
+            id,
+            sender,
+            terminate_sender,
+            metrics,
         }
     }
 
@@ -100,11 +125,27 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// The returned [`ActorWeak<T>`] can be used to check if the actor is still alive
     /// and optionally upgrade back to a strong [`ActorRef<T>`] without keeping the actor alive.
+    #[cfg(not(feature = "metrics"))]
     pub fn downgrade(this: &Self) -> ActorWeak<T> {
         ActorWeak {
-            id: this.id, // Clone the Identity for type safety
+            id: this.id,
             sender: this.sender.downgrade(),
             terminate_sender: this.terminate_sender.downgrade(),
+        }
+    }
+
+    /// Creates a weak, type-safe reference to this actor.
+    ///
+    /// The returned [`ActorWeak<T>`] can be used to check if the actor is still alive
+    /// and optionally upgrade back to a strong [`ActorRef<T>`] without keeping the actor alive.
+    /// Metrics are preserved via strong reference for post-mortem analysis.
+    #[cfg(feature = "metrics")]
+    pub fn downgrade(this: &Self) -> ActorWeak<T> {
+        ActorWeak {
+            id: this.id,
+            sender: this.sender.downgrade(),
+            terminate_sender: this.terminate_sender.downgrade(),
+            metrics: this.metrics.clone(), // Strong ref - survives actor drop
         }
     }
 
@@ -904,6 +945,80 @@ impl<T: Actor> ActorRef<T> {
 
         Ok(result)
     }
+
+    // ==================== Metrics API ====================
+
+    /// Returns a snapshot of all metrics for this actor.
+    ///
+    /// The snapshot includes message count, processing times, error count, uptime,
+    /// and last activity timestamp.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let metrics = actor_ref.metrics();
+    /// println!("Processed {} messages", metrics.message_count);
+    /// println!("Avg time: {:?}", metrics.avg_processing_time);
+    /// ```
+    #[cfg(feature = "metrics")]
+    pub fn metrics(&self) -> crate::MetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
+    /// Returns the total number of messages processed by this actor.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn message_count(&self) -> u64 {
+        self.metrics.message_count()
+    }
+
+    /// Returns the average message processing time.
+    ///
+    /// Returns `Duration::ZERO` if no messages have been processed yet.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn avg_processing_time(&self) -> std::time::Duration {
+        self.metrics.avg_processing_time()
+    }
+
+    /// Returns the maximum message processing time observed.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn max_processing_time(&self) -> std::time::Duration {
+        self.metrics.max_processing_time()
+    }
+
+    /// Returns the total number of errors during message handling.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn error_count(&self) -> u64 {
+        self.metrics.error_count()
+    }
+
+    /// Returns the time elapsed since the actor started.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn uptime(&self) -> std::time::Duration {
+        self.metrics.uptime()
+    }
+
+    /// Returns the timestamp of the last message processing.
+    ///
+    /// Returns `None` if no messages have been processed yet.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn last_activity(&self) -> Option<std::time::SystemTime> {
+        self.metrics.last_activity()
+    }
+
+    /// Returns a reference to the internal metrics collector.
+    ///
+    /// This is primarily for internal use by the message processing loop.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub(crate) fn metrics_collector(&self) -> &MetricsCollector {
+        &self.metrics
+    }
 }
 
 impl<T: Actor> Clone for ActorRef<T> {
@@ -913,6 +1028,8 @@ impl<T: Actor> Clone for ActorRef<T> {
             id: self.id,
             sender: self.sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
+            #[cfg(feature = "metrics")]
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -952,6 +1069,9 @@ pub struct ActorWeak<T: Actor> {
     sender: tokio::sync::mpsc::WeakSender<MailboxMessage<T>>,
     /// Weak reference to the actor's terminate signal sender
     terminate_sender: tokio::sync::mpsc::WeakSender<ControlSignal>,
+    /// Strong reference to metrics (survives actor drop for post-mortem analysis)
+    #[cfg(feature = "metrics")]
+    metrics: Arc<MetricsCollector>,
 }
 
 impl<T: Actor> ActorWeak<T> {
@@ -959,6 +1079,7 @@ impl<T: Actor> ActorWeak<T> {
     ///
     /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
     /// has been dropped.
+    #[cfg(not(feature = "metrics"))]
     #[inline]
     pub fn upgrade(&self) -> Option<ActorRef<T>> {
         // Try to upgrade both the mailbox sender and terminate sender
@@ -969,6 +1090,25 @@ impl<T: Actor> ActorWeak<T> {
             id: self.id,
             sender,
             terminate_sender,
+        })
+    }
+
+    /// Attempts to upgrade the weak reference to a strong, type-safe reference.
+    ///
+    /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
+    /// has been dropped.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn upgrade(&self) -> Option<ActorRef<T>> {
+        // Try to upgrade both the mailbox sender and terminate sender
+        let sender = self.sender.upgrade()?;
+        let terminate_sender = self.terminate_sender.upgrade()?;
+
+        Some(ActorRef {
+            id: self.id,
+            sender,
+            terminate_sender,
+            metrics: self.metrics.clone(),
         })
     }
 
@@ -1001,6 +1141,8 @@ impl<T: Actor> Clone for ActorWeak<T> {
             id: self.id,
             sender: self.sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
+            #[cfg(feature = "metrics")]
+            metrics: self.metrics.clone(),
         }
     }
 }

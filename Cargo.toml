@@ -41,6 +41,7 @@ default = []
 # `tracing` feature now ONLY controls #[tracing::instrument] attributes.
 # The tracing crate itself is ALWAYS available for logging (warn!, error!, etc.)
 tracing = []
+metrics = []     # Actor performance metrics (message count, processing time, etc.)
 test-utils = []  # Enable dead letter counter for integration tests
                  # WARNING: Never enable in production builds!
 
