@@ -12,26 +12,60 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
 ## Core Features
 
-*   **Minimalist Actor System**: Focuses on core actor model primitives.
-*   **Actor Derive Macro**: `#[derive(Actor)]` for simple actors that don't need complex initialization.
-*   **Message Passing**:
-    *   `ask`/`ask_with_timeout`: Send a message and asynchronously await a reply.
-    *   `tell`/`tell_with_timeout`: Send a message without waiting for a reply.
-    *   `ask_blocking`/`tell_blocking`: Blocking versions for `tokio::task::spawn_blocking` contexts.
-*   **Straightforward Actor Lifecycle**: Provides `on_start`, `on_run`, and `on_stop` hooks for managing actor behavior:
-    *   `on_start`: `async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>` - Initializes the actor's state. This method is required.
-    *   `on_run`: `async fn on_run(&mut self, actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error>` - Contains the actor's main execution logic, which runs concurrently with message handling. This method is optional and has a default implementation.
-    *   `on_stop`: `async fn on_stop(&mut self, actor_ref: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error>` - Performs cleanup before the actor terminates. The `killed` flag indicates whether the termination was graceful (`false`) or immediate (`true`). This method is optional and has a default implementation.
-*   **Graceful & Immediate Termination**: Actors can be stopped gracefully or killed.
-*   **`ActorResult`**: Enum representing the outcome of an actor's lifecycle (e.g., completed, failed).
-*   **Macro-Assisted Message Handling**:
-    *   `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
-*   **Tokio-Native**: Built for the `tokio` asynchronous runtime.
-*   **Strong Type Safety**: Provides compile-time (`ActorRef<T>`) type safety, ensuring message handling consistency and preventing type-related runtime errors.
-*   **Handler Traits**: `TellHandler<M>` and `AskHandler<M, R>` traits enable unified management of different actor types handling the same message in a single collection.
-*   **Actor Control Traits**: `ActorControl` and `WeakActorControl` traits provide type-erased lifecycle management, allowing different actor types to be stored and controlled in a single collection without knowing their message types.
-*   **Only `Send` Trait Required**: Actor structs only need to implement the `Send` trait (not `Sync`), enabling the use of interior mutability types like `std::cell::Cell` for internal state management without synchronization overhead. The `Actor` trait and `MessageHandler` trait (via `#[message_handlers]` macro) are also required, but they don't add any additional constraints on the actor's fields.
-*   **Optional Tracing Support**: Built-in support for detailed observability using the `tracing` crate. When enabled via the `tracing` feature flag, provides comprehensive logging of actor lifecycle events, message handling, and performance metrics.
+### Actor System
+- **Minimalist Design**: Focuses on core actor model primitives with a clean API
+- **Tokio-Native**: Built for the `tokio` asynchronous runtime
+- **Actor Derive Macro**: `#[derive(Actor)]` for simple actors that don't need complex initialization
+
+### Message Passing
+| Method | Description |
+|--------|-------------|
+| `ask` / `ask_with_timeout` | Send a message and asynchronously await a reply |
+| `tell` / `tell_with_timeout` | Send a message without waiting for a reply (fire-and-forget) |
+| `blocking_ask` / `blocking_tell` | Blocking versions for `tokio::task::spawn_blocking` contexts |
+
+- **Macro-Assisted Handlers**: `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
+
+### Actor Lifecycle
+Three well-defined hooks for managing actor behavior:
+- `on_start`: Initializes the actor's state (required)
+- `on_run`: Main execution logic, runs concurrently with message handling (optional)
+- `on_stop`: Cleanup before termination, with `killed` flag for graceful vs immediate (optional)
+
+Supports **graceful termination** (`stop()`) and **immediate termination** (`kill()`), with `ActorResult` enum representing lifecycle outcomes.
+
+### Type Safety
+- **Compile-Time Safety**: `ActorRef<T>` ensures message handling consistency and prevents type-related runtime errors
+- **Handler Traits**: `TellHandler<M>` and `AskHandler<M, R>` enable unified management of different actor types in a single collection
+- **Actor Control Traits**: `ActorControl` and `WeakActorControl` provide type-erased lifecycle management
+- **Only `Send` Required**: Actor structs only need `Send` trait (not `Sync`), enabling interior mutability types like `std::cell::Cell`
+
+### Observability
+- **Optional Tracing**: Built-in support via `tracing` feature flag for actor lifecycle events, message handling, and performance metrics
+- **Metrics Support**: Optional `metrics` feature for monitoring message counts, processing times, and actor uptime
+
+## Why rsActor?
+
+### Focused Scope
+Unlike broader frameworks like Actix, rsActor specializes exclusively in **local, in-process actor systems**. This focused approach eliminates complexity from unused features like remote actors or clustering, resulting in a cleaner API and smaller footprint.
+
+### Comparison with Other Frameworks
+
+| Feature | rsActor | Actix | Kameo |
+|---------|:-------:|:-----:|:-----:|
+| In-Process Focus | Yes | No (distributed) | Yes |
+| `ActorRef<T>` Type Safety | Yes | No | No |
+| Explicit Lifecycle Hooks | Yes | No | Yes |
+| Built-in Tracing | Yes | No | No |
+| Metrics Support | Yes | Limited | No |
+| Learning Curve | Easy | Moderate | Easy |
+
+### Key Advantages
+
+- **Simplicity First**: Minimal API surface with sensible defaults
+- **Type-Safe by Default**: `ActorRef<T>` ensures compile-time message validation with zero runtime overhead
+- **Production-Ready Observability**: Integrated tracing and metrics support
+- **Deadlock-Free Design**: Message-passing architecture naturally prevents deadlocks
 
 ## Getting Started
 
@@ -39,10 +73,10 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
 ```toml
 [dependencies]
-rsactor = "0.11" # Check crates.io for the latest version
+rsactor = "0.12" # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.11", features = ["tracing"] }
+# rsactor = { version = "0.12", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
@@ -80,7 +114,7 @@ struct CounterActor {
 #[message_handlers]
 impl CounterActor {
     #[handler]
-    async fn handle_increment(&mut self, _msg: Increment, _: &ActorRef<Self>) -> () {
+    async fn handle_increment(&mut self, _msg: Increment, _: &ActorRef<Self>) {
         self.count += 1;
     }
 
@@ -112,7 +146,7 @@ For actors that need custom initialization logic, implement the `Actor` trait ma
 ```rust
 use rsactor::{Actor, ActorRef, message_handlers, spawn};
 use anyhow::Result;
-use log::info;
+use tracing::info;
 
 // Define actor struct
 #[derive(Debug)] // Added Debug for printing the actor in ActorResult
@@ -136,13 +170,13 @@ impl Actor for CounterActor {
 }
 
 // Define message types
-struct IncrementMsg(u32);
+struct Increment(u32);
 
 // Use message_handlers macro for message handling
 #[message_handlers]
 impl CounterActor {
     #[handler]
-    async fn handle_increment(&mut self, msg: IncrementMsg, _actor_ref: &ActorRef<Self>) -> u32 {
+    async fn handle_increment(&mut self, msg: Increment, _actor_ref: &ActorRef<Self>) -> u32 {
         self.count += msg.0;
         self.count
     }
@@ -150,14 +184,14 @@ impl CounterActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init(); // Initialize logger
+    tracing_subscriber::fmt().init(); // Initialize tracing
 
     info!("Creating CounterActor");
 
     let (actor_ref, join_handle) = spawn::<CounterActor>(0u32); // Pass initial count as Args
     info!("CounterActor spawned with ID: {}", actor_ref.identity());
 
-    let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;
+    let new_count: u32 = actor_ref.ask(Increment(5)).await?;
     info!("Incremented count: {}", new_count);
 
     actor_ref.stop().await?;
@@ -178,18 +212,16 @@ async fn main() -> Result<()> {
 
 rsActor comes with several examples that demonstrate various features and use cases:
 
-* **[basic](./examples/basic.rs)** - Simple counter actor demonstrating core actor model concepts with `#[message_handlers]` macro
-* **[derive_macro_demo](./examples/derive_macro_demo.rs)** - Simple example using `#[message_handlers]` with `#[handler]` attributes
-* **[message_macro_demo](./examples/message_macro_demo.rs)** - Demonstrates various message types with the new macro system
-* **[unified_macro_demo](./examples/unified_macro_demo.rs)** - Combined usage of derive and message handler macros
-* **[advanced_derive_demo](./examples/advanced_derive_demo.rs)** - Advanced usage patterns with derive macros
+* **[basic](./examples/basic.rs)** - Simple counter actor demonstrating core concepts with `#[message_handlers]` macro
 * **[actor_with_timeout](./examples/actor_with_timeout.rs)** - Using timeouts for actor communication
 * **[actor_async_worker](./examples/actor_async_worker.rs)** - Inter-actor communication with async tasks
-* **[actor_task](./examples/actor_task.rs)** - Background task communication with actors
 * **[actor_blocking_task](./examples/actor_blocking_task.rs)** - Using blocking APIs with actors
 * **[dining_philosophers](./examples/dining_philosophers.rs)** - Classic concurrency problem implementation
-* **[weak_reference_demo](./examples/weak_reference_demo.rs)** - Working with weak actor references and lifecycle management
+* **[weak_reference_demo](./examples/weak_reference_demo.rs)** - Working with weak actor references and lifecycle
 * **[handler_demo](./examples/handler_demo.rs)** - Using handler traits for unified actor management
+* **[ask_join_demo](./examples/ask_join_demo.rs)** - Using `ask_join` for CPU/IO-bound operations
+* **[metrics_demo](./examples/metrics_demo.rs)** - Actor performance monitoring (requires `metrics` feature)
+* **[tracing_demo](./examples/tracing_demo.rs)** - Structured logging and actor lifecycle tracing
 
 Run any example with:
 ```bash
@@ -216,31 +248,21 @@ To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.11", features = ["tracing"] }
+rsactor = { version = "0.12", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
 
-All examples include tracing support with feature detection. Here's the pattern used:
+All examples include tracing support. Here's the recommended initialization pattern:
 
 ```rust
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing if the feature is enabled
-    #[cfg(feature = "tracing")]
-    {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .init();
-        println!("🚀 Demo: Tracing is ENABLED");
-    }
-
-    #[cfg(not(feature = "tracing"))]
-    {
-        env_logger::init();
-        println!("📝 Demo: Tracing is DISABLED");
-    }
+    // Initialize tracing subscriber
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(false)
+        .init();
 
     // Your actor code here...
     Ok(())
@@ -260,9 +282,54 @@ Handler traits (`TellHandler`, `AskHandler`, `WeakTellHandler`, `WeakAskHandler`
 
 Actor control traits (`ActorControl`, `WeakActorControl`) provide type-erased lifecycle management for different actor types in a single collection. Handler traits provide `as_control()` and `as_weak_control()` methods to access lifecycle operations.
 
+## Documentation
+
+- **[Debugging Guide](./docs/debugging_guide.md)** - Error handling, dead letter tracking, and troubleshooting
+- **[Metrics Guide](./docs/metrics.md)** - Actor performance monitoring
+- **[Tracing Guide](./docs/tracing.md)** - Detailed observability with tracing
+- **[FAQ](./docs/FAQ.md)** - Common questions and answers
+
+## Contributing
+
+We welcome contributions! Here's how to get started:
+
+### Development Setup
+
+```bash
+git clone https://github.com/hiking90/rsactor.git
+cd rsactor
+
+# Run tests
+cargo test --all-features
+
+# Run examples
+cargo run --example basic
+
+# With tracing
+RUST_LOG=debug cargo run --example basic --features tracing
+```
+
+### Code Quality
+
+Before submitting a PR, ensure:
+
+```bash
+cargo fmt                                                    # Format code
+cargo clippy --all-targets --all-features -- -D warnings    # Lint check
+cargo test --all-features                                    # All tests pass
+```
+
+### Ways to Contribute
+
+- Bug reports and fixes
+- Documentation improvements
+- New examples
+- Performance optimizations
+- Feature requests
+
 ## Claude Code Skills
 
-rsActor provides [Claude Code](https://claude.ai/code) skills to help AI assistants write correct rsactor code. These skills teach Claude the proper patterns for creating actors, handling messages, and using the framework effectively.
+rsActor provides [Claude Code](https://claude.ai/code) skills to help AI assistants write correct rsactor code.
 
 ### Installation
 
@@ -279,15 +346,6 @@ curl -sSL https://raw.githubusercontent.com/hiking90/rsactor/main/install-skills
 - **rsactor-actor**: Create new actors with proper patterns
 - **rsactor-handler**: Add message handlers to existing actors
 - **rsactor-guide**: API reference and troubleshooting guide
-
-After installation, restart Claude Code to use the new skills.
-
-## Documentation
-
-- **[Debugging Guide](./docs/debugging_guide.md)** - Error handling, dead letter tracking, and troubleshooting
-- **[Metrics Guide](./docs/metrics.md)** - Actor performance monitoring
-- **[Tracing Guide](./docs/tracing.md)** - Detailed observability with tracing
-- **[FAQ](./docs/FAQ.md)** - Common questions and answers
 
 ## License
 
