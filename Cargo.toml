@@ -2,7 +2,7 @@
 members = [".", "rsactor-derive"]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 rust-version = "1.75.0"
 authors = ["Jeff Kim <hiking90@gmail.com>"]
@@ -47,7 +47,7 @@ test-utils = []  # Enable dead letter counter for integration tests
 
 [dependencies]
 tokio.workspace = true
-rsactor-derive = { version = "0.11", path = "rsactor-derive" }
+rsactor-derive = { version = "0.12", path = "rsactor-derive" }
 tracing.workspace = true  # Now REQUIRED (was optional) - provides logging infrastructure
 futures = "0.3"
 

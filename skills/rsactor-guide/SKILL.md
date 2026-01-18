@@ -52,7 +52,8 @@ async fn main() -> anyhow::Result<()> {
 | `ActorResult` | Enum for actor completion status |
 | `ActorControl` | Type-erased lifecycle control (strong) |
 | `WeakActorControl` | Type-erased lifecycle control (weak) |
-| `UntypedActorRef` | Runtime type-checked reference |
+| `TellHandler<M>` | Type-erased fire-and-forget message sending |
+| `AskHandler<M, R>` | Type-erased request-reply message sending |
 
 ## Actor Lifecycle
 
@@ -260,12 +261,113 @@ async fn handle_forward(&mut self, msg: ForwardRequest, _: &ActorRef<Self>) {
 
 ```toml
 [dependencies]
-rsactor = { version = "0.x", features = ["tracing"] }
+rsactor = { version = "0.x", features = ["tracing", "metrics"] }
 ```
 
 | Feature | Description |
 |---------|-------------|
 | `tracing` | Enable tracing instrumentation for observability |
+| `metrics` | Enable actor performance metrics |
+| `test-utils` | Enable dead letter counter for testing (never use in production) |
+
+## Error Handling
+
+### Error Methods
+
+```rust
+use rsactor::Error;
+
+fn handle_error(err: &Error) {
+    // Check if operation can be retried
+    if err.is_retryable() {
+        // Only Timeout errors are retryable
+        println!("Retrying...");
+    }
+
+    // Get actionable debugging tips
+    for tip in err.debugging_tips() {
+        eprintln!("Tip: {}", tip);
+    }
+}
+```
+
+### Retry Pattern
+
+```rust
+async fn send_with_retry<T, M>(
+    actor: &ActorRef<T>,
+    msg: M,
+    max_attempts: usize,
+) -> Result<(), Error>
+where
+    T: Actor + Message<M>,
+    M: Clone + Send + 'static,
+{
+    let mut attempts = 0;
+    loop {
+        match actor.tell(msg.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(e) if e.is_retryable() && attempts < max_attempts => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(100 * attempts as u64)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+```
+
+## Dead Letter Tracking
+
+Dead letters are messages that could not be delivered. They are automatically logged via `tracing`:
+
+```text
+WARN rsactor::dead_letter: Dead letter: message could not be delivered
+    actor.id=42
+    actor.type_name="MyActor"
+    message.type_name="PingMessage"
+    dead_letter.reason="actor stopped"
+    dead_letter.operation="tell"
+```
+
+### Dead Letter Reasons
+
+| Reason | When it occurs |
+|--------|---------------|
+| `ActorStopped` | Message sent to stopped actor |
+| `Timeout` | `tell_with_timeout` or `ask_with_timeout` exceeded |
+| `ReplyDropped` | Handler failed before sending reply |
+
+### Testing Dead Letters
+
+```rust
+// Enable test-utils feature
+use rsactor::{dead_letter_count, reset_dead_letter_count};
+
+#[tokio::test]
+async fn test_dead_letters() {
+    reset_dead_letter_count();
+    let initial = dead_letter_count();
+
+    // ... cause dead letters ...
+
+    assert_eq!(dead_letter_count() - initial, expected_count);
+}
+```
+
+## Blocking Operations with Timeout
+
+```rust
+use std::time::Duration;
+
+// Without timeout
+actor_ref.blocking_tell(msg, None)?;
+actor_ref.blocking_ask(query, None)?;
+
+// With timeout
+actor_ref.blocking_tell(msg, Some(Duration::from_secs(5)))?;
+let result: String = actor_ref.blocking_ask(query, Some(Duration::from_secs(10)))?;
+```
 
 ## Troubleshooting
 
@@ -283,13 +385,15 @@ rsactor = { version = "0.x", features = ["tracing"] }
 - Check `actor_ref.is_alive()` before sending
 - Use `ask` instead of `tell` to get errors
 - Check for panics in handlers (actor will fail)
+- Enable tracing to see dead letter logs: `RUST_LOG=rsactor=warn`
+- Use `err.debugging_tips()` for actionable suggestions
 
 ## Imports Cheatsheet
 
 ```rust
 use rsactor::{
     // Core
-    Actor, ActorRef, ActorWeak, ActorResult,
+    Actor, ActorRef, ActorWeak, ActorResult, Error,
     // Macros
     message_handlers,
     // Functions
@@ -298,7 +402,9 @@ use rsactor::{
     TellHandler, AskHandler, WeakTellHandler, WeakAskHandler,
     // Control traits (for type-erased lifecycle management)
     ActorControl, WeakActorControl,
-    // Untyped (advanced)
-    UntypedActorRef,
+    // Dead letters (requires test-utils feature)
+    // dead_letter_count, reset_dead_letter_count,
+    // Debugging
+    DeadLetterReason,
 };
 ```

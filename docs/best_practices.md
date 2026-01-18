@@ -310,9 +310,9 @@ impl MockDatabaseActor {
 
 ### 1. Enable Tracing in Production
 
-```rust
+```toml
 [dependencies]
-rsactor = { version = "0.9", features = ["tracing"] }
+rsactor = { version = "0.12", features = ["tracing"] }
 ```
 
 ### 2. Implement Health Checks

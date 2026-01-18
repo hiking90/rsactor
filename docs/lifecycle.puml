@@ -58,23 +58,27 @@ loop Main Actor Loop
         else on_run Failure
             OnRun --> Lifecycle: Err(error)
             deactivate OnRun
-            note right of Lifecycle: Actor terminates due to runtime error
-            Lifecycle -> OnStop: Call on_stop(&actor_weak, killed = false)
+            note right of Lifecycle
+              Actor terminates due to runtime error.
+              on_stop is NOT called for on_run errors.
+            end note
+            Lifecycle --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed }
         end
     end
 end
 
 == Termination Phase ==
+note over Lifecycle, OnStop
+  on_stop is only called for explicit stop/kill requests
+  or when all ActorRef instances are dropped.
+  It is NOT called when on_run returns an error.
+end note
+
 activate OnStop
 alt on_stop Success
     OnStop --> Lifecycle: Ok(())
     deactivate OnStop
-
-    alt Normal Completion
-        Lifecycle --> JoinHandle: ActorResult::Completed { actor, killed: false/true }
-    else Runtime Error (from on_run)
-        Lifecycle --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed: false }
-    end
+    Lifecycle --> JoinHandle: ActorResult::Completed { actor, killed: false/true }
 
 else on_stop Failure
     OnStop --> Lifecycle: Err(stop_error)

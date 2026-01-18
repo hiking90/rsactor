@@ -41,19 +41,20 @@ OnRun -> OnRun: Runtime error occurs (e.g., resource exhaustion)
 OnRun --> Actor: Err(RuntimeError)
 deactivate OnRun
 
-Actor -> OnStop: Call on_stop(&actor_weak, killed = false)
-activate OnStop
-OnStop --> Actor: Ok(()) [cleanup successful]
-deactivate OnStop
+note over Actor, OnStop
+  Important: on_stop is NOT called when on_run fails.
+  The actor terminates immediately without cleanup.
+  Use Drop trait for guaranteed cleanup if needed.
+end note
 
-Actor --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed: false }
+Actor --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed }
 
 note right of JoinHandle
   Runtime Failure:
   - Actor instance available for inspection
   - phase is FailurePhase::OnRun
-  - on_stop was called for cleanup
-  - killed is false (not a forced termination)
+  - on_stop was NOT called (only for explicit stop/kill)
+  - killed reflects termination state at error time
 end note
 
 == Scenario 3: Cleanup Failure in on_stop ==
@@ -165,10 +166,12 @@ note over Client, OnStop
      - Handle recoverable errors gracefully
      - Use timeouts for external operations
      - Consider circuit breaker patterns
+     - Note: on_stop is NOT called if on_run fails
 
   3. Cleanup (on_stop):
-     - Perform critical cleanup in Drop if needed
-     - Log but don't panic on cleanup failures
+     - Only called for explicit stop/kill or ActorRef drop
+     - NOT called when on_run returns an error
+     - Use Drop trait for guaranteed cleanup
      - Differentiate between graceful and forced termination
 
   4. Message Handlers:

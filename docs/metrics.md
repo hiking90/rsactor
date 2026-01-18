@@ -9,7 +9,7 @@ To use the metrics functionality, enable the `metrics` feature flag.
 ```toml
 # Cargo.toml
 [dependencies]
-rsactor = { version = "0.11", features = ["metrics"] }
+rsactor = { version = "0.12", features = ["metrics"] }
 ```
 
 ## Basic Usage
