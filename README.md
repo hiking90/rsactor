@@ -55,7 +55,7 @@ Unlike broader frameworks like Actix, rsActor specializes exclusively in **local
 - **Type-Safe by Default**: `ActorRef<T>` ensures compile-time message validation with zero runtime overhead
 - **Flexible Type Erasure**: Handler traits enable managing heterogeneous actor collections without sacrificing type safety
 - **Production-Ready Observability**: Integrated tracing and metrics support
-- **Deadlock-Free Design**: Message-passing architecture naturally prevents deadlocks
+- **Mutex-Free Design**: No shared locks between actors - state is isolated within each actor
 
 ## Getting Started
 
