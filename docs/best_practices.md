@@ -100,12 +100,12 @@ impl Actor for FileProcessor {
 }
 ```
 
-### 3. Use `on_run` for Periodic Tasks
+### 3. Use `on_run` for Idle Processing
 
-Implement periodic or continuous processing in `on_run`:
+The `on_run` method is an idle handler called when the message queue is empty. Use it for background tasks:
 
 ```rust
-async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
     tokio::select! {
         // Handle periodic cleanup
         _ = self.cleanup_interval.tick() => {
@@ -119,11 +119,11 @@ async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Err
                 let actor_ref = actor_weak.upgrade()
                     .ok_or_else(|| anyhow::anyhow!("Actor reference no longer valid"))?;
                 actor_ref.stop().await?;
-                return Ok(());
+                return Ok(false); // Stop idle processing
             }
         }
     }
-    Ok(())
+    Ok(true) // Continue idle processing
 }
 ```
 

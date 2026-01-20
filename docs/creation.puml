@@ -37,21 +37,21 @@ alt on_start Success
   run_lifecycle -> run_lifecycle: Creates ActorWeak from ActorRef (drops strong ref)
   run_lifecycle -> run_lifecycle: Enters main tokio::select! loop
   note right of run_lifecycle
-    Main loop concurrently handles:
-    1. Termination signals (biased priority)
+    Main loop handles (biased priority):
+    1. Termination signals (highest)
     2. Mailbox messages
-    3. Actor's on_run() execution
+    3. on_run() idle handler (when queue empty)
   end note
 
-  run_lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await (in select! loop)
+  run_lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await (when idle)
   activate on_run_method
-  on_run_method --> run_lifecycle: Returns Result<(), Error>
+  on_run_method --> run_lifecycle: Returns Result<bool, Error>
   deactivate on_run_method
 
   note right of run_lifecycle
-    If on_run returns Ok(()), it will be called again.
-    If Err, actor terminates with ActorResult::Failed.
-    The select! loop processes messages concurrently.
+    Ok(true): continue calling on_run when idle
+    Ok(false): disable idle processing
+    Err: terminate with ActorResult::Failed
   end note
 
   run_lifecycle --> tokio_spawn: Eventually completes with ActorResult::Completed

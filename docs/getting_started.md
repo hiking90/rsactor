@@ -94,12 +94,12 @@ impl Actor for CounterActor {
         })
     }
 
-    // on_run is optional - defines the actor's main processing loop
-    async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
-        // This runs concurrently with message handling
+    // on_run is optional - idle handler called when message queue is empty
+    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        // Called when there are no messages to process
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         println!("Actor '{}' heartbeat - current count: {}", self.name, self.count);
-        Ok(()) // Returning Ok(()) means on_run will be called again
+        Ok(true) // Return true to continue idle processing, false to disable it
     }
 
     // on_stop is optional - called when the actor is terminating
@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
 ### Actor Lifecycle
 
 1. **`on_start`** (required): Creates the actor instance from initialization arguments
-2. **`on_run`** (optional): The actor's main processing loop, runs concurrently with message handling
+2. **`on_run`** (optional): Idle handler called when message queue is empty, returns `bool` to control continuation
 3. **`on_stop`** (optional): Cleanup logic when the actor terminates
 
 ### Message Passing

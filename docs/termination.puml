@@ -19,12 +19,12 @@ end box
 == Normal Operation ==
 Lifecycle -> Lifecycle: Main tokio::select! loop (biased)
 activate Lifecycle
-loop Continuous Operation
+loop Idle Processing (when message queue empty)
   Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await
   activate on_run_method
-  on_run_method --> Lifecycle: Returns Ok(()) or Err(error)
+  on_run_method --> Lifecycle: Returns Ok(true), Ok(false), or Err(error)
   deactivate on_run_method
-  note right of Lifecycle: If Ok(()), on_run is called again\nIf Err(), actor terminates with failure
+  note right of Lifecycle: Ok(true): continue idle processing\nOk(false): disable idle processing\nErr(): terminate with failure
 end
 
 == Stop Operation (Graceful) ==
@@ -74,8 +74,8 @@ deactivate Lifecycle
 
 == Termination via on_run Error ==
 note over Lifecycle, on_stop_method
-  Important: on_stop is NOT called when on_run returns an error.
-  The actor terminates immediately with ActorResult::Failed.
+  When on_run returns an error, on_stop IS called for cleanup.
+  The actor then terminates with ActorResult::Failed.
 end note
 
 Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await
@@ -84,7 +84,11 @@ activate on_run_method
 on_run_method --> Lifecycle: Returns Err(error)
 deactivate on_run_method
 
-Lifecycle -> Lifecycle: Breaks message loop due to on_run error (no on_stop call)
+Lifecycle -> on_stop_method: Calls on_stop(&actor_weak, killed) for cleanup
+activate on_stop_method
+on_stop_method --> Lifecycle: Returns (result logged if error)
+deactivate on_stop_method
+
 Lifecycle --> JoinHandle_obj: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed }
 deactivate Lifecycle
 

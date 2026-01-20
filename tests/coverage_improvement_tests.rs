@@ -2222,10 +2222,8 @@ mod metrics_api_tests {
         // Send a few messages
         let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
         let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
-        actor_ref.tell(SlowMsg).await.unwrap();
-
-        // Wait for messages to be processed
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Use ask instead of tell to ensure message is processed before checking metrics
+        let _: () = actor_ref.ask(SlowMsg).await.unwrap();
 
         // Test metrics snapshot
         let metrics = actor_ref.metrics();
@@ -2287,8 +2285,8 @@ mod metrics_api_tests {
 
         // Send quick and slow messages
         let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
-        actor_ref.tell(SlowMsg).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Use ask instead of tell to ensure message is processed before checking metrics
+        let _: () = actor_ref.ask(SlowMsg).await.unwrap();
 
         // Max processing time should reflect the slow message
         let max_time = actor_ref.max_processing_time();

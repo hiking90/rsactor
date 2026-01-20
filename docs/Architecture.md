@@ -31,12 +31,12 @@ This section describes the sequence of events when a user defines an actor and s
 4.  Inside the spawned Tokio task, `run_actor_lifecycle` begins execution:
     a.  It first calls the actor's `A::on_start(args, &actor_ref)` lifecycle hook, passing the user-provided `args` and a reference to the `ActorRef`. This method is responsible for creating and returning the actor instance (`Ok(Self)`).
     b.  If `on_start()` returns `Ok(actor_instance)`, this instance is stored. The runtime then enters the main processing loop using `tokio::select!` to handle:
-        - Messages from the mailbox
+        - Messages from the mailbox (highest priority after termination)
         - Termination signals (with bias priority)
-        - The actor's `on_run()` method execution
-    c.  The actor's `on_run()` method runs concurrently with message processing, implementing the actor's primary logic throughout its lifetime.
+        - The actor's `on_run()` idle handler (lowest priority, only when message queue is empty)
+    c.  The actor's `on_run()` method serves as an idle handler, called when the message queue is empty. It returns `Ok(true)` to continue idle processing, `Ok(false)` to disable it, or `Err(e)` to terminate with an error.
     d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` function will return `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`.
-    e.  When the actor terminates (due to `on_run()` errors, explicit stop/kill, or all references being dropped), the actor's `on_stop()` method is called before the `JoinHandle` resolves to an appropriate `ActorResult`.
+    e.  When the actor terminates (due to `on_run()` errors, explicit stop/kill, or all references being dropped), the actor's `on_stop()` method is called for cleanup before the `JoinHandle` resolves to an appropriate `ActorResult`.
 
 ## 2. Message Passing (tell/ask)
 
@@ -159,7 +159,7 @@ This section provides a comprehensive view of the actor lifecycle from creation 
 The actor lifecycle consists of three main phases:
 
 1. **Initialization Phase**: The actor is created via `on_start()`. If this fails, no actor instance exists.
-2. **Processing Phase**: The actor processes messages and executes `on_run()` repeatedly until termination.
+2. **Processing Phase**: The actor processes messages and executes `on_run()` as an idle handler when the message queue is empty.
 3. **Termination Phase**: The actor is cleaned up via `on_stop()` before the task completes.
 
 Each phase can result in different `ActorResult` outcomes, providing detailed information about the actor's final state.

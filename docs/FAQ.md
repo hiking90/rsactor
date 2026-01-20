@@ -224,7 +224,7 @@ A8: To stop an actor, you can use:
     ```rust
     actor_ref.stop().await?;
     ```
-    This sends a stop signal to the actor and waits for it to shut down cleanly. The actor will continue processing its current message, finish its current `on_run` execution, and then call `on_stop` before terminating.
+    This sends a stop signal to the actor and waits for it to shut down cleanly. The actor will continue processing its current message, then call `on_stop` before terminating.
 
 2.  **Immediate Kill**:
     ```rust
@@ -345,8 +345,8 @@ A11: The lifecycle of an actor in `rsActor` follows these stages:
     *   If `on_start` returns `Err(e)`, the actor fails to start, and the `JoinHandle` resolves with an error.
 
 2.  **Running**:
-    *   The framework repeatedly calls the actor's `on_run` method, which defines the actor's main execution logic.
-    *   Concurrently, the actor processes messages from its mailbox.
+    *   The actor processes messages from its mailbox.
+    *   The `on_run` idle handler is called when the message queue is empty.
     *   This continues until the actor is stopped or encounters an error.
 
 3.  **Termination**:
@@ -356,11 +356,11 @@ A11: The lifecycle of an actor in `rsActor` follows these stages:
 The actor's lifecycle methods are:
 
 *   `on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>`: Called when the actor is starting. Creates and returns the actor instance.
-*   `on_run(&mut self, actor_ref: &ActorRef<Self>) -> Result<(), Self::Error>`: Called after `on_start` succeeds. This method contains the main execution logic of the actor and runs concurrently with message handling.
-    *   If `on_run` returns `Ok(())`, the actor continues running and `on_run` will be called again.
+*   `on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error>`: Called when the message queue is empty (idle handler).
+    *   If `on_run` returns `Ok(true)`, the actor continues calling `on_run` when idle.
+    *   If `on_run` returns `Ok(false)`, idle processing is disabled; the actor only processes messages.
     *   If `on_run` returns `Err(e)`, the actor terminates due to a runtime error, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnRun`.
-    *   To stop the actor normally from within `on_run`, call `actor_ref.stop().await` or `actor_ref.kill()`.
-*   `on_stop(&mut self, actor_ref: &ActorRef<Self>, killed: bool) -> Result<(), Self::Error>`: Called when the actor is stopping. The `killed` parameter is `true` if the actor was killed, and `false` if it was stopped gracefully.
+*   `on_stop(&mut self, actor_weak: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error>`: Called when the actor is stopping (including after `on_run` errors). The `killed` parameter is `true` if the actor was killed, and `false` if it was stopped gracefully.
 
 **Q12: What is the `ActorResult` enum?**
 
@@ -381,7 +381,7 @@ A12: The `ActorResult` enum represents the outcome of an actor's lifecycle when 
 A13: Error handling in `rsActor` happens at several levels:
 
 *   **Lifecycle - `on_start`:** If `on_start` returns `Err(e)`, the actor never starts, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`. Since the actor wasn't created, the `actor` field is `None`.
-*   **Lifecycle - `on_run`:** If `on_run` returns `Err(e)`, the actor will terminate, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: Some(actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`. The `actor` field may contain the actor's state.
+*   **Lifecycle - `on_run`:** If `on_run` returns `Err(e)`, the actor will terminate after calling `on_stop` for cleanup, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: Some(actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`. The `actor` field contains the actor's state.
 *   **Panics:** If a message handler or `on_run` panics, the Tokio task hosting the actor will terminate. Awaiting the `JoinHandle` will then result in an `Err` (typically a `tokio::task::JoinError` indicating a panic). It's generally recommended to handle errors gracefully within your actor logic and return `Result` types from `on_start` and `on_run`, and use `Result` as reply types for messages where appropriate, rather than relying on panics.
 *   **Message Handling:** For message handling, the `Message<T>::handle` method can return any type as its `Reply`, including a `Result` type. If your message handler might fail, it's a good practice to use a `Result` type as the `Reply` type.
 *   **Sending Messages:** The methods for sending messages (`ask`, `tell`, etc.) return `Result<R, rsactor::Error>`, where `R` is the reply type of the message. These methods can fail if the actor has stopped, the mailbox is full, or a timeout occurs.
@@ -875,11 +875,16 @@ With the generic syntax, you specify the generic constraints in square brackets,
 
 **Q22: How can I effectively use the `on_run` method in my actors?**
 
-A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` framework that enables an actor to perform its primary processing work. It is called after `on_start` completes and continues running throughout the actor's lifetime. Here's how to use it effectively:
+A22: The `on_run` method is an idle handler in the `rsActor` framework, called when the actor's message queue is empty. It returns `Result<bool, Error>` to control idle processing:
+*   `Ok(true)` - Continue calling `on_run` when idle
+*   `Ok(false)` - Disable idle processing; actor only processes messages
+*   `Err(e)` - Terminate with an error
 
-*   **Actor Behavior Implementation:** The `on_run` method is where you implement the actor's primary behavior and processing logic. Following the actor model principles, this processing happens concurrently with message handling, allowing the actor to maintain its core responsibilities while remaining responsive to messages.
+Here's how to use it effectively:
 
-*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `on_run`. `tokio::select!` makes it easy to handle multiple timers concurrently. For example, first define your actor struct with interval fields:
+*   **Idle Processing:** The `on_run` method is called when there are no messages to process. Messages always have priority over idle processing, ensuring the actor stays responsive.
+
+*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `on_run`. For example:
 
     ```rust
     struct MyActor {
@@ -897,8 +902,8 @@ A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
         })
     }
 
-    // Use the intervals in on_run without loop
-    async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    // Idle handler - called when message queue is empty
+    async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         tokio::select! {
             _ = self.fast_interval.tick() => {
                 // Handle high-frequency tasks (every 500ms)
@@ -909,7 +914,7 @@ A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
                 self.process_low_frequency_work();
             }
         }
-        Ok(())
+        Ok(true) // Continue idle processing
     }
     ```
 
@@ -923,56 +928,54 @@ A22: The `on_run` method is a key part of the actor lifecycle in the `rsActor` f
     impl Actor for EventProcessorActor {
         // ...
 
-        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
             tokio::select! {
                 Some(event) = self.events_rx.recv() => {
                     self.process_event(event)?;
+                    Ok(true) // Continue processing
                 }
                 else => {
-                    // Channel closed, stop the actor
-                    return Err(anyhow::anyhow!("Event channel closed"));
+                    // Channel closed, stop idle processing
+                    Ok(false)
                 }
             }
-            Ok(())
         }
     }
     ```
 
-*   **Background Processing:** Use `on_run` for continuous background processing tasks:
+*   **Background Processing:** Use `on_run` for background processing tasks:
 
     ```rust
-    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         // Process one batch of work items
         if let Some(work_item) = self.queue.pop() {
             self.process_work_item(work_item)?;
+            Ok(true) // Continue processing
         } else {
-            // No work to do right now, add a small delay to avoid busy waiting
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            // No work to do, disable idle processing until new work arrives via messages
+            Ok(false)
         }
-        Ok(())
     }
     ```
 
 *   **Combine multiple sources with `tokio::select!`:** You can wait on multiple event sources concurrently:
 
     ```rust
-    async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         tokio::select! {
             Some(msg) = self.command_rx.recv() => {
                 self.handle_command(msg)?;
+                Ok(true) // Continue
             }
             _ = self.health_check_interval.tick() => {
                 self.perform_health_check()?;
-            }
-            Ok(()) = self.check_resource_limits() => {
-                // Resources are within limits, continue
+                Ok(true) // Continue
             }
             else => {
-                // All channels are closed
-                actor_ref.stop().await?;
+                // All channels are closed, disable idle processing
+                Ok(false)
             }
         }
-        Ok(())
     }
     ```
 

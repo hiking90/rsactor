@@ -89,7 +89,7 @@ While the actor model is well-known for its applicability in distributed systems
 
 Libraries like `rsactor` (see `https://github.com/hiking90/rsactor`) provide simple and efficient in-process actor model implementations for Rust. They simplify the definition of actors, their state, message types, and message handling logic, allowing developers to focus on the application's business logic rather than the boilerplate of actor machinery. For example, you might define an actor that manages a specific resource or performs a particular computation, and other parts of your application would interact with it solely by sending it messages and, where appropriate, receiving responses via messages.
 
-Here's a conceptual example using `rsactor`, demonstrating an actor with an internal `on_run` handling multiple tick sources:
+Here's a conceptual example using `rsactor`, demonstrating an actor with an `on_run` idle handler processing multiple tick sources:
 
 ```rust
 use rsactor::{Actor, ActorRef, ActorWeak, message_handlers, spawn};
@@ -117,9 +117,9 @@ impl Actor for CounterActor {
         })
     }
 
-    // The primary processing loop for the actor within the lifecycle.
+    // Idle handler called when the message queue is empty.
     // This demonstrates handling two independent, periodic events using tokio::select!.
-    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
         tokio::select! {
             // Executes when the 300ms interval timer ticks.
@@ -131,8 +131,8 @@ impl Actor for CounterActor {
                 // Could implement different behavior here
             }
         }
-        // Return Ok(()) to continue running
-        Ok(())
+        // Return Ok(true) to continue idle processing, Ok(false) to disable it
+        Ok(true)
     }
 }
 
@@ -222,22 +222,22 @@ In this example:
 - `CounterActor` maintains a `count` and two interval timers as struct fields.
 - The `Actor` trait is implemented:
     - `on_start` initializes the actor with its state and interval timers.
-    - `on_run` is the core execution method. It uses `tokio::select!` to concurrently wait on two `tokio::time::interval` ticks (300ms and 1 second).
+    - `on_run` is the idle handler, called when the message queue is empty. It uses `tokio::select!` to wait on two `tokio::time::interval` ticks (300ms and 1 second).
         - The 300ms tick increments the actor's internal `count`.
         - The 1s tick performs no specific action in this example.
-        - The framework will call `on_run` repeatedly, handling each interval tick as it occurs.
+        - Return `Ok(true)` to continue idle processing, `Ok(false)` to disable it.
 - Message types `IncrementMsg(u32)` and `GetCountMsg` are defined to interact with the counter.
 - The `#[message_handlers]` macro with `#[handler]` attributes automatically generates `Message` trait implementations and `MessageHandler` trait implementation for these messages.
 - The `main` function:
     - Spawns the `CounterActor`.
-    - Waits briefly to allow the `on_run` to execute a few times.
+    - Waits briefly to allow the `on_run` idle handler to execute a few times.
     - Sends `IncrementMsg` and `GetCountMsg` to interact with the actor, logging replies.
     - Waits again for more ticks.
     - Sends `GetCountMsg` again to observe changes from both messages and internal ticks.
     - Gracefully stops the actor using `actor_ref.stop()`.
     - Awaits the actor's `join_handle` to ensure clean termination and logs the outcome.
 
-This revised example aligns with the `rsactor` patterns shown in its `README.md` and `lib.rs` documentation, particularly showcasing how the `on_run` method implements the actor's primary processing loop while concurrently handling incoming messages, a key feature of the in-process actor model.
+This revised example aligns with the `rsactor` patterns shown in its `README.md` and `lib.rs` documentation, particularly showcasing how the `on_run` method serves as an idle handler that processes background tasks when the message queue is empty, a key feature of the in-process actor model.
 
 ## The Premier Choice for Mutex-Light Concurrency in Rust
 

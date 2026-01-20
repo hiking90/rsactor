@@ -34,18 +34,24 @@ JoinHandle --> Client: ActorResult::Failed { phase: OnStart, actor: None, ... }
 deactivate JoinHandle
 
 == Scenario 2: Runtime Failure in on_run ==
-note over Actor: Actor is running normally
-Actor -> OnRun: Periodic on_run() call
+note over Actor: Actor is running normally (on_run is idle handler)
+Actor -> OnRun: on_run() called when message queue empty
 activate OnRun
 OnRun -> OnRun: Runtime error occurs (e.g., resource exhaustion)
 OnRun --> Actor: Err(RuntimeError)
 deactivate OnRun
 
 note over Actor, OnStop
-  Important: on_stop is NOT called when on_run fails.
-  The actor terminates immediately without cleanup.
-  Use Drop trait for guaranteed cleanup if needed.
+  When on_run returns an error:
+  - on_stop IS called for cleanup
+  - on_stop errors are logged but don't change the result
+  - The actor terminates with ActorResult::Failed
 end note
+
+Actor -> OnStop: Call on_stop(&actor_weak, killed) for cleanup
+activate OnStop
+OnStop --> Actor: Returns (logged if error)
+deactivate OnStop
 
 Actor --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed }
 
@@ -53,7 +59,7 @@ note right of JoinHandle
   Runtime Failure:
   - Actor instance available for inspection
   - phase is FailurePhase::OnRun
-  - on_stop was NOT called (only for explicit stop/kill)
+  - on_stop WAS called for cleanup
   - killed reflects termination state at error time
 end note
 
@@ -162,16 +168,16 @@ note over Client, OnStop
      - Use ? operator for early returns
      - Provide meaningful error messages
 
-  2. Runtime (on_run):
+  2. Runtime (on_run - idle handler):
+     - Called when message queue is empty
+     - Return Ok(true) to continue, Ok(false) to disable
      - Handle recoverable errors gracefully
      - Use timeouts for external operations
-     - Consider circuit breaker patterns
-     - Note: on_stop is NOT called if on_run fails
+     - on_stop IS called for cleanup if on_run fails
 
   3. Cleanup (on_stop):
-     - Only called for explicit stop/kill or ActorRef drop
-     - NOT called when on_run returns an error
-     - Use Drop trait for guaranteed cleanup
+     - Called for stop/kill, ActorRef drop, or on_run error
+     - Use Drop trait for additional guaranteed cleanup
      - Differentiate between graceful and forced termination
 
   4. Message Handlers:

@@ -29,7 +29,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 ### Actor Lifecycle
 Three well-defined hooks for managing actor behavior:
 - `on_start`: Initializes the actor's state (required)
-- `on_run`: Main execution logic, runs concurrently with message handling (optional)
+- `on_run`: Idle handler called when message queue is empty, returns `bool` to control continuation (optional)
 - `on_stop`: Cleanup before termination, with `killed` flag for graceful vs immediate (optional)
 
 Supports **graceful termination** (`stop()`) and **immediate termination** (`kill()`), with `ActorResult` enum representing lifecycle outcomes.
