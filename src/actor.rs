@@ -515,6 +515,14 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                         // on_run returned an error - terminate the actor with failure status
                         let error_msg = format!("Actor {actor_id} on_run error: {e:?}");
                         error!("{error_msg}");
+
+                        // Call on_stop for cleanup even after on_run failure
+                        if let Err(stop_err) = actor.on_stop(&actor_weak, false).await {
+                            error!(
+                                "Actor {actor_id} on_stop failed during on_run error cleanup: {stop_err:?}"
+                            );
+                        }
+
                         return ActorResult::Failed {
                             actor: Some(actor),
                             error: e,

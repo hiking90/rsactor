@@ -416,7 +416,8 @@ async fn test_actor_fail_on_run() {
             if let Some(actor) = actor {
                 assert!(*actor.on_start_attempted.lock().await);
                 assert!(*actor.on_run_attempted.lock().await);
-                assert!(!*actor.on_stop_attempted.lock().await);
+                // on_stop is now called even when on_run fails (for cleanup)
+                assert!(*actor.on_stop_attempted.lock().await);
             }
         }
         _ => panic!("Expected Failed result"),
@@ -1061,7 +1062,7 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
     let args = LifecycleErrorArgs {
         fail_on_start: false,
         fail_on_run: true,
-        fail_on_stop: true, // This won't matter since on_stop won't be called
+        fail_on_stop: true, // on_stop will be called but its error is logged (not propagated)
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
@@ -1070,8 +1071,8 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
 
     let result = handle.await.expect("Join handle should not fail");
 
-    // When on_run fails, the actor immediately returns Failed with OnRun phase.
-    // on_stop is NOT called when on_run fails in the rsActor framework.
+    // When on_run fails, on_stop is called for cleanup.
+    // The original on_run error is preserved; on_stop error is only logged.
     assert!(
         result.is_runtime_failed(),
         "Actor should have failed during runtime (on_run)"
@@ -1087,12 +1088,13 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
             assert_eq!(
                 phase,
                 rsactor::FailurePhase::OnRun,
-                "Should fail in OnRun phase"
+                "Should fail in OnRun phase (original error preserved)"
             );
             assert!(
                 !killed,
                 "Should not be marked as killed for on_run failure scenario"
             );
+            // The error should be from on_run, not on_stop
             assert!(error.to_string().contains("simulated on_run failure"));
 
             if let Some(actor) = actor {
@@ -1104,9 +1106,10 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
                     *actor.on_run_attempted.lock().await,
                     "on_run should have been called"
                 );
+                // on_stop is now called for cleanup even when on_run fails
                 assert!(
-                    !*actor.on_stop_attempted.lock().await,
-                    "on_stop should NOT be called when on_run fails"
+                    *actor.on_stop_attempted.lock().await,
+                    "on_stop should be called for cleanup when on_run fails"
                 );
             }
         }
@@ -1123,7 +1126,7 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
     let args = LifecycleErrorArgs {
         fail_on_start: false,
         fail_on_run: true,
-        fail_on_stop: false, // This won't matter since on_stop won't be called
+        fail_on_stop: false, // on_stop will succeed
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
@@ -1132,8 +1135,8 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
 
     let result = handle.await.expect("Join handle should not fail");
 
-    // When on_run fails, the actor immediately returns Failed with OnRun phase.
-    // on_stop is NOT called when on_run fails in the rsActor framework.
+    // When on_run fails, on_stop is called for cleanup.
+    // The result is still Failed with OnRun phase.
     assert!(
         result.is_runtime_failed(),
         "Actor should have failed during runtime (on_run)"
@@ -1166,9 +1169,10 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
                     *actor.on_run_attempted.lock().await,
                     "on_run should have been called"
                 );
+                // on_stop is now called for cleanup even when on_run fails
                 assert!(
-                    !*actor.on_stop_attempted.lock().await,
-                    "on_stop should NOT be called when on_run fails"
+                    *actor.on_stop_attempted.lock().await,
+                    "on_stop should be called for cleanup when on_run fails"
                 );
             }
         }
