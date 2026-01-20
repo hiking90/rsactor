@@ -49,7 +49,7 @@ impl Actor for PanicTestActor {
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         if let Some(threshold) = self.panic_threshold {
             if self.counter >= threshold {
                 panic!("Counter reached threshold {threshold} - intentional panic in on_run!");
@@ -57,7 +57,7 @@ impl Actor for PanicTestActor {
         }
 
         sleep(Duration::from_millis(10)).await;
-        Ok(())
+        Ok(true)
     }
 
     async fn on_stop(

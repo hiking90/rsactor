@@ -324,12 +324,12 @@ mod on_run_error_tests {
             Ok(Self { fail_count: args })
         }
 
-        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
             if self.fail_count > 0 {
                 self.fail_count -= 1;
                 // Use a short sleep to yield control
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok(())
+                Ok(true)
             } else {
                 Err("Intentional on_run failure".to_string())
             }
@@ -353,6 +353,69 @@ mod on_run_error_tests {
         assert_eq!(error, "Intentional on_run failure");
 
         // The actor_ref should no longer be alive
+        assert!(!actor_ref.is_alive());
+    }
+
+    // Actor that fails in both on_run and on_stop
+    struct FailingOnRunAndOnStopActor {
+        fail_count: u32,
+    }
+
+    impl Actor for FailingOnRunAndOnStopActor {
+        type Args = u32;
+        type Error = String;
+
+        async fn on_start(
+            args: Self::Args,
+            _actor_ref: &ActorRef<Self>,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self { fail_count: args })
+        }
+
+        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+            if self.fail_count > 0 {
+                self.fail_count -= 1;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                Ok(true)
+            } else {
+                Err("Intentional on_run failure".to_string())
+            }
+        }
+
+        async fn on_stop(
+            &mut self,
+            _actor_weak: &ActorWeak<Self>,
+            _killed: bool,
+        ) -> Result<(), Self::Error> {
+            // This error is logged but not propagated (on_run error takes precedence)
+            Err("Intentional on_stop failure during on_run cleanup".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_on_run_error_with_on_stop_also_failing() {
+        init_test_logger();
+        // Actor will succeed 1 time then fail in on_run, and on_stop will also fail
+        let (actor_ref, handle) = spawn::<FailingOnRunAndOnStopActor>(1);
+
+        // Wait for the actor to fail
+        let result = handle.await.unwrap();
+
+        assert!(result.is_failed());
+        assert!(result.is_runtime_failed());
+
+        // The error should be from on_run (on_stop error is only logged)
+        let error = result.error().unwrap();
+        assert_eq!(error, "Intentional on_run failure");
+
+        // Phase should be OnRun, not OnStop
+        match &result {
+            rsactor::ActorResult::Failed { phase, .. } => {
+                assert_eq!(*phase, rsactor::FailurePhase::OnRun);
+            }
+            _ => panic!("Expected Failed result"),
+        }
+
         assert!(!actor_ref.is_alive());
     }
 }
@@ -1335,5 +1398,1186 @@ mod actor_result_debug_tests {
         let debug_str = format!("{:?}", result);
         assert!(debug_str.contains("Failed"));
         assert!(debug_str.contains("debug test failure"));
+    }
+}
+
+// ============================================================================
+// Tests for deprecated tell_blocking and ask_blocking methods (actor_ref.rs)
+// ============================================================================
+
+mod deprecated_blocking_methods_tests {
+    use super::*;
+
+    #[derive(Actor)]
+    struct DeprecatedMethodsActor;
+
+    struct DeprecatedMsg;
+
+    #[rsactor::message_handlers]
+    impl DeprecatedMethodsActor {
+        #[handler]
+        async fn handle(&mut self, _: DeprecatedMsg, _: &ActorRef<Self>) -> String {
+            "deprecated_response".to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deprecated_tell_blocking() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<DeprecatedMethodsActor>(DeprecatedMethodsActor);
+
+        let actor_clone = actor_ref.clone();
+
+        // Test deprecated tell_blocking method
+        #[allow(deprecated)]
+        let result = tokio::task::spawn_blocking(move || {
+            actor_clone.tell_blocking(DeprecatedMsg, Some(Duration::from_secs(5)))
+        })
+        .await
+        .unwrap();
+
+        assert!(result.is_ok(), "deprecated tell_blocking should succeed");
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_deprecated_ask_blocking() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<DeprecatedMethodsActor>(DeprecatedMethodsActor);
+
+        let actor_clone = actor_ref.clone();
+
+        // Test deprecated ask_blocking method
+        #[allow(deprecated)]
+        let result: Result<String, _> = tokio::task::spawn_blocking(move || {
+            actor_clone.ask_blocking(DeprecatedMsg, Some(Duration::from_secs(5)))
+        })
+        .await
+        .unwrap();
+
+        assert!(result.is_ok(), "deprecated ask_blocking should succeed");
+        assert_eq!(result.unwrap(), "deprecated_response");
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_deprecated_tell_blocking_to_stopped_actor() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<DeprecatedMethodsActor>(DeprecatedMethodsActor);
+
+        // Stop the actor first
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+
+        let actor_clone = actor_ref.clone();
+
+        // Test deprecated tell_blocking to stopped actor
+        #[allow(deprecated)]
+        let result =
+            tokio::task::spawn_blocking(move || actor_clone.tell_blocking(DeprecatedMsg, None))
+                .await
+                .unwrap();
+
+        assert!(
+            result.is_err(),
+            "deprecated tell_blocking to stopped actor should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deprecated_ask_blocking_to_stopped_actor() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<DeprecatedMethodsActor>(DeprecatedMethodsActor);
+
+        // Stop the actor first
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+
+        let actor_clone = actor_ref.clone();
+
+        // Test deprecated ask_blocking to stopped actor
+        #[allow(deprecated)]
+        let result: Result<String, _> =
+            tokio::task::spawn_blocking(move || actor_clone.ask_blocking(DeprecatedMsg, None))
+                .await
+                .unwrap();
+
+        assert!(
+            result.is_err(),
+            "deprecated ask_blocking to stopped actor should fail"
+        );
+    }
+}
+
+// ============================================================================
+// Tests for ask_join error scenarios (actor_ref.rs)
+// ============================================================================
+
+mod ask_join_error_tests {
+    use super::*;
+    use tokio::task::JoinHandle;
+
+    #[derive(Actor)]
+    struct AskJoinErrorActor;
+
+    struct SpawnPanicTask;
+    struct SpawnCancelledTask;
+    struct SpawnSuccessTask(i32);
+
+    #[rsactor::message_handlers]
+    impl AskJoinErrorActor {
+        #[handler]
+        async fn handle_panic(&mut self, _: SpawnPanicTask, _: &ActorRef<Self>) -> JoinHandle<i32> {
+            tokio::spawn(async move {
+                panic!("Intentional panic in spawned task");
+            })
+        }
+
+        #[handler]
+        async fn handle_cancelled(
+            &mut self,
+            _: SpawnCancelledTask,
+            _: &ActorRef<Self>,
+        ) -> JoinHandle<i32> {
+            let handle = tokio::spawn(async move {
+                // Long sleep that will be cancelled
+                tokio::time::sleep(Duration::from_secs(100)).await;
+                42
+            });
+            // Immediately abort the task
+            handle.abort();
+            handle
+        }
+
+        #[handler]
+        async fn handle_success(
+            &mut self,
+            msg: SpawnSuccessTask,
+            _: &ActorRef<Self>,
+        ) -> JoinHandle<i32> {
+            let value = msg.0;
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                value * 2
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ask_join_with_panic() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<AskJoinErrorActor>(AskJoinErrorActor);
+
+        // ask_join should return Error::Join when the spawned task panics
+        let result: rsactor::Result<i32> = actor_ref.ask_join(SpawnPanicTask).await;
+
+        assert!(result.is_err(), "ask_join should fail when task panics");
+
+        match result.unwrap_err() {
+            rsactor::Error::Join { source, .. } => {
+                assert!(source.is_panic(), "Join error should indicate panic");
+            }
+            e => panic!("Expected Join error, got: {:?}", e),
+        }
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ask_join_with_cancelled_task() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<AskJoinErrorActor>(AskJoinErrorActor);
+
+        // ask_join should return Error::Join when the spawned task is cancelled
+        let result: rsactor::Result<i32> = actor_ref.ask_join(SpawnCancelledTask).await;
+
+        assert!(
+            result.is_err(),
+            "ask_join should fail when task is cancelled"
+        );
+
+        match result.unwrap_err() {
+            rsactor::Error::Join { source, .. } => {
+                assert!(
+                    source.is_cancelled(),
+                    "Join error should indicate cancellation"
+                );
+            }
+            e => panic!("Expected Join error, got: {:?}", e),
+        }
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ask_join_success() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<AskJoinErrorActor>(AskJoinErrorActor);
+
+        // ask_join should succeed with correct result
+        let result: i32 = actor_ref.ask_join(SpawnSuccessTask(21)).await.unwrap();
+        assert_eq!(result, 42);
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ask_join_to_stopped_actor() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<AskJoinErrorActor>(AskJoinErrorActor);
+
+        // Stop the actor first
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+
+        // ask_join to stopped actor should fail with Send error
+        let result: rsactor::Result<i32> = actor_ref.ask_join(SpawnSuccessTask(10)).await;
+
+        assert!(result.is_err(), "ask_join to stopped actor should fail");
+
+        match result.unwrap_err() {
+            rsactor::Error::Send { .. } => {}
+            e => panic!("Expected Send error, got: {:?}", e),
+        }
+    }
+}
+
+// ============================================================================
+// Tests for ActorRef Debug implementation (actor_ref.rs)
+// ============================================================================
+
+mod actor_ref_debug_tests {
+    use super::*;
+
+    #[derive(Actor, Debug)]
+    struct DebugRefActor;
+
+    struct DebugMsg;
+
+    #[rsactor::message_handlers]
+    impl DebugRefActor {
+        #[handler]
+        async fn handle(&mut self, _: DebugMsg, _: &ActorRef<Self>) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn test_actor_ref_debug() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<DebugRefActor>(DebugRefActor);
+
+        // Test Debug implementation for ActorRef
+        let debug_str = format!("{:?}", actor_ref);
+        assert!(
+            debug_str.contains("ActorRef"),
+            "Debug should contain ActorRef"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_actor_weak_debug() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<DebugRefActor>(DebugRefActor);
+
+        let weak = ActorRef::downgrade(&actor_ref);
+
+        // Test Debug implementation for ActorWeak
+        let debug_str = format!("{:?}", weak);
+        assert!(
+            debug_str.contains("ActorWeak"),
+            "Debug should contain ActorWeak"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+}
+
+// ============================================================================
+// Tests for kill edge cases (actor_ref.rs)
+// ============================================================================
+
+mod kill_edge_cases_tests {
+    use super::*;
+
+    #[derive(Actor)]
+    struct KillEdgeCaseActor;
+
+    struct SlowProcessMsg;
+
+    #[rsactor::message_handlers]
+    impl KillEdgeCaseActor {
+        #[handler]
+        async fn handle(&mut self, _: SlowProcessMsg, _: &ActorRef<Self>) {
+            // Slow processing to allow kill signals to queue
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_kill_when_actor_already_stopping() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<KillEdgeCaseActor>(KillEdgeCaseActor);
+
+        // Stop the actor
+        actor_ref.stop().await.unwrap();
+
+        // Now try to kill the stopping actor - should succeed (idempotent)
+        let result = actor_ref.kill();
+        assert!(result.is_ok(), "kill to stopping actor should succeed");
+
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_kill_multiple_times_rapidly() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<KillEdgeCaseActor>(KillEdgeCaseActor);
+
+        // Send multiple kill signals rapidly - should all succeed
+        // (channel capacity is 1, so subsequent kills hit the Full case)
+        for _ in 0..10 {
+            let result = actor_ref.kill();
+            assert!(result.is_ok(), "rapid kill calls should succeed");
+        }
+
+        let result = handle.await.unwrap();
+        assert!(result.was_killed());
+    }
+
+    #[tokio::test]
+    async fn test_kill_after_actor_completely_stopped() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<KillEdgeCaseActor>(KillEdgeCaseActor);
+
+        actor_ref.stop().await.unwrap();
+        let result = handle.await.unwrap();
+        assert!(result.is_completed());
+
+        // Kill after actor is completely stopped - should succeed (channel closed case)
+        let kill_result = actor_ref.kill();
+        assert!(kill_result.is_ok(), "kill to stopped actor should succeed");
+    }
+}
+
+// ============================================================================
+// Tests for stop edge cases (actor_ref.rs)
+// ============================================================================
+
+mod stop_edge_cases_tests {
+    use super::*;
+
+    #[derive(Actor)]
+    struct StopEdgeCaseActor;
+
+    struct SimpleMsg;
+
+    #[rsactor::message_handlers]
+    impl StopEdgeCaseActor {
+        #[handler]
+        async fn handle(&mut self, _: SimpleMsg, _: &ActorRef<Self>) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stop_after_actor_completely_stopped() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<StopEdgeCaseActor>(StopEdgeCaseActor);
+
+        actor_ref.stop().await.unwrap();
+        let result = handle.await.unwrap();
+        assert!(result.is_completed());
+
+        // Stop after actor is completely stopped - should succeed (channel closed case)
+        let stop_result = actor_ref.stop().await;
+        assert!(stop_result.is_ok(), "stop to stopped actor should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_stop_multiple_times() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<StopEdgeCaseActor>(StopEdgeCaseActor);
+
+        // Send multiple stop signals
+        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await.unwrap(); // Second stop should also succeed
+
+        let result = handle.await.unwrap();
+        assert!(result.is_completed());
+        assert!(!result.was_killed());
+    }
+}
+
+// ============================================================================
+// Tests for on_run returning Ok(false) (actor.rs)
+// ============================================================================
+
+mod on_run_disable_tests {
+    use super::*;
+
+    struct OnRunDisableActor {
+        run_count: u32,
+    }
+
+    impl Actor for OnRunDisableActor {
+        type Args = ();
+        type Error = String;
+
+        async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self { run_count: 0 })
+        }
+
+        async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+            self.run_count += 1;
+            // Return false after first run to disable further on_run calls
+            Ok(false)
+        }
+    }
+
+    struct GetRunCount;
+
+    #[rsactor::message_handlers]
+    impl OnRunDisableActor {
+        #[handler]
+        async fn handle(&mut self, _: GetRunCount, _: &ActorRef<Self>) -> u32 {
+            self.run_count
+        }
+    }
+
+    #[tokio::test]
+    async fn test_on_run_returns_false_disables_idle_processing() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<OnRunDisableActor>(());
+
+        // Wait for on_run to execute once
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Check run count - should be 1 (on_run was called once, returned false)
+        let run_count: u32 = actor_ref.ask(GetRunCount).await.unwrap();
+        assert_eq!(run_count, 1, "on_run should have been called exactly once");
+
+        // Wait more and check again - should still be 1
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let run_count: u32 = actor_ref.ask(GetRunCount).await.unwrap();
+        assert_eq!(
+            run_count, 1,
+            "on_run should not have been called again after returning false"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+}
+
+// ============================================================================
+// Tests for Message trait handle method (actor.rs)
+// ============================================================================
+
+mod message_trait_tests {
+    use super::*;
+
+    struct MessageTraitActor {
+        received: Vec<String>,
+    }
+
+    impl Actor for MessageTraitActor {
+        type Args = ();
+        type Error = String;
+
+        async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self {
+                received: Vec::new(),
+            })
+        }
+    }
+
+    struct StringMsg(String);
+    struct IntMsg(i32);
+    struct GetReceived;
+
+    impl rsactor::Message<StringMsg> for MessageTraitActor {
+        type Reply = String;
+
+        async fn handle(&mut self, msg: StringMsg, _: &ActorRef<Self>) -> Self::Reply {
+            self.received.push(format!("string:{}", msg.0));
+            format!("received:{}", msg.0)
+        }
+    }
+
+    impl rsactor::Message<IntMsg> for MessageTraitActor {
+        type Reply = i32;
+
+        async fn handle(&mut self, msg: IntMsg, _: &ActorRef<Self>) -> Self::Reply {
+            self.received.push(format!("int:{}", msg.0));
+            msg.0 * 2
+        }
+    }
+
+    impl rsactor::Message<GetReceived> for MessageTraitActor {
+        type Reply = Vec<String>;
+
+        async fn handle(&mut self, _: GetReceived, _: &ActorRef<Self>) -> Self::Reply {
+            self.received.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_message_trait_multiple_message_types() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MessageTraitActor>(());
+
+        // Test sending different message types
+        let str_reply: String = actor_ref.ask(StringMsg("hello".to_string())).await.unwrap();
+        assert_eq!(str_reply, "received:hello");
+
+        let int_reply: i32 = actor_ref.ask(IntMsg(21)).await.unwrap();
+        assert_eq!(int_reply, 42);
+
+        // Verify received messages
+        let received: Vec<String> = actor_ref.ask(GetReceived).await.unwrap();
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[0], "string:hello");
+        assert_eq!(received[1], "int:21");
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+}
+
+// ============================================================================
+// Tests for ActorRef::is_alive edge cases (actor_ref.rs)
+// ============================================================================
+
+mod is_alive_edge_cases_tests {
+    use super::*;
+
+    #[derive(Actor)]
+    struct IsAliveTestActor;
+
+    struct Ping;
+
+    #[rsactor::message_handlers]
+    impl IsAliveTestActor {
+        #[handler]
+        async fn handle(&mut self, _: Ping, _: &ActorRef<Self>) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn test_is_alive_during_message_processing() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<IsAliveTestActor>(IsAliveTestActor);
+
+        // Actor should be alive during message processing
+        assert!(actor_ref.is_alive());
+
+        let _: bool = actor_ref.ask(Ping).await.unwrap();
+        assert!(actor_ref.is_alive());
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_is_alive_after_kill() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<IsAliveTestActor>(IsAliveTestActor);
+
+        assert!(actor_ref.is_alive());
+        actor_ref.kill().unwrap();
+
+        // Wait for actor to complete
+        handle.await.unwrap();
+
+        // After kill and completion, should not be alive
+        assert!(!actor_ref.is_alive());
+    }
+
+    #[tokio::test]
+    async fn test_is_alive_cloned_ref_after_original_dropped() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<IsAliveTestActor>(IsAliveTestActor);
+
+        let cloned_ref = actor_ref.clone();
+
+        // Both should be alive
+        assert!(actor_ref.is_alive());
+        assert!(cloned_ref.is_alive());
+
+        // Drop original (but actor continues due to cloned ref)
+        drop(actor_ref);
+
+        // Cloned ref should still be alive
+        assert!(cloned_ref.is_alive());
+
+        cloned_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+}
+
+// ============================================================================
+// Tests for timeout scenarios with actual timeouts (actor_ref.rs)
+// ============================================================================
+
+mod actual_timeout_tests {
+    use super::*;
+
+    struct TimeoutTestActor;
+
+    impl Actor for TimeoutTestActor {
+        type Args = ();
+        type Error = String;
+
+        async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self)
+        }
+    }
+
+    struct VerySlowMsg;
+    struct QuickMsg;
+
+    impl rsactor::Message<VerySlowMsg> for TimeoutTestActor {
+        type Reply = String;
+
+        async fn handle(&mut self, _: VerySlowMsg, _: &ActorRef<Self>) -> Self::Reply {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            "done".to_string()
+        }
+    }
+
+    impl rsactor::Message<QuickMsg> for TimeoutTestActor {
+        type Reply = String;
+
+        async fn handle(&mut self, _: QuickMsg, _: &ActorRef<Self>) -> Self::Reply {
+            "quick".to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ask_with_timeout_actually_times_out() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<TimeoutTestActor>(());
+
+        // Very short timeout with slow message should timeout
+        let result: rsactor::Result<String> = actor_ref
+            .ask_with_timeout(VerySlowMsg, Duration::from_millis(10))
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            rsactor::Error::Timeout { operation, .. } => {
+                assert_eq!(operation, "ask");
+            }
+            e => panic!("Expected Timeout error, got: {:?}", e),
+        }
+
+        actor_ref.kill().unwrap();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_tell_with_timeout_success_path() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<TimeoutTestActor>(());
+
+        // Tell with sufficient timeout should succeed
+        let result = actor_ref
+            .tell_with_timeout(QuickMsg, Duration::from_secs(5))
+            .await;
+
+        assert!(result.is_ok());
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+}
+
+// ============================================================================
+// Tests for Actor lifecycle phases (actor.rs)
+// ============================================================================
+
+mod lifecycle_phase_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    struct LifecyclePhaseActor {
+        phase_tracker: std::sync::Arc<AtomicU32>,
+    }
+
+    impl Actor for LifecyclePhaseActor {
+        type Args = std::sync::Arc<AtomicU32>;
+        type Error = String;
+
+        async fn on_start(tracker: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            tracker.fetch_add(1, Ordering::SeqCst); // 1
+            Ok(Self {
+                phase_tracker: tracker,
+            })
+        }
+
+        async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+            self.phase_tracker.fetch_add(10, Ordering::SeqCst); // 11
+            Ok(false) // Don't continue
+        }
+
+        async fn on_stop(&mut self, _: &ActorWeak<Self>, _killed: bool) -> Result<(), Self::Error> {
+            self.phase_tracker.fetch_add(100, Ordering::SeqCst); // 111
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lifecycle_phases_execute_in_order() {
+        init_test_logger();
+        let tracker = std::sync::Arc::new(AtomicU32::new(0));
+
+        let (actor_ref, handle) = spawn::<LifecyclePhaseActor>(tracker.clone());
+
+        // Wait for on_run to execute
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // After on_start and on_run, should be 11
+        let value = tracker.load(Ordering::SeqCst);
+        assert!(value >= 11, "Expected at least 11, got {}", value);
+
+        actor_ref.stop().await.unwrap();
+        let result = handle.await.unwrap();
+        assert!(result.is_completed());
+
+        // After on_stop, should be 111
+        let final_value = tracker.load(Ordering::SeqCst);
+        assert_eq!(
+            final_value, 111,
+            "All lifecycle phases should have executed"
+        );
+    }
+}
+
+// ============================================================================
+// Tests for metrics API methods (actor_ref.rs)
+// ============================================================================
+
+#[cfg(feature = "metrics")]
+mod metrics_api_tests {
+    use super::*;
+
+    struct MetricsTestActor;
+
+    impl Actor for MetricsTestActor {
+        type Args = ();
+        type Error = String;
+
+        async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self)
+        }
+    }
+
+    struct SlowMsg;
+    struct QuickMsg;
+    struct ErrorMsg;
+
+    impl rsactor::Message<SlowMsg> for MetricsTestActor {
+        type Reply = ();
+
+        async fn handle(&mut self, _: SlowMsg, _: &ActorRef<Self>) -> Self::Reply {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    impl rsactor::Message<QuickMsg> for MetricsTestActor {
+        type Reply = i32;
+
+        async fn handle(&mut self, _: QuickMsg, _: &ActorRef<Self>) -> Self::Reply {
+            42
+        }
+    }
+
+    impl rsactor::Message<ErrorMsg> for MetricsTestActor {
+        type Reply = ();
+
+        async fn handle(&mut self, _: ErrorMsg, _: &ActorRef<Self>) -> Self::Reply {
+            // Simulating an error scenario (but we can't actually return error from Message trait)
+            // This is for coverage of error_count method
+        }
+    }
+
+    #[tokio::test]
+    async fn test_metrics_snapshot() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
+
+        // Send a few messages
+        let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
+        let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
+        actor_ref.tell(SlowMsg).await.unwrap();
+
+        // Wait for messages to be processed
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Test metrics snapshot
+        let metrics = actor_ref.metrics();
+        assert!(
+            metrics.message_count >= 3,
+            "Should have processed at least 3 messages"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_message_count() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
+
+        // Initial message count should be 0
+        assert_eq!(actor_ref.message_count(), 0);
+
+        // Send messages
+        let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Message count should be at least 1
+        assert!(actor_ref.message_count() >= 1);
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_avg_processing_time() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
+
+        // Initial avg processing time should be zero
+        assert_eq!(actor_ref.avg_processing_time(), Duration::ZERO);
+
+        // Send a slow message
+        actor_ref.tell(SlowMsg).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Avg processing time should be non-zero now
+        let avg_time = actor_ref.avg_processing_time();
+        assert!(
+            avg_time > Duration::ZERO,
+            "Avg processing time should be non-zero"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_max_processing_time() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
+
+        // Send quick and slow messages
+        let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
+        actor_ref.tell(SlowMsg).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Max processing time should reflect the slow message
+        let max_time = actor_ref.max_processing_time();
+        assert!(
+            max_time >= Duration::from_millis(40),
+            "Max processing time should be at least 40ms"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_error_count() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
+
+        // Error count should start at 0
+        assert_eq!(actor_ref.error_count(), 0);
+
+        // Even after sending messages, error_count stays 0 (no actual errors)
+        let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(actor_ref.error_count(), 0);
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_uptime() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
+
+        // Wait a bit
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Uptime should be non-zero
+        let uptime = actor_ref.uptime();
+        assert!(
+            uptime >= Duration::from_millis(40),
+            "Uptime should be at least 40ms"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_last_activity() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
+
+        // Initially no activity
+        assert!(actor_ref.last_activity().is_none());
+
+        // Send a message
+        let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Last activity should now be Some
+        let last_activity = actor_ref.last_activity();
+        assert!(
+            last_activity.is_some(),
+            "Last activity should be Some after processing message"
+        );
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+}
+
+// ============================================================================
+// Tests for tell_with_timeout actual timeout (actor_ref.rs)
+// ============================================================================
+
+mod tell_with_timeout_tests {
+    use super::*;
+
+    struct SlowTellActor;
+
+    impl Actor for SlowTellActor {
+        type Args = ();
+        type Error = String;
+
+        async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self)
+        }
+    }
+
+    struct BlockingMsg;
+
+    impl rsactor::Message<BlockingMsg> for SlowTellActor {
+        type Reply = ();
+
+        async fn handle(&mut self, _: BlockingMsg, _: &ActorRef<Self>) -> Self::Reply {
+            // Block for a very long time
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tell_with_timeout_actual_timeout() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<SlowTellActor>(());
+
+        // First, send a blocking message that will occupy the actor
+        actor_ref.tell(BlockingMsg).await.unwrap();
+
+        // Now try to send another message with a very short timeout
+        // The actor is busy processing the first message, so this should timeout
+        let _result = actor_ref
+            .tell_with_timeout(BlockingMsg, Duration::from_millis(5))
+            .await;
+
+        // This might succeed (if the message queue isn't full) or timeout
+        // The timeout error occurs when waiting for the message to be sent,
+        // not when waiting for the handler to complete
+
+        // Clean up
+        actor_ref.kill().unwrap();
+        let _ = handle.await;
+    }
+}
+
+// ============================================================================
+// Tests for blocking methods with timeout expiry (actor_ref.rs)
+// ============================================================================
+
+mod blocking_timeout_expiry_tests {
+    use super::*;
+
+    struct BlockingTimeoutActor;
+
+    impl Actor for BlockingTimeoutActor {
+        type Args = ();
+        type Error = String;
+
+        async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self)
+        }
+    }
+
+    struct VerySlowHandlerMsg;
+
+    impl rsactor::Message<VerySlowHandlerMsg> for BlockingTimeoutActor {
+        type Reply = String;
+
+        async fn handle(&mut self, _: VerySlowHandlerMsg, _: &ActorRef<Self>) -> Self::Reply {
+            // Very long operation
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            "done".to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blocking_tell_timeout_with_slow_handler() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(());
+
+        // Start processing a slow message
+        actor_ref.tell(VerySlowHandlerMsg).await.unwrap();
+
+        let actor_clone = actor_ref.clone();
+
+        // Try blocking_tell with timeout while actor is busy
+        let _result = tokio::task::spawn_blocking(move || {
+            actor_clone.blocking_tell(VerySlowHandlerMsg, Some(Duration::from_millis(10)))
+        })
+        .await
+        .unwrap();
+
+        // This might succeed (queued) or timeout depending on timing
+        // The important thing is that the timeout path is exercised
+
+        actor_ref.kill().unwrap();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_blocking_ask_timeout_with_slow_handler() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(());
+
+        // Start processing a slow message first
+        actor_ref.tell(VerySlowHandlerMsg).await.unwrap();
+
+        let actor_clone = actor_ref.clone();
+
+        // Try blocking_ask with timeout while actor is busy processing
+        let result: rsactor::Result<String> = tokio::task::spawn_blocking(move || {
+            actor_clone.blocking_ask(VerySlowHandlerMsg, Some(Duration::from_millis(10)))
+        })
+        .await
+        .unwrap();
+
+        // Should timeout since actor is busy
+        // The exact behavior depends on whether the message gets queued before timeout
+        match result {
+            Ok(_) => {}                               // Message was processed before timeout
+            Err(rsactor::Error::Timeout { .. }) => {} // Expected timeout
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        }
+
+        actor_ref.kill().unwrap();
+        let _ = handle.await;
+    }
+}
+
+// ============================================================================
+// Tests for ActorWeak upgrade scenarios (actor_ref.rs)
+// ============================================================================
+
+mod actor_weak_upgrade_tests {
+    use super::*;
+
+    #[derive(Actor)]
+    struct WeakUpgradeActor;
+
+    struct GetIdentity;
+
+    #[rsactor::message_handlers]
+    impl WeakUpgradeActor {
+        #[handler]
+        async fn handle(&mut self, _: GetIdentity, actor_ref: &ActorRef<Self>) -> String {
+            actor_ref.identity().to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_actor_weak_upgrade_before_stop() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<WeakUpgradeActor>(WeakUpgradeActor);
+
+        let weak = ActorRef::downgrade(&actor_ref);
+
+        // Upgrade should succeed while actor is running
+        let upgraded = weak.upgrade();
+        assert!(upgraded.is_some());
+
+        // Use the upgraded ref
+        let upgraded_ref = upgraded.unwrap();
+        let _: String = upgraded_ref.ask(GetIdentity).await.unwrap();
+
+        actor_ref.stop().await.unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_actor_weak_upgrade_after_all_refs_dropped() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<WeakUpgradeActor>(WeakUpgradeActor);
+
+        let weak = ActorRef::downgrade(&actor_ref);
+
+        // Drop the strong reference - this should trigger actor termination
+        drop(actor_ref);
+
+        // Wait for actor to terminate
+        let _ = handle.await;
+
+        // Now upgrade should fail
+        let upgraded = weak.upgrade();
+        assert!(
+            upgraded.is_none(),
+            "Upgrade should fail after all refs dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_actor_weak_is_alive_transitions() {
+        init_test_logger();
+        let (actor_ref, handle) = spawn::<WeakUpgradeActor>(WeakUpgradeActor);
+
+        let weak = ActorRef::downgrade(&actor_ref);
+
+        // Should be alive while running
+        assert!(weak.is_alive());
+
+        // Drop the actor_ref to trigger termination (is_alive checks if mailbox is open)
+        drop(actor_ref);
+        let _ = handle.await;
+
+        // Give the runtime a moment to close channels
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Should not be alive after actor terminates (this checks the mailbox sender)
+        // Note: is_alive() checks if the mailbox sender can still accept messages
+        // After actor termination, the receiver side is closed
+        assert!(!weak.is_alive());
     }
 }

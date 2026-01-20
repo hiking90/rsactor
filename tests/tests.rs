@@ -324,15 +324,14 @@ impl Actor for LifecycleErrorActor {
         }
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         *self.on_run_attempted.lock().await = true;
         if self.fail_on_run {
             Err(anyhow::anyhow!("simulated on_run failure"))
         } else {
-            loop {
-                // Simulate some work
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
+            // Continue idle processing
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            Ok(true)
         }
     }
 

@@ -76,22 +76,22 @@ impl Actor for DataProcessorActor {
         Ok(actor)
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
-        loop {
-            self.interval.tick().await;
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        self.interval.tick().await;
 
-            // Generate a random value (simulating sensor data or similar)
-            let raw_value = rand::random::<f64>() * 100.0;
+        // Generate a random value (simulating sensor data or similar)
+        let raw_value = rand::random::<f64>() * 100.0;
 
-            // Process the data directly (no need to send to self via message)
-            let processed_value = raw_value * self.factor;
+        // Process the data directly (no need to send to self via message)
+        let processed_value = raw_value * self.factor;
 
-            // Update our state
-            self.latest_value = Some(processed_value);
-            self.latest_timestamp = Some(std::time::Instant::now());
+        // Update our state
+        self.latest_value = Some(processed_value);
+        self.latest_timestamp = Some(std::time::Instant::now());
 
-            debug!("Generated data: original={raw_value:.2}, processed={processed_value:.2}");
-        }
+        debug!("Generated data: original={raw_value:.2}, processed={processed_value:.2}");
+
+        Ok(true) // Continue calling on_run
     }
 }
 

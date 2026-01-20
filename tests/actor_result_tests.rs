@@ -23,11 +23,10 @@ impl Actor for TestActor {
         Ok(TestActor { id, value })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
-        // Simple run loop that sleeps
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        // Simple idle handler that continues running
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        Ok(true)
     }
 }
 
@@ -64,14 +63,13 @@ impl Actor for FailureTestActor {
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         if self.id.contains("fail_on_run") {
             return Err(anyhow::anyhow!("Test failure in on_run"));
         }
-        // Simple run loop that sleeps
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
+        // Simple idle handler that continues running
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        Ok(true)
     }
 
     async fn on_stop(

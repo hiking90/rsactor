@@ -3,7 +3,7 @@
 
 use crate::actor_ref::ActorRef;
 use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage};
-use std::{fmt::Debug, future::Future, time::Duration};
+use std::{fmt::Debug, future::Future};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
@@ -140,51 +140,43 @@ pub trait Actor: Sized + Send + 'static {
         actor_ref: &ActorRef<Self>,
     ) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
 
-    /// The primary task execution logic for the actor, designed for iterative execution.
+    /// The idle handler for the actor, similar to `on_idle` in traditional event loops.
     ///
-    /// The main processing loop for the actor. This method is called repeatedly after [`on_start`](Actor::on_start) completes.
-    /// If this method returns `Ok(())`, it will be called again, allowing the actor to process
-    /// ongoing or periodic tasks. The actor continues running as long as `on_run` returns `Ok(())`.
-    /// To stop the actor normally from within `on_run`, upgrade the `actor_weak` parameter and call
-    /// [`actor_ref.stop()`](crate::actor_ref::ActorRef::stop) or [`actor_ref.kill()`](crate::actor_ref::ActorRef::kill).
+    /// This method is called when the actor's message queue is empty, allowing the actor to
+    /// perform background processing or periodic tasks. The return value controls whether
+    /// `on_run` continues to be called:
     ///
-    /// `on_run`\'s execution is concurrent with the actor\'s message handling capabilities,
-    /// enabling the actor to perform its primary processing while continuing to
-    /// respond to incoming messages in its mailbox - a key aspect of the actor model.
+    /// - `Ok(true)`: Continue calling `on_run` (equivalent to `G_SOURCE_CONTINUE` in GTK+)
+    /// - `Ok(false)`: Stop calling `on_run`, only process messages (equivalent to `G_SOURCE_REMOVE`)
+    /// - `Err(e)`: Terminate the actor with an error
     ///
     /// # Key characteristics:
     ///
-    /// - **Lifecycle Management**: The actor continues its lifecycle by repeatedly executing the
-    ///   `on_run` method. If `on_run` returns `Ok(())`, it will be called again, enabling
-    ///   continuous processing. This supports the actor model's concept of independent,
-    ///   long-lived entities. For normal termination, upgrade the `actor_weak` parameter and call
-    ///   `actor_ref.stop()` or `actor_ref.kill()`.
+    /// - **Idle Processing**: `on_run` is only called when the message queue is empty,
+    ///   thanks to the `biased` selection in the runtime loop. Messages always have
+    ///   higher priority than idle processing.
+    ///
+    /// - **Dynamic Control**: The return value allows dynamic control over idle processing.
+    ///   Return `Ok(true)` to continue, or `Ok(false)` when idle processing is no longer needed.
     ///
     /// - **State Persistence Across Invocations**: Because `on_run` can be invoked multiple
     ///   times by the runtime (each time generating a new `Future`), any state intended
     ///   to persist across these distinct invocations *must* be stored as fields within
-    ///   the actor\'s struct (`self`). Local variables declared inside `on_run` are ephemeral
+    ///   the actor's struct (`self`). Local variables declared inside `on_run` are ephemeral
     ///   and will not be preserved if `on_run` completes and is subsequently re-invoked.
     ///
-    /// - **Concurrent Message Handling**: The `Future` returned by `on_run` executes
-    ///   concurrently with the actor\'s message processing loop. This allows the actor to
-    ///   perform its `on_run` tasks while simultaneously remaining responsive to incoming
-    ///   messages.
-    ///
-    /// - **Full State Access**: `on_run` has full mutable access to the actor\'s state (`self`).
+    /// - **Full State Access**: `on_run` has full mutable access to the actor's state (`self`).
     ///   Modifications to `self` within `on_run` are visible to subsequent message handlers
     ///   and future `on_run` invocations.
     ///
     /// - **Essential Await Points**: The `Future` returned by `on_run` must yield control
     ///   to the Tokio runtime via `.await` points, especially within any internal loops.
-    ///   Lacking these, the `on_run` task could block the actor\'s ability to process messages
+    ///   Lacking these, the `on_run` task could block the actor's ability to process messages
     ///   or perform other concurrent activities.
     ///
     /// # Common patterns:
     ///
-    /// 1. **Periodic tasks**: For executing work at regular intervals. The `on_run` future
-    ///    would typically involve a single tick of an interval. The `Interval` itself
-    ///    should be stored as a field in the actor\'s struct to persist across `on_run` invocations.
+    /// 1. **Periodic tasks**: For executing work at regular intervals.
     ///    ```rust,no_run
     ///    # use rsactor::{Actor, ActorRef, ActorWeak, Message, spawn};
     ///    # use anyhow::Result;
@@ -192,86 +184,62 @@ pub trait Actor: Sized + Send + 'static {
     ///    # use tokio::time::{Interval, MissedTickBehavior};
     ///    # struct MyActor {
     ///    #     interval: Interval,
-    ///    #     ticks_done: u32, // Example state for controlling shutdown
-    ///    # }
-    ///    # impl MyActor {
-    ///    # fn heavy_computation_needed(&self) -> bool { false }
+    ///    #     ticks_done: u32,
     ///    # }
     ///    # impl Actor for MyActor {
-    ///    # type Args = Duration; // Example: pass interval duration via Args
+    ///    # type Args = Duration;
     ///    # type Error = anyhow::Error;
     ///    # async fn on_start(duration: Self::Args, _actor_ref: &ActorRef<MyActor>) -> std::result::Result<Self, Self::Error> {
     ///    #     let mut interval = tokio::time::interval(duration);
-    ///    #     interval.set_missed_tick_behavior(MissedTickBehavior::Delay); // Or Skip, Burst
+    ///    #     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     ///    #     Ok(MyActor { interval, ticks_done: 0 })
     ///    # }
-    ///    async fn on_run(&mut self, actor_weak: &ActorWeak<MyActor>) -> std::result::Result<(), Self::Error> { // Note: Return type is Result<(), Self::Error>
-    ///        // self.interval is stored in the MyActor struct.
-    ///        self.interval.tick().await; // This await point allows message processing.
-    ///
-    ///        // Perform the periodic task here.
+    ///    async fn on_run(&mut self, actor_weak: &ActorWeak<MyActor>) -> std::result::Result<bool, Self::Error> {
+    ///        self.interval.tick().await;
     ///        println!("Periodic task executed by actor {}", actor_weak.identity());
     ///        self.ticks_done += 1;
     ///
-    ///        // If your task is computationally intensive, ensure you still have an await
-    ///        // or offload it (e.g., using [`tokio::task::spawn_blocking`](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html)).
-    ///        if self.heavy_computation_needed() {
-    ///            // Example: Offload heavy work if truly blocking
-    ///            // let _ = tokio::task::spawn_blocking(|| { /* heavy work */ }).await?;
-    ///            // Or, if it\'s async but long-running, ensure it yields:
-    ///            tokio::task::yield_now().await;
-    ///        }
-    ///
-    ///        // To stop the actor normally from within on_run, call actor_ref.stop() or actor_ref.kill().
-    ///        // For example, to stop after 10 ticks:
+    ///        // Stop idle processing after 10 ticks, but actor continues processing messages
     ///        if self.ticks_done >= 10 {
-    ///            println!("Actor {} stopping after {} ticks.", actor_weak.identity(), self.ticks_done);
-    ///            let actor_ref = actor_weak.upgrade().expect("ActorRef should be valid");
-    ///            actor_ref.stop().await?; // or actor_ref.kill()?
-    ///            // After calling stop/kill, on_run might not be called again as the actor shuts down.
-    ///            // It\'s good practice to return Ok(()) here, or handle potential errors from stop().
-    ///            return Ok(());
+    ///            return Ok(false);
     ///        }
     ///
-    ///        // Return Ok(()) to have on_run called again by the runtime for the next tick.
-    ///        // If an Err is returned, the actor stops due to an error.
-    ///        Ok(())
+    ///        Ok(true)  // Continue calling on_run
     ///    }
     ///    # }
     ///    ```
     ///
-    /// # Termination:
+    /// 2. **One-time initialization then message-only**: Perform setup work, then only handle messages.
+    ///    ```rust,no_run
+    ///    # use rsactor::{Actor, ActorRef, ActorWeak};
+    ///    # struct MyActor { initialized: bool }
+    ///    # impl Actor for MyActor {
+    ///    # type Args = ();
+    ///    # type Error = anyhow::Error;
+    ///    # async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> { Ok(MyActor { initialized: false }) }
+    ///    async fn on_run(&mut self, _: &ActorWeak<Self>) -> std::result::Result<bool, Self::Error> {
+    ///        if !self.initialized {
+    ///            // Perform one-time initialization
+    ///            self.initialized = true;
+    ///        }
+    ///        Ok(false)  // No more idle processing needed
+    ///    }
+    ///    # }
+    ///    ```
     ///
-    /// - If the `Future` returned by `on_run` completes with `Ok(())`, the actor continues running,
-    ///   and the runtime will invoke `on_run` again to get the next `Future` for execution.
-    /// - If the `Future` completes with `Err(_)`, the actor terminates due to an error. See the
-    ///   [`Error Handling`](#error-handling) section in the `Actor` trait documentation for details
-    ///   on how errors are handled.
+    /// # Default Implementation
     ///
-    /// To stop the actor normally from within `on_run` (e.g., graceful shutdown),
-    /// the actor should explicitly upgrade the `actor_weak` parameter and call `actor_ref.stop().await?` or `actor_ref.kill()`.
-    /// After such a call, `on_run` is unlikely to be invoked again by the runtime,
-    /// as the actor will be in the process of shutting down.
-    ///
-    /// The `actor_weak` parameter is a weak reference to the actor\'s own `ActorRef`.
-    /// It can be upgraded to a strong reference and used, for example, to call `actor_ref.stop()` or `actor_ref.kill()`
-    /// to initiate actor termination from within `on_run`.
-    ///
-    /// The default implementation of `on_run` is a simple async block that sleeps for 1 second
-    /// and then returns `Ok(())`, causing it to be called repeatedly until the actor is
-    /// explicitly stopped or killed.
+    /// The default implementation returns `Ok(false)`, meaning `on_run` is called once
+    /// and then disabled. Actors that don't override `on_run` will only process messages.
     #[allow(unused_variables)]
     fn on_run(
         &mut self,
         actor_weak: &ActorWeak<Self>,
-    ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
-        // This sleep is critical - it creates an await point that allows
-        // the Tokio runtime to switch tasks and process incoming messages.
-        // Without at least one await point in a loop, message processing would starve.
-        async {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            Ok(())
-        }
+    ) -> impl Future<Output = std::result::Result<bool, Self::Error>> + Send {
+        // Default implementation returns Ok(false) to indicate no idle processing needed.
+        // The actor will only process messages without calling on_run again.
+        // Override this method and return Ok(true) to have on_run called repeatedly.
+        async { Ok(false) }
     }
 
     /// Called when the actor is about to stop. This allows the actor to perform cleanup tasks.
@@ -421,6 +389,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     drop(actor_ref); // Drop the strong reference to allow graceful shutdown detection
 
     let mut killed = false;
+    let mut idle_enabled = true;
 
     // Main actor processing loop - handles three concurrent operations:
     // 1. Termination signals (highest priority via biased select)
@@ -503,13 +472,16 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 }
             }
 
-            // Execute the actor's on_run method concurrently with message processing
-            // This allows the actor to perform its primary work while staying responsive
-            maybe_result = actor.on_run(&actor_weak) => {
+            // Execute the actor's on_run method (idle handler) when enabled.
+            // This branch is disabled when on_run returns Ok(false).
+            maybe_result = actor.on_run(&actor_weak), if idle_enabled => {
                 match maybe_result {
-                    Ok(_) => {
-                        // on_run completed successfully, continue the processing loop
-                        // The actor runtime will call on_run again for the next iteration
+                    Ok(true) => {
+                        // on_run completed successfully, continue calling on_run
+                    }
+                    Ok(false) => {
+                        // on_run indicated no more idle processing needed
+                        idle_enabled = false;
                     }
                     Err(e) => {
                         // on_run returned an error - terminate the actor with failure status
