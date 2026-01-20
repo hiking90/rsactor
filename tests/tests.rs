@@ -169,11 +169,11 @@ async fn test_actor_ref_ask() {
 async fn test_actor_ref_tell() {
     let (actor_ref, handle, counter, last_processed) = setup_actor().await;
 
-    actor_ref
-        .tell(UpdateCounterMsg(5))
+    // Use ask instead of tell+sleep to ensure message is processed before checking state
+    let _: () = actor_ref
+        .ask(UpdateCounterMsg(5))
         .await
-        .expect("tell failed");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Allow time for processing
+        .expect("ask failed");
 
     assert_eq!(*counter.lock().await, 5);
     assert_eq!(

@@ -2263,9 +2263,8 @@ mod metrics_api_tests {
         // Initial avg processing time should be zero
         assert_eq!(actor_ref.avg_processing_time(), Duration::ZERO);
 
-        // Send a slow message
-        actor_ref.tell(SlowMsg).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Send a slow message (use ask to ensure message is processed before checking metrics)
+        let _: () = actor_ref.ask(SlowMsg).await.unwrap();
 
         // Avg processing time should be non-zero now
         let avg_time = actor_ref.avg_processing_time();
