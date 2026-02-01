@@ -1,0 +1,96 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Generate Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Run security audit
+        run: cargo audit --deny warnings
+
+  # Separate job for creating issues on scheduled runs
+  audit-report:
+    name: Security Audit Report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Generate Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Run security audit and capture output
+        id: audit
+        continue-on-error: true
+        run: |
+          cargo audit --deny warnings 2>&1 | tee audit-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Create issue if vulnerabilities found
+        if: steps.audit.outputs.exit_code != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const auditOutput = fs.readFileSync('audit-output.txt', 'utf8');
+
+            // Check for existing open security audit issues
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security'
+            });
+
+            const hasExistingAuditIssue = existingIssues.data.some(
+              issue => issue.title.includes('Security Audit')
+            );
+
+            if (!hasExistingAuditIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '🔒 Security Audit: Vulnerabilities Detected',
+                body: `## Security Audit Report\n\nThe daily security audit has detected potential vulnerabilities in the project dependencies.\n\n### Audit Output\n\n\`\`\`\n${auditOutput}\n\`\`\`\n\n### Recommended Actions\n\n1. Review the vulnerabilities listed above\n2. Update affected dependencies if patches are available\n3. If no patch is available, consider alternative packages or implement mitigations\n\n---\n*This issue was automatically created by the security audit workflow.*`,
+                labels: ['security', 'dependencies']
+              });
+            }

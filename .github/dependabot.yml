@@ -10,9 +10,25 @@ updates:
     open-pull-requests-limit: 10
     reviewers:
       - "hiking90"
+    labels:
+      - "dependencies"
+      - "rust"
     commit-message:
       prefix: "cargo"
       include: "scope"
+    groups:
+      # Group all patch updates together
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      # Group minor updates together
+      minor-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
@@ -22,6 +38,13 @@ updates:
       day: "monday"
       time: "09:00"
     open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"
