@@ -8,7 +8,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
 `rsActor` is a lightweight, Tokio-based actor framework in Rust focused on providing a simple and efficient actor model for local, in-process systems. It emphasizes clean message-passing semantics and straightforward actor lifecycle management while maintaining high performance for Rust applications.
 
-**Note:** This project is actively evolving. While core APIs are stable, some features may be refined in future releases.
+**Note:** This project is actively evolving and is already being used in production products under active development. While core APIs are stable, some features may be refined in future releases.
 
 ## Core Features
 
@@ -22,14 +22,14 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 | -------------------------------- | ------------------------------------------------------------ |
 | `ask` / `ask_with_timeout`       | Send a message and asynchronously await a reply              |
 | `tell` / `tell_with_timeout`     | Send a message without waiting for a reply (fire-and-forget) |
-| `blocking_ask` / `blocking_tell` | Blocking versions for `tokio::task::spawn_blocking` contexts |
+| `blocking_ask` / `blocking_tell` | Blocking versions for `tokio::task::spawn_blocking` contexts (aliases: `ask_blocking` / `tell_blocking`) |
 
 - **Macro-Assisted Handlers**: `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
 
 ### Actor Lifecycle
 Three well-defined hooks for managing actor behavior:
 - `on_start`: Initializes the actor's state (required)
-- `on_run`: Idle handler called when message queue is empty, returns `bool` to control continuation (optional)
+- `on_run`: Runs concurrently with message processing, returns `bool` to control repeated invocation (optional)
 - `on_stop`: Cleanup before termination, with `killed` flag for graceful vs immediate (optional)
 
 Supports **graceful termination** (`stop()`) and **immediate termination** (`kill()`), with `ActorResult` enum representing lifecycle outcomes.
@@ -63,17 +63,17 @@ Unlike broader frameworks like Actix, rsActor specializes exclusively in **local
 
 ```toml
 [dependencies]
-rsactor = "0.12" # Check crates.io for the latest version
+rsactor = "0.13" # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.12", features = ["tracing"] }
+# rsactor = { version = "0.13", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
 
 ### 2. Message Handling with `#[message_handlers]`
 
-rsActor uses the `#[message_handlers]` attribute macro combined with `#[handler]` method attributes for message handling. This is **required** for all actors and offers several advantages:
+rsActor uses the `#[message_handlers]` attribute macro combined with `#[handler]` method attributes for message handling. This is the **recommended** approach for all actors and offers several advantages:
 
 - **Selective Processing**: Only methods marked with `#[handler]` are treated as message handlers.
 - **Clean Separation**: Regular methods can coexist with message handlers within the same `impl` block.
@@ -238,7 +238,7 @@ To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.12", features = ["tracing"] }
+rsactor = { version = "0.13", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -274,6 +274,10 @@ Actor control traits (`ActorControl`, `WeakActorControl`) provide type-erased li
 
 ## Documentation
 
+- **[Getting Started](./docs/getting_started.md)** - Quick start guide
+- **[Actor Model](./docs/actor_model.md)** - Actor model concepts
+- **[Architecture](./docs/Architecture.md)** - System architecture overview
+- **[Best Practices](./docs/best_practices.md)** - Recommended patterns and practices
 - **[Debugging Guide](./docs/debugging_guide.md)** - Error handling, dead letter tracking, and troubleshooting
 - **[Metrics Guide](./docs/metrics.md)** - Actor performance monitoring
 - **[Tracing Guide](./docs/tracing.md)** - Detailed observability with tracing

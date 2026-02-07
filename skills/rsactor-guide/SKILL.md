@@ -75,13 +75,15 @@ impl Actor for MyActor {
     // Required: Initialize actor state
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>;
 
-    // Optional: Background task (called repeatedly)
-    async fn on_run(&mut self, actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
-        Ok(())  // Default: immediate return
+    // Optional: Background task (called repeatedly while returning Ok(true))
+    // Return Ok(true) to keep calling, Ok(false) to stop idle processing
+    async fn on_run(&mut self, actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        Ok(false)  // Default: no idle processing
     }
 
     // Optional: Cleanup on shutdown
-    async fn on_stop(&mut self, actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    // killed: true if via kill(), false if via stop()
+    async fn on_stop(&mut self, actor_ref: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error> {
         Ok(())  // Default: no-op
     }
 }
@@ -112,7 +114,7 @@ let result: Response = actor_ref.ask(MyQuery).await?;
 
 // With timeout
 use std::time::Duration;
-let result = actor_ref.ask_timeout(MyQuery, Duration::from_secs(5)).await?;
+let result = actor_ref.ask_with_timeout(MyQuery, Duration::from_secs(5)).await?;
 ```
 
 ## Actor Control
@@ -154,7 +156,6 @@ match result {
 result.stopped_normally();  // true if Completed && !killed
 result.was_killed();        // true if killed flag is set
 result.into_actor();        // Extract actor (panics if Failed without actor)
-result.try_into_actor();    // Option<A>
 ```
 
 ## Handler Traits (Polymorphism)
@@ -216,7 +217,7 @@ for control in &controls {
 ### Periodic Tasks
 
 ```rust
-async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
+async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
     tokio::select! {
         _ = self.interval.tick() => {
             self.do_periodic_work();
@@ -225,7 +226,7 @@ async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
             self.handle_event();
         }
     }
-    Ok(())
+    Ok(true)  // Continue calling on_run
 }
 ```
 
@@ -377,7 +378,7 @@ let result: String = actor_ref.blocking_ask(query, Some(Duration::from_secs(10))
 - Check message type matches exactly
 
 ### Actor stops unexpectedly
-- Check `on_run` returns `Ok(())` (errors cause shutdown)
+- Check `on_run` returns `Ok(true)` or `Ok(false)` (errors cause shutdown)
 - Check handler errors
 - Use `ActorResult::Failed` to see the error and phase
 
