@@ -77,14 +77,16 @@ impl Actor for MyActor {
     }
 
     // Optional: background task that runs concurrently with message processing
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
-        // Called repeatedly while actor is alive
+    // Return Ok(true) to keep calling on_run, Ok(false) to stop
+    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        // Called repeatedly while returning Ok(true)
         // Use tokio::select! for multiple async operations
-        Ok(())
+        Ok(true)
     }
 
     // Optional: cleanup when actor stops
-    async fn on_stop(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    // killed: true if via kill(), false if via stop()
+    async fn on_stop(&mut self, _actor_ref: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error> {
         self.connection.close().await?;
         Ok(())
     }
@@ -120,14 +122,14 @@ impl Actor for PeriodicActor {
         Ok(args)
     }
 
-    async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
         tokio::select! {
             _ = self.tick_interval.tick() => {
                 self.tick_count += 1;
                 println!("Tick #{}", self.tick_count);
             }
         }
-        Ok(())
+        Ok(true)  // Continue calling on_run
     }
 }
 ```

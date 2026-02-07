@@ -318,6 +318,74 @@ fn message_impl(mut input: ItemImpl) -> syn::Result<TokenStream2> {
     Ok(result)
 }
 
+/// Options parsed from the `#[handler]` attribute.
+#[derive(Default)]
+struct HandlerOptions {
+    /// `#[handler(result)]` — treat return type as Result and generate on_tell_result override.
+    force_result: bool,
+    /// `#[handler(no_log)]` — suppress automatic on_tell_result generation.
+    no_log: bool,
+}
+
+fn parse_handler_options(attr: &syn::Attribute) -> syn::Result<HandlerOptions> {
+    let mut options = HandlerOptions::default();
+
+    match &attr.meta {
+        // #[handler] — no arguments
+        syn::Meta::Path(_) => {}
+
+        // #[handler(...)] — parse arguments
+        syn::Meta::List(_) => {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("result") {
+                    options.force_result = true;
+                    Ok(())
+                } else if meta.path.is_ident("no_log") {
+                    options.no_log = true;
+                    Ok(())
+                } else {
+                    Err(meta.error("unknown handler option; expected `result` or `no_log`"))
+                }
+            })?;
+        }
+
+        _ => {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "expected `#[handler]`, `#[handler(result)]`, or `#[handler(no_log)]`",
+            ));
+        }
+    }
+
+    if options.force_result && options.no_log {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "`result` and `no_log` are mutually exclusive",
+        ));
+    }
+
+    Ok(options)
+}
+
+/// Returns true if the type is syntactically `Result<...>`.
+///
+/// Detectable: `Result<T, E>`, `std::result::Result<T, E>`, `anyhow::Result<T>`
+/// Not detectable: type aliases (e.g., `MyResult`) — use `#[handler(result)]` instead.
+///
+/// Note: only compares the last path segment's ident, so a user-defined type named
+/// `Result` will produce a false positive. Use `#[handler(no_log)]` to suppress.
+fn is_result_type(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Path(type_path) => type_path
+            .path
+            .segments
+            .last()
+            .map(|seg| seg.ident == "Result")
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 fn process_handler_methods(
     items: &[ImplItem],
     actor_type: &Type,
@@ -327,28 +395,14 @@ fn process_handler_methods(
 
     for item in items {
         if let ImplItem::Fn(method) = item {
-            // Check for `#[handler]` attribute with better error handling
             let handler_attr = method
                 .attrs
                 .iter()
                 .find(|attr| attr.path().is_ident("handler"));
 
             if let Some(attr) = handler_attr {
-                // Validate attribute syntax - check if it's a simple path attribute
-                match &attr.meta {
-                    syn::Meta::Path(_) => {
-                        // This is correct: #[handler] with no arguments
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            attr,
-                            "The #[handler] attribute does not accept any arguments",
-                        ));
-                    }
-                }
-
-                // Generate message implementation for this method
-                let impl_tokens = generate_message_impl(method, actor_type, generics)?;
+                let options = parse_handler_options(attr)?;
+                let impl_tokens = generate_message_impl(method, actor_type, generics, &options)?;
                 message_impls.push(impl_tokens);
             }
         }
@@ -369,6 +423,7 @@ fn generate_message_impl(
     method: &ImplItemFn,
     actor_type: &Type,
     generics: &syn::Generics,
+    options: &HandlerOptions,
 ) -> syn::Result<TokenStream2> {
     // Parse method signature
     let inputs = &method.sig.inputs;
@@ -427,16 +482,54 @@ fn generate_message_impl(
         ));
     }
 
-    // Extract return type - handle both explicit return types and unit return (no return type)
-    let return_type = match &method.sig.output {
-        ReturnType::Type(_, ty) => quote! { #ty },
-        ReturnType::Default => quote! { () }, // Default to unit type for functions without explicit return type
+    // Extract return type
+    let return_type_ty = match &method.sig.output {
+        ReturnType::Type(_, ty) => Some(ty.as_ref()),
+        ReturnType::Default => None,
+    };
+
+    let return_type = match return_type_ty {
+        Some(ty) => quote! { #ty },
+        None => quote! { () },
+    };
+
+    // Determine whether to generate on_tell_result override
+    let is_result = return_type_ty.map(is_result_type).unwrap_or(false);
+
+    let should_generate_on_tell_result = if options.no_log {
+        false
+    } else if options.force_result {
+        if return_type_ty.is_none() {
+            return Err(syn::Error::new_spanned(
+                &method.sig,
+                "`#[handler(result)]` requires a return type, but this method returns `()`",
+            ));
+        }
+        true
+    } else {
+        is_result
     };
 
     // Get method name
     let method_name = &method.sig.ident;
 
     let (impl_generics, _ty_generics, where_clause) = generics.split_for_impl();
+
+    let on_tell_result_impl = if should_generate_on_tell_result {
+        quote! {
+            fn on_tell_result(result: &Self::Reply, actor_ref: &rsactor::ActorRef<Self>) {
+                if let Err(ref e) = result {
+                    tracing::error!(
+                        actor = %actor_ref.identity(),
+                        message_type = %std::any::type_name::<#message_type>(),
+                        "tell handler returned error: {}", e
+                    );
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     // Generate the Message trait implementation
     let impl_tokens = quote! {
@@ -450,6 +543,8 @@ fn generate_message_impl(
             ) -> Self::Reply {
                 self.#method_name(msg, actor_ref).await
             }
+
+            #on_tell_result_impl
         }
     };
 

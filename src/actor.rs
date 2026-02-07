@@ -321,6 +321,60 @@ pub trait Message<T: Send + 'static>: Actor {
         msg: T,
         actor_ref: &ActorRef<Self>,
     ) -> impl Future<Output = Self::Reply> + Send;
+
+    /// Called after a `tell()` message handler completes.
+    ///
+    /// This hook allows inspecting the handler's return value for fire-and-forget messages.
+    /// For `ask()` calls, this method is NOT invoked — the caller receives the result directly.
+    ///
+    /// # Design decisions
+    ///
+    /// This hook is designed as a **synchronous, stateless logging hook**:
+    /// - **No `&self`**: The actor's mutable state is not accessible. This prevents
+    ///   side effects and keeps the hook purely observational.
+    /// - **Not `async`**: Asynchronous operations (e.g., sending messages to other actors)
+    ///   are intentionally excluded to avoid hidden control flow in fire-and-forget paths.
+    /// - These constraints may be relaxed in future versions if use cases arise.
+    ///
+    /// The default implementation does nothing. When using the `#[handler]` macro with a
+    /// `Result<T, E>` return type (where `E: Display`), an override is automatically
+    /// generated that logs errors via `tracing::error!`.
+    ///
+    /// # `Display` bound enforcement
+    ///
+    /// The generated `tracing::error!("...: {}", e)` implicitly requires `E: Display`.
+    /// Since `E` is embedded inside `Self::Reply = Result<T, E>`, a `where E: Display`
+    /// clause cannot be added directly on a trait method override. In the
+    /// `#[handler(result)]` + type alias case, the proc macro cannot know the concrete
+    /// `E` type at all, making an explicit bound fundamentally impossible.
+    ///
+    /// Therefore, implicit enforcement via the `{}` format specifier is adopted.
+    /// If `E` does not implement `Display`, the compiler emits
+    /// `` `MyError` doesn't implement `std::fmt::Display` ``
+    /// which is clear enough for the user to diagnose immediately.
+    ///
+    /// # Automatic generation
+    ///
+    /// The `#[handler]` macro generates an override when:
+    /// - The return type is syntactically `Result<T, E>` (auto-detected)
+    /// - The attribute `#[handler(result)]` is explicitly specified
+    ///
+    /// Use `#[handler(no_log)]` to suppress automatic generation.
+    ///
+    /// # Manual override
+    ///
+    /// For manual `Message` trait implementations, override this method directly:
+    ///
+    /// ```rust,ignore
+    /// fn on_tell_result(result: &Self::Reply, actor_ref: &ActorRef<Self>) {
+    ///     if let Err(ref e) = result {
+    ///         tracing::error!(actor = %actor_ref.identity(), "error: {}", e);
+    ///     }
+    /// }
+    /// ```
+    fn on_tell_result(_result: &Self::Reply, _actor_ref: &ActorRef<Self>) {
+        // default: do nothing
+    }
 }
 
 /// Executes the complete lifecycle of an actor within its spawned task.
