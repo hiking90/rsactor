@@ -5,10 +5,7 @@ use crate::actor_ref::ActorRef;
 use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage};
 use std::{fmt::Debug, future::Future};
 use tokio::sync::mpsc;
-use tracing::{debug, error};
-
-#[cfg(feature = "tracing")]
-use tracing::debug as trace_debug;
+use tracing::{debug, error, Instrument};
 
 /// Defines the behavior of an actor.
 ///
@@ -244,10 +241,12 @@ pub trait Actor: Sized + Send + 'static {
 
     /// Called when the actor is about to stop. This allows the actor to perform cleanup tasks.
     ///
-    /// This method is called only when the actor is being explicitly stopped, either through a call
-    /// to [`ActorRef::stop`](crate::actor_ref::ActorRef::stop) (graceful termination) or
-    /// [`ActorRef::kill`](crate::actor_ref::ActorRef::kill) (immediate termination). It is not called
-    /// if the actor stops due to other errors that occurred during message processing or in [`on_run`](Actor::on_run).
+    /// This method is called when the actor is stopping, including:
+    /// - Explicit stop via [`ActorRef::stop`](crate::actor_ref::ActorRef::stop) (graceful termination)
+    /// - Explicit kill via [`ActorRef::kill`](crate::actor_ref::ActorRef::kill) (immediate termination)
+    /// - Cleanup after an [`on_run`](Actor::on_run) error
+    ///
+    /// It is **not** called if the actor fails during message processing (handler panic/error).
     /// The result of this method affects the final [`ActorResult`](crate::ActorResult) returned when awaiting the join handle.
     ///
     /// The `killed` parameter indicates how the actor is being stopped:
@@ -414,6 +413,15 @@ pub trait Message<T: Send + 'static>: Actor {
 ///                    │ + on_run    │
 ///                    └─────────────┘
 /// ```
+#[cfg_attr(feature = "tracing", tracing::instrument(
+    level = "debug",
+    name = "actor_lifecycle",
+    fields(
+        actor_id = %actor_ref.identity(),
+        actor_type = %std::any::type_name::<T>()
+    ),
+    skip_all
+))]
 pub(crate) async fn run_actor_lifecycle<T: Actor>(
     args: T::Args,
     actor_ref: ActorRef<T>,
@@ -421,7 +429,16 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     mut terminate_receiver: mpsc::Receiver<ControlSignal>,
 ) -> ActorResult<T> {
     let actor_id = actor_ref.identity();
-    let mut actor = match T::on_start(args, &actor_ref).await {
+
+    #[cfg(feature = "tracing")]
+    let on_start_span = tracing::debug_span!("actor_on_start");
+    #[cfg(not(feature = "tracing"))]
+    let on_start_span = tracing::Span::none();
+
+    let mut actor = match T::on_start(args, &actor_ref)
+        .instrument(on_start_span)
+        .await
+    {
         Ok(actor) => {
             debug!("Actor {actor_id} on_start completed successfully.");
             actor
@@ -450,6 +467,11 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     // 2. Incoming messages from the mailbox
     // 3. Actor's on_run lifecycle method execution
     loop {
+        #[cfg(feature = "tracing")]
+        let on_run_span = tracing::debug_span!("actor_on_run");
+        #[cfg(not(feature = "tracing"))]
+        let on_run_span = tracing::Span::none();
+
         tokio::select! {
             // Handle termination signals with highest priority using biased selection
             // This ensures that termination requests are processed immediately when available
@@ -460,19 +482,27 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                     Some(_) => {
                         // Explicit kill() was called
                         #[cfg(feature = "tracing")]
-                        trace_debug!("Actor termination via kill() method");
+                        debug!("Actor termination via kill() method");
                         killed = true;
                     }
                     None => {
                         // All actor_ref instances were dropped
                         #[cfg(feature = "tracing")]
-                        trace_debug!("Actor termination due to all actor_ref instances being dropped");
+                        debug!("Actor termination due to all actor_ref instances being dropped");
                         killed = false;
                     }
                 }
 
                 // Call on_stop for termination scenario
-                if let Err(e) = actor.on_stop(&actor_weak, killed).await {
+                #[cfg(feature = "tracing")]
+                let on_stop_span = tracing::debug_span!("actor_on_stop", killed);
+                #[cfg(not(feature = "tracing"))]
+                let on_stop_span = tracing::Span::none();
+
+                if let Err(e) = actor.on_stop(&actor_weak, killed)
+                    .instrument(on_stop_span)
+                    .await
+                {
                     error!("Actor {actor_id} on_stop failed during termination: {e:?}");
                     return ActorResult::Failed {
                         actor: Some(actor),
@@ -490,6 +520,11 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 match maybe_message {
                     Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
                         #[cfg(feature = "tracing")]
+                        let msg_span = tracing::debug_span!("actor_process_message");
+                        #[cfg(not(feature = "tracing"))]
+                        let msg_span = tracing::Span::none();
+
+                        #[cfg(feature = "tracing")]
                         let start_time = std::time::Instant::now();
 
                         // Create metrics guard to automatically record processing time
@@ -501,17 +536,27 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             metrics_ref.metrics_collector()
                         );
 
-                        payload.handle_message(&mut actor, actor_ref, reply_channel).await;
+                        payload.handle_message(&mut actor, actor_ref, reply_channel)
+                            .instrument(msg_span)
+                            .await;
 
                         #[cfg(feature = "tracing")]
-                        trace_debug!("Actor {} processed message in {:?}", actor_id, start_time.elapsed());
+                        debug!("Actor {} processed message in {:?}", actor_id, start_time.elapsed());
                     }
                     Some(MailboxMessage::StopGracefully(_)) | None => {
                         #[cfg(feature = "tracing")]
-                        trace_debug!("Actor termination due to graceful stop");
+                        debug!("Actor termination due to graceful stop");
 
                         // Call on_stop for graceful stop scenario
-                        if let Err(e) = actor.on_stop(&actor_weak, false).await {
+                        #[cfg(feature = "tracing")]
+                        let on_stop_span = tracing::debug_span!("actor_on_stop", killed = false);
+                        #[cfg(not(feature = "tracing"))]
+                        let on_stop_span = tracing::Span::none();
+
+                        if let Err(e) = actor.on_stop(&actor_weak, false)
+                            .instrument(on_stop_span)
+                            .await
+                        {
                             error!("Actor {actor_id} on_stop failed during graceful stop: {e:?}");
                             return ActorResult::Failed {
                                 actor: Some(actor),
@@ -528,7 +573,8 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
 
             // Execute the actor's on_run method (idle handler) when enabled.
             // This branch is disabled when on_run returns Ok(false).
-            maybe_result = actor.on_run(&actor_weak), if idle_enabled => {
+            maybe_result = actor.on_run(&actor_weak)
+                .instrument(on_run_span), if idle_enabled => {
                 match maybe_result {
                     Ok(true) => {
                         // on_run completed successfully, continue calling on_run
@@ -543,7 +589,15 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                         error!("{error_msg}");
 
                         // Call on_stop for cleanup even after on_run failure
-                        if let Err(stop_err) = actor.on_stop(&actor_weak, false).await {
+                        #[cfg(feature = "tracing")]
+                        let on_stop_span = tracing::debug_span!("actor_on_stop", killed = false);
+                        #[cfg(not(feature = "tracing"))]
+                        let on_stop_span = tracing::Span::none();
+
+                        if let Err(stop_err) = actor.on_stop(&actor_weak, false)
+                            .instrument(on_stop_span)
+                            .await
+                        {
                             error!(
                                 "Actor {actor_id} on_stop failed during on_run error cleanup: {stop_err:?}"
                             );

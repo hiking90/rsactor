@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 #[cfg(feature = "tracing")]
-use tracing::{debug as trace_debug, info, warn as trace_warn};
+use tracing::{debug, info};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::MetricsCollector;
@@ -176,7 +176,7 @@ impl<T: Actor> ActorRef<T> {
         };
 
         #[cfg(feature = "tracing")]
-        trace_debug!("Sending tell message (fire-and-forget)");
+        debug!("Sending tell message (fire-and-forget)");
 
         let result = if self.sender.send(envelope).await.is_err() {
             crate::dead_letter::record::<M>(
@@ -194,8 +194,8 @@ impl<T: Actor> ActorRef<T> {
 
         #[cfg(feature = "tracing")]
         match &result {
-            Ok(_) => trace_debug!("Tell message sent successfully"),
-            Err(e) => trace_warn!(error = %e, "Failed to send tell message"),
+            Ok(_) => debug!("Tell message sent successfully"),
+            Err(e) => warn!(error = %e, "Failed to send tell message"),
         }
 
         result
@@ -223,7 +223,7 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
     {
         #[cfg(feature = "tracing")]
-        trace_debug!(
+        debug!(
             timeout_ms = timeout.as_millis(),
             "Sending tell message with timeout"
         );
@@ -245,8 +245,8 @@ impl<T: Actor> ActorRef<T> {
 
         #[cfg(feature = "tracing")]
         match &result {
-            Ok(_) => trace_debug!("Tell with timeout completed successfully"),
-            Err(e) => trace_warn!(error = %e, "Tell with timeout failed"),
+            Ok(_) => debug!("Tell with timeout completed successfully"),
+            Err(e) => warn!(error = %e, "Tell with timeout failed"),
         }
 
         result
@@ -283,7 +283,7 @@ impl<T: Actor> ActorRef<T> {
         };
 
         #[cfg(feature = "tracing")]
-        trace_debug!("Sending ask message and waiting for reply");
+        debug!("Sending ask message and waiting for reply");
 
         if self.sender.send(envelope).await.is_err() {
             crate::dead_letter::record::<M>(
@@ -293,7 +293,7 @@ impl<T: Actor> ActorRef<T> {
             );
 
             #[cfg(feature = "tracing")]
-            trace_warn!("Failed to send ask message: mailbox channel closed");
+            warn!("Failed to send ask message: mailbox channel closed");
 
             return Err(Error::Send {
                 identity: self.identity(),
@@ -307,12 +307,12 @@ impl<T: Actor> ActorRef<T> {
                 match reply_any.downcast::<T::Reply>() {
                     Ok(reply) => {
                         #[cfg(feature = "tracing")]
-                        trace_debug!("Ask reply received successfully");
+                        debug!("Ask reply received successfully");
                         Ok(*reply)
                     }
                     Err(_) => {
                         #[cfg(feature = "tracing")]
-                        trace_warn!(
+                        warn!(
                             expected_type = %std::any::type_name::<T::Reply>(),
                             "Ask reply type downcast failed"
                         );
@@ -331,7 +331,7 @@ impl<T: Actor> ActorRef<T> {
                 );
 
                 #[cfg(feature = "tracing")]
-                trace_warn!("Ask reply channel closed unexpectedly");
+                warn!("Ask reply channel closed unexpectedly");
                 Err(Error::Receive {
                     identity: self.identity(),
                     details: "Reply channel closed unexpectedly".to_string(),
@@ -364,7 +364,7 @@ impl<T: Actor> ActorRef<T> {
         T::Reply: Send + 'static,
     {
         #[cfg(feature = "tracing")]
-        trace_debug!(
+        debug!(
             timeout_ms = timeout.as_millis(),
             "Sending ask message with timeout"
         );
@@ -386,8 +386,8 @@ impl<T: Actor> ActorRef<T> {
 
         #[cfg(feature = "tracing")]
         match &result {
-            Ok(_) => trace_debug!("Ask with timeout completed successfully"),
-            Err(e) => trace_warn!(error = %e, "Ask with timeout failed"),
+            Ok(_) => debug!("Ask with timeout completed successfully"),
+            Err(e) => warn!(error = %e, "Ask with timeout failed"),
         }
 
         result
@@ -417,20 +417,12 @@ impl<T: Actor> ActorRef<T> {
                 // The channel is full. Since it has a capacity of 1,
                 // this means a Terminate message is already in the queue.
                 warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.identity());
-                #[cfg(feature = "tracing")]
-                trace_warn!(
-                    "Kill signal not sent: terminate mailbox full, actor already terminating"
-                );
                 // Considered Ok as the desired state (stopping/killed) is effectively met.
                 Ok(())
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 // The channel is closed, which implies the actor is already stopped or has finished processing.
                 warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.identity());
-                #[cfg(feature = "tracing")]
-                trace_warn!(
-                    "Kill signal not sent: terminate mailbox closed, actor already stopped"
-                );
                 // Considered Ok as the desired state (stopped) is met.
                 Ok(())
             }
@@ -461,10 +453,6 @@ impl<T: Actor> ActorRef<T> {
                 // This error means the actor's mailbox channel is closed,
                 // which implies the actor is already stopping or has stopped.
                 warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", self.identity());
-                #[cfg(feature = "tracing")]
-                trace_warn!(
-                    "Stop signal not sent: mailbox closed, actor already stopped or stopping"
-                );
                 // Considered Ok as the desired state (stopped/stopping) is met.
                 Ok(())
             }
@@ -535,7 +523,7 @@ impl<T: Actor> ActorRef<T> {
         };
 
         #[cfg(feature = "tracing")]
-        trace_debug!("Sending blocking tell message (fire-and-forget)");
+        debug!("Sending blocking tell message (fire-and-forget)");
 
         let result = self.sender.blocking_send(envelope).map_err(|_| {
             crate::dead_letter::record::<M>(
@@ -551,8 +539,8 @@ impl<T: Actor> ActorRef<T> {
 
         #[cfg(feature = "tracing")]
         match &result {
-            Ok(_) => trace_debug!("Blocking tell message sent successfully"),
-            Err(e) => trace_warn!(error = %e, "Failed to send blocking tell message"),
+            Ok(_) => debug!("Blocking tell message sent successfully"),
+            Err(e) => warn!(error = %e, "Failed to send blocking tell message"),
         }
 
         result
@@ -673,7 +661,7 @@ impl<T: Actor> ActorRef<T> {
         };
 
         #[cfg(feature = "tracing")]
-        trace_debug!("Sending blocking ask message and waiting for reply");
+        debug!("Sending blocking ask message and waiting for reply");
 
         self.sender.blocking_send(envelope).map_err(|_| {
             crate::dead_letter::record::<M>(
@@ -683,7 +671,7 @@ impl<T: Actor> ActorRef<T> {
             );
 
             #[cfg(feature = "tracing")]
-            trace_warn!("Failed to send blocking ask message: mailbox channel closed");
+            warn!("Failed to send blocking ask message: mailbox channel closed");
 
             Error::Send {
                 identity: self.identity(),
@@ -697,12 +685,12 @@ impl<T: Actor> ActorRef<T> {
                 match reply_any.downcast::<T::Reply>() {
                     Ok(reply) => {
                         #[cfg(feature = "tracing")]
-                        trace_debug!("Blocking ask reply received successfully");
+                        debug!("Blocking ask reply received successfully");
                         Ok(*reply)
                     }
                     Err(_) => {
                         #[cfg(feature = "tracing")]
-                        trace_warn!(
+                        warn!(
                             expected_type = %std::any::type_name::<T::Reply>(),
                             "Blocking ask reply type downcast failed"
                         );
@@ -721,7 +709,7 @@ impl<T: Actor> ActorRef<T> {
                 );
 
                 #[cfg(feature = "tracing")]
-                trace_warn!("Blocking ask reply channel closed unexpectedly");
+                warn!("Blocking ask reply channel closed unexpectedly");
                 Err(Error::Receive {
                     identity: self.identity(),
                     details: "Reply channel closed unexpectedly".to_string(),
@@ -802,7 +790,7 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
     {
         #[cfg(feature = "tracing")]
-        trace_debug!("Executing deprecated tell_blocking, delegating to blocking_tell");
+        debug!("Executing deprecated tell_blocking, delegating to blocking_tell");
 
         // Ignore timeout parameter as documented in deprecation notice
         let _ = timeout;
@@ -837,7 +825,7 @@ impl<T: Actor> ActorRef<T> {
         T::Reply: Send + 'static,
     {
         #[cfg(feature = "tracing")]
-        trace_debug!("Executing deprecated ask_blocking, delegating to blocking_ask");
+        debug!("Executing deprecated ask_blocking, delegating to blocking_ask");
 
         // Ignore timeout parameter as documented in deprecation notice
         let _ = timeout;
