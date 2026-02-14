@@ -469,8 +469,21 @@ fn generate_message_impl(
     // Validate third parameter (&ActorRef<Self>)
     let third_param_valid = match &inputs[2] {
         FnArg::Typed(PatType { ty, .. }) => {
-            // Check if the type looks like &ActorRef<Self> or &rsactor::ActorRef<Self>
-            matches!(ty.as_ref(), Type::Reference(_))
+            match ty.as_ref() {
+                Type::Reference(type_ref) => {
+                    // Check if the referenced type contains "ActorRef" in its path
+                    if let Type::Path(type_path) = type_ref.elem.as_ref() {
+                        type_path
+                            .path
+                            .segments
+                            .iter()
+                            .any(|seg| seg.ident == "ActorRef")
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
         }
         _ => false,
     };

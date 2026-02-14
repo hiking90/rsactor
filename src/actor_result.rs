@@ -17,6 +17,10 @@ pub enum FailurePhase {
     OnRun,
     /// Actor failed during the [`on_stop`](crate::Actor::on_stop) lifecycle hook.
     OnStop,
+    /// Actor failed during [`on_run`](crate::Actor::on_run), and then
+    /// [`on_stop`](crate::Actor::on_stop) also failed during cleanup.
+    /// The primary error is from `on_run`; the `on_stop` error is logged.
+    OnRunThenOnStop,
 }
 
 /// Implements Display for FailurePhase to provide human-readable error messages.
@@ -29,6 +33,7 @@ impl std::fmt::Display for FailurePhase {
             FailurePhase::OnStart => write!(f, "OnStart"),
             FailurePhase::OnRun => write!(f, "OnRun"),
             FailurePhase::OnStop => write!(f, "OnStop"),
+            FailurePhase::OnRunThenOnStop => write!(f, "OnRunThenOnStop"),
         }
     }
 }
@@ -221,11 +226,26 @@ impl<T: Actor> ActorResult<T> {
     ///
     /// This indicates that the actor started successfully but encountered an error
     /// during its normal operation in the [`on_run`](crate::Actor::on_run) lifecycle phase.
+    /// Also returns `true` when `on_stop` additionally failed during cleanup
+    /// ([`FailurePhase::OnRunThenOnStop`]).
     pub fn is_runtime_failed(&self) -> bool {
         matches!(
             self,
             ActorResult::Failed {
-                phase: FailurePhase::OnRun,
+                phase: FailurePhase::OnRun | FailurePhase::OnRunThenOnStop,
+                ..
+            }
+        )
+    }
+
+    /// Returns `true` if `on_stop` also failed after an `on_run` error.
+    ///
+    /// The primary error is from `on_run`; the `on_stop` error is logged separately.
+    pub fn is_cleanup_failed(&self) -> bool {
+        matches!(
+            self,
+            ActorResult::Failed {
+                phase: FailurePhase::OnRunThenOnStop,
                 ..
             }
         )

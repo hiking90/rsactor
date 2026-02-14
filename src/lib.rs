@@ -216,7 +216,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! rsactor = { version = "0.9", features = ["tracing"] }
+//! rsactor = { version = "0.13", features = ["tracing"] }
 //! tracing = "0.1"
 //! tracing-subscriber = "0.3"
 //! ```
@@ -293,21 +293,21 @@ use futures::FutureExt;
 // Re-export derive macros for convenient access
 pub use rsactor_derive::{message_handlers, Actor};
 
-use std::{fmt::Debug, future::Future, sync::atomic::AtomicU32, sync::OnceLock};
+use std::{fmt::Debug, future::Future, sync::atomic::AtomicU64, sync::OnceLock};
 
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Identity {
     /// Unique ID of the actor
-    pub id: u32,
+    pub id: u64,
     /// Type name of the actor
     pub type_name: &'static str,
 }
 
 impl Identity {
     /// Creates a new `Identity` with the given ID and type name.
-    pub fn new(id: u32, type_name: &'static str) -> Self {
+    pub fn new(id: u64, type_name: &'static str) -> Self {
         Identity { id, type_name }
     }
 
@@ -319,7 +319,7 @@ impl Identity {
 
 impl std::fmt::Display for Identity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.type_name)
+        write!(f, "{}(#{})", self.type_name, self.id)
     }
 }
 
@@ -349,6 +349,8 @@ where
 /// A boxed future that is Send and can be stored in collections.
 ///
 /// This type alias is used throughout the handler traits for object-safe async methods.
+/// Identical to `futures::future::BoxFuture` but defined locally to avoid exposing
+/// the `futures` crate in the public API surface.
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 impl<A, T> PayloadHandler<A> for T
@@ -478,68 +480,35 @@ pub fn spawn<T: Actor + 'static>(
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
 /// to control the actor's mailbox capacity.
-#[cfg(not(feature = "metrics"))]
 pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
     args: T::Args,
     mailbox_capacity: usize,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
-    if mailbox_capacity == 0 {
-        panic!("Mailbox capacity must be greater than 0");
-    }
+    assert!(
+        mailbox_capacity > 0,
+        "Mailbox capacity must be greater than 0"
+    );
 
-    static ACTOR_IDS: AtomicU32 = AtomicU32::new(1);
+    static ACTOR_IDS: AtomicU64 = AtomicU64::new(1);
 
     let actor_id = Identity::new(
-        ACTOR_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        ACTOR_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::any::type_name::<T>(),
     );
 
     let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
 
-    let actor_ref = ActorRef::new(actor_id, mailbox_tx, terminate_tx);
+    #[cfg(feature = "metrics")]
+    let metrics = std::sync::Arc::new(metrics::MetricsCollector::new());
 
-    let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
-        args,
-        actor_ref.clone(),
-        mailbox_rx,
-        terminate_rx,
-    ));
-
-    (actor_ref, join_handle)
-}
-
-/// Spawns a new actor with a specified mailbox capacity and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
-///
-/// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
-/// The `JoinHandle` can be used to await the actor's termination and retrieve
-/// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
-/// to control the actor's mailbox capacity.
-#[cfg(feature = "metrics")]
-pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
-    args: T::Args,
-    mailbox_capacity: usize,
-) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
-    use std::sync::Arc;
-
-    if mailbox_capacity == 0 {
-        panic!("Mailbox capacity must be greater than 0");
-    }
-
-    static ACTOR_IDS: AtomicU32 = AtomicU32::new(1);
-
-    let actor_id = Identity::new(
-        ACTOR_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-        std::any::type_name::<T>(),
+    let actor_ref = ActorRef::new(
+        actor_id,
+        mailbox_tx,
+        terminate_tx,
+        #[cfg(feature = "metrics")]
+        metrics,
     );
-
-    let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
-    let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
-
-    // Create metrics collector for this actor
-    let metrics = Arc::new(metrics::MetricsCollector::new());
-
-    let actor_ref = ActorRef::new(actor_id, mailbox_tx, terminate_tx, metrics);
 
     let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
         args,

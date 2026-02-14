@@ -1086,8 +1086,8 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
         } => {
             assert_eq!(
                 phase,
-                rsactor::FailurePhase::OnRun,
-                "Should fail in OnRun phase (original error preserved)"
+                rsactor::FailurePhase::OnRunThenOnStop,
+                "Should fail in OnRunThenOnStop phase when both on_run and on_stop fail"
             );
             assert!(
                 !killed,

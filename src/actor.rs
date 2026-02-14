@@ -594,19 +594,22 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                         #[cfg(not(feature = "tracing"))]
                         let on_stop_span = tracing::Span::none();
 
-                        if let Err(stop_err) = actor.on_stop(&actor_weak, false)
+                        let phase = if let Err(stop_err) = actor.on_stop(&actor_weak, false)
                             .instrument(on_stop_span)
                             .await
                         {
                             error!(
                                 "Actor {actor_id} on_stop failed during on_run error cleanup: {stop_err:?}"
                             );
-                        }
+                            FailurePhase::OnRunThenOnStop
+                        } else {
+                            FailurePhase::OnRun
+                        };
 
                         return ActorResult::Failed {
                             actor: Some(actor),
                             error: e,
-                            phase: FailurePhase::OnRun,
+                            phase,
                             killed,
                         };
                     }

@@ -408,13 +408,16 @@ mod on_run_error_tests {
         let error = result.error().unwrap();
         assert_eq!(error, "Intentional on_run failure");
 
-        // Phase should be OnRun, not OnStop
+        // Phase should be OnRunThenOnStop since both on_run and on_stop failed
         match &result {
             rsactor::ActorResult::Failed { phase, .. } => {
-                assert_eq!(*phase, rsactor::FailurePhase::OnRun);
+                assert_eq!(*phase, rsactor::FailurePhase::OnRunThenOnStop);
             }
             _ => panic!("Expected Failed result"),
         }
+
+        // is_cleanup_failed should be true
+        assert!(result.is_cleanup_failed());
 
         assert!(!actor_ref.is_alive());
     }
@@ -638,9 +641,9 @@ mod identity_tests {
         // Test the name() method
         assert_eq!(identity.name(), "TestActor");
 
-        // Test Display implementation
+        // Test Display implementation (includes ID)
         let display = format!("{}", identity);
-        assert_eq!(display, "TestActor");
+        assert_eq!(display, "TestActor(#42)");
 
         // Test id field
         assert_eq!(identity.id, 42);

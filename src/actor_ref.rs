@@ -80,31 +80,17 @@ pub struct ActorRef<T: Actor> {
 
 impl<T: Actor> ActorRef<T> {
     /// Creates a new type-safe ActorRef.
-    #[cfg(not(feature = "metrics"))]
     pub(crate) fn new(
         id: Identity,
         sender: MailboxSender<T>,
         terminate_sender: mpsc::Sender<ControlSignal>,
+        #[cfg(feature = "metrics")] metrics: Arc<MetricsCollector>,
     ) -> Self {
         ActorRef {
             id,
             sender,
             terminate_sender,
-        }
-    }
-
-    /// Creates a new type-safe ActorRef with metrics collector.
-    #[cfg(feature = "metrics")]
-    pub(crate) fn new(
-        id: Identity,
-        sender: MailboxSender<T>,
-        terminate_sender: mpsc::Sender<ControlSignal>,
-        metrics: Arc<MetricsCollector>,
-    ) -> Self {
-        ActorRef {
-            id,
-            sender,
-            terminate_sender,
+            #[cfg(feature = "metrics")]
             metrics,
         }
     }
@@ -125,27 +111,15 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// The returned [`ActorWeak<T>`] can be used to check if the actor is still alive
     /// and optionally upgrade back to a strong [`ActorRef<T>`] without keeping the actor alive.
-    #[cfg(not(feature = "metrics"))]
+    /// When the `metrics` feature is enabled, metrics are preserved via strong reference
+    /// for post-mortem analysis.
     pub fn downgrade(this: &Self) -> ActorWeak<T> {
         ActorWeak {
             id: this.id,
             sender: this.sender.downgrade(),
             terminate_sender: this.terminate_sender.downgrade(),
-        }
-    }
-
-    /// Creates a weak, type-safe reference to this actor.
-    ///
-    /// The returned [`ActorWeak<T>`] can be used to check if the actor is still alive
-    /// and optionally upgrade back to a strong [`ActorRef<T>`] without keeping the actor alive.
-    /// Metrics are preserved via strong reference for post-mortem analysis.
-    #[cfg(feature = "metrics")]
-    pub fn downgrade(this: &Self) -> ActorWeak<T> {
-        ActorWeak {
-            id: this.id,
-            sender: this.sender.downgrade(),
-            terminate_sender: this.terminate_sender.downgrade(),
-            metrics: this.metrics.clone(), // Strong ref - survives actor drop
+            #[cfg(feature = "metrics")]
+            metrics: this.metrics.clone(),
         }
     }
 
@@ -1067,7 +1041,6 @@ impl<T: Actor> ActorWeak<T> {
     ///
     /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
     /// has been dropped.
-    #[cfg(not(feature = "metrics"))]
     #[inline]
     pub fn upgrade(&self) -> Option<ActorRef<T>> {
         // Try to upgrade both the mailbox sender and terminate sender
@@ -1078,24 +1051,7 @@ impl<T: Actor> ActorWeak<T> {
             id: self.id,
             sender,
             terminate_sender,
-        })
-    }
-
-    /// Attempts to upgrade the weak reference to a strong, type-safe reference.
-    ///
-    /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
-    /// has been dropped.
-    #[cfg(feature = "metrics")]
-    #[inline]
-    pub fn upgrade(&self) -> Option<ActorRef<T>> {
-        // Try to upgrade both the mailbox sender and terminate sender
-        let sender = self.sender.upgrade()?;
-        let terminate_sender = self.terminate_sender.upgrade()?;
-
-        Some(ActorRef {
-            id: self.id,
-            sender,
-            terminate_sender,
+            #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),
         })
     }
