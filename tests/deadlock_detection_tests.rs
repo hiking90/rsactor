@@ -79,7 +79,7 @@ impl Actor for SelfAskActor {
 impl Message<TriggerSelfAsk> for SelfAskActor {
     type Reply = ();
 
-    async fn handle(&mut self, _: TriggerSelfAsk, actor_ref: &ActorRef<Self>) -> () {
+    async fn handle(&mut self, _: TriggerSelfAsk, actor_ref: &ActorRef<Self>) {
         let _ = actor_ref.ask(TriggerSelfAsk).await;
     }
 }
