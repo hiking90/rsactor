@@ -295,6 +295,11 @@ pub use rsactor_derive::{message_handlers, Actor};
 
 use std::{fmt::Debug, future::Future, sync::atomic::AtomicU64, sync::OnceLock};
 
+#[cfg(feature = "deadlock-detection")]
+use std::collections::HashMap;
+#[cfg(feature = "deadlock-detection")]
+use std::sync::Mutex;
+
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,6 +326,84 @@ impl std::fmt::Display for Identity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}(#{})", self.type_name, self.id)
     }
+}
+
+// --- Deadlock Detection ---
+
+#[cfg(feature = "deadlock-detection")]
+tokio::task_local! {
+    pub(crate) static CURRENT_ACTOR: Identity;
+}
+
+/// Global wait-for graph.
+/// Key: waiting actor's ID, Value: target actor's Identity.
+#[cfg(feature = "deadlock-detection")]
+static WAIT_FOR: OnceLock<Mutex<HashMap<u64, Identity>>> = OnceLock::new();
+
+#[cfg(feature = "deadlock-detection")]
+pub(crate) fn wait_for_graph() -> &'static Mutex<HashMap<u64, Identity>> {
+    WAIT_FOR.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(feature = "deadlock-detection")]
+pub(crate) struct WaitForGuard(pub(crate) u64);
+
+#[cfg(feature = "deadlock-detection")]
+impl Drop for WaitForGuard {
+    fn drop(&mut self) {
+        if let Ok(mut graph) = wait_for_graph().lock() {
+            graph.remove(&self.0);
+        }
+    }
+}
+
+/// Check if there is a path from `from` to `to` in the wait-for graph.
+/// Self-ask (caller == callee) is checked by the caller before invoking this function,
+/// so this only handles cycles of 2+ hops.
+#[cfg(feature = "deadlock-detection")]
+pub(crate) fn has_path(graph: &HashMap<u64, Identity>, from: u64, to: u64) -> bool {
+    let mut current = from;
+    let max_steps = graph.len();
+    for _ in 0..max_steps {
+        match graph.get(&current) {
+            Some(identity) => {
+                if identity.id == to {
+                    return true;
+                }
+                current = identity.id;
+            }
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Format the cycle path for panic messages.
+#[cfg(feature = "deadlock-detection")]
+pub(crate) fn format_cycle_path(
+    graph: &HashMap<u64, Identity>,
+    caller: Identity,
+    callee: Identity,
+) -> String {
+    if caller.id == callee.id {
+        return format!("{caller} -> {caller}");
+    }
+    let mut path = vec![caller.to_string(), callee.to_string()];
+    let mut current = callee.id;
+    let max_steps = graph.len();
+    for _ in 0..max_steps {
+        match graph.get(&current) {
+            Some(identity) => {
+                path.push(identity.to_string());
+                if identity.id == caller.id {
+                    break;
+                }
+                current = identity.id;
+            }
+            None => break,
+        }
+    }
+    path.join(" -> ")
 }
 
 /// Type-erased payload handler trait for dynamic message dispatch.

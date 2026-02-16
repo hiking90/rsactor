@@ -7,6 +7,36 @@ use std::{fmt::Debug, future::Future};
 use tokio::sync::mpsc;
 use tracing::{debug, error, Instrument};
 
+/// Wrap a future with CURRENT_ACTOR scope and await it.
+/// Used for on_start, message handler, on_stop.
+macro_rules! run_with_actor_scope {
+    ($actor_id:expr, $fut:expr) => {{
+        #[cfg(feature = "deadlock-detection")]
+        {
+            crate::CURRENT_ACTOR.scope($actor_id, $fut).await
+        }
+        #[cfg(not(feature = "deadlock-detection"))]
+        {
+            $fut.await
+        }
+    }};
+}
+
+/// Wrap a future with CURRENT_ACTOR scope without awaiting.
+/// Used for tokio::select! branch expressions (on_run).
+macro_rules! with_actor_scope {
+    ($actor_id:expr, $fut:expr) => {{
+        #[cfg(feature = "deadlock-detection")]
+        {
+            crate::CURRENT_ACTOR.scope($actor_id, $fut)
+        }
+        #[cfg(not(feature = "deadlock-detection"))]
+        {
+            $fut
+        }
+    }};
+}
+
 /// Defines the behavior of an actor.
 ///
 /// Actors are fundamental units of computation that communicate by exchanging messages.
@@ -435,10 +465,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     #[cfg(not(feature = "tracing"))]
     let on_start_span = tracing::Span::none();
 
-    let mut actor = match T::on_start(args, &actor_ref)
-        .instrument(on_start_span)
-        .await
-    {
+    let mut actor = match run_with_actor_scope!(
+        actor_id,
+        T::on_start(args, &actor_ref).instrument(on_start_span)
+    ) {
         Ok(actor) => {
             debug!("Actor {actor_id} on_start completed successfully.");
             actor
@@ -499,10 +529,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 #[cfg(not(feature = "tracing"))]
                 let on_stop_span = tracing::Span::none();
 
-                if let Err(e) = actor.on_stop(&actor_weak, killed)
-                    .instrument(on_stop_span)
-                    .await
-                {
+                if let Err(e) = run_with_actor_scope!(
+                    actor_id,
+                    actor.on_stop(&actor_weak, killed).instrument(on_stop_span)
+                ) {
                     error!("Actor {actor_id} on_stop failed during termination: {e:?}");
                     return ActorResult::Failed {
                         actor: Some(actor),
@@ -536,9 +566,11 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             metrics_ref.metrics_collector()
                         );
 
-                        payload.handle_message(&mut actor, actor_ref, reply_channel)
-                            .instrument(msg_span)
-                            .await;
+                        run_with_actor_scope!(
+                            actor_id,
+                            payload.handle_message(&mut actor, actor_ref, reply_channel)
+                                .instrument(msg_span)
+                        );
 
                         #[cfg(feature = "tracing")]
                         debug!("Actor {} processed message in {:?}", actor_id, start_time.elapsed());
@@ -553,10 +585,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                         #[cfg(not(feature = "tracing"))]
                         let on_stop_span = tracing::Span::none();
 
-                        if let Err(e) = actor.on_stop(&actor_weak, false)
-                            .instrument(on_stop_span)
-                            .await
-                        {
+                        if let Err(e) = run_with_actor_scope!(
+                            actor_id,
+                            actor.on_stop(&actor_weak, false).instrument(on_stop_span)
+                        ) {
                             error!("Actor {actor_id} on_stop failed during graceful stop: {e:?}");
                             return ActorResult::Failed {
                                 actor: Some(actor),
@@ -573,8 +605,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
 
             // Execute the actor's on_run method (idle handler) when enabled.
             // This branch is disabled when on_run returns Ok(false).
-            maybe_result = actor.on_run(&actor_weak)
-                .instrument(on_run_span), if idle_enabled => {
+            maybe_result = with_actor_scope!(
+                actor_id,
+                actor.on_run(&actor_weak).instrument(on_run_span)
+            ), if idle_enabled => {
                 match maybe_result {
                     Ok(true) => {
                         // on_run completed successfully, continue calling on_run
@@ -594,10 +628,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                         #[cfg(not(feature = "tracing"))]
                         let on_stop_span = tracing::Span::none();
 
-                        let phase = if let Err(stop_err) = actor.on_stop(&actor_weak, false)
-                            .instrument(on_stop_span)
-                            .await
-                        {
+                        let phase = if let Err(stop_err) = run_with_actor_scope!(
+                            actor_id,
+                            actor.on_stop(&actor_weak, false).instrument(on_stop_span)
+                        ) {
                             error!(
                                 "Actor {actor_id} on_stop failed during on_run error cleanup: {stop_err:?}"
                             );

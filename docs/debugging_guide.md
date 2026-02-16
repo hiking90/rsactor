@@ -253,6 +253,7 @@ fn main() {
 | `tracing` | Enables `#[tracing::instrument]` for detailed spans |
 | `metrics` | Enables actor performance metrics |
 | `test-utils` | Enables `dead_letter_count()` for testing |
+| `deadlock-detection` | Runtime deadlock detection for `ask` cycles (see [Deadlock Detection](deadlock_detection.md)) |
 
 ### Log Levels
 
@@ -349,6 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## See Also
 
+- [Deadlock Detection](deadlock_detection.md) - Runtime deadlock detection for `ask` cycles
 - [Tracing Guide](tracing.md) - Detailed tracing feature documentation
 - [Metrics Guide](metrics.md) - Actor performance metrics
 - [FAQ](FAQ.md) - Common questions and answers

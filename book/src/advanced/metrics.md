@@ -4,7 +4,7 @@ rsActor provides optional per-actor performance metrics. Enable with the `metric
 
 ```toml
 [dependencies]
-rsactor = { version = "0.13", features = ["metrics"] }
+rsactor = { version = "0.14", features = ["metrics"] }
 ```
 
 ## Tracked Metrics

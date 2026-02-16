@@ -8,3 +8,4 @@ This section covers advanced features of `rsActor` that enable more sophisticate
 - [**Metrics**](advanced/metrics.md) — Per-actor performance monitoring
 - [**Dead Letter Tracking**](advanced/dead_letters.md) — Observability for failed message delivery
 - [**Tracing & Observability**](advanced/tracing.md) — Structured logging and instrumentation spans
+- [**Deadlock Detection**](advanced/deadlock_detection.md) — Runtime detection of circular `ask` dependencies

@@ -30,6 +30,7 @@
     - [Metrics](advanced/metrics.md)
     - [Dead Letter Tracking](advanced/dead_letters.md)
     - [Tracing & Observability](advanced/tracing.md)
+    - [Deadlock Detection](advanced/deadlock_detection.md)
 
 # Examples
 - [Examples](examples.md)

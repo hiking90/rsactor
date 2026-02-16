@@ -743,25 +743,9 @@ fn test_dead_letter_reason_display() {
     );
 }
 
-#[test]
-fn test_reset_dead_letter_count() {
-    // Get current count
-    let initial = rsactor::dead_letter_count();
-
-    // Reset should work without error
-    rsactor::reset_dead_letter_count();
-
-    // After reset, count should be 0
-    assert_eq!(
-        rsactor::dead_letter_count(),
-        0,
-        "Dead letter count should be 0 after reset"
-    );
-
-    // Note: Other parallel tests might increment the counter,
-    // but we've verified reset_dead_letter_count() works
-    let _ = initial; // suppress unused warning
-}
+// NOTE: test_reset_dead_letter_count was moved to tests/dead_letter_reset_test.rs
+// to run in a separate process — reset_dead_letter_count() sets the global counter to 0,
+// which interferes with delta-based assertions in parallel tests.
 
 #[tokio::test]
 async fn test_error_join_display() {

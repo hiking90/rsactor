@@ -8,14 +8,14 @@ To use `rsActor` in your Rust project, add it as a dependency in your `Cargo.tom
 
 ```toml
 [dependencies]
-rsactor = "0.13" # Check crates.io for the latest version
+rsactor = "0.14" # Check crates.io for the latest version
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
 
-Make sure to replace `"0.13"` with the latest version available on [crates.io](https://crates.io/crates/rsactor).
+Make sure to replace `"0.14"` with the latest version available on [crates.io](https://crates.io/crates/rsactor).
 
 ## 2. Basic Usage Example
 
