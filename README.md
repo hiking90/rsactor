@@ -63,10 +63,10 @@ Unlike broader frameworks like Actix, rsActor specializes exclusively in **local
 
 ```toml
 [dependencies]
-rsactor = "0.13" # Check crates.io for the latest version
+rsactor = "0.14" # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.13", features = ["tracing"] }
+# rsactor = { version = "0.14", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
@@ -238,7 +238,7 @@ To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.13", features = ["tracing"] }
+rsactor = { version = "0.14", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -264,6 +264,27 @@ Run any example with tracing enabled:
 RUST_LOG=debug cargo run --example basic --features tracing
 ```
 
+### Deadlock Detection
+
+rsActor includes built-in runtime deadlock detection for `ask` cycles. When enabled, the framework maintains a wait-for graph and detects circular dependencies *before* they cause a deadlock.
+
+```
+Actor A handler: actor_ref_b.ask(msg).await  ← waiting for B's reply
+Actor B handler: actor_ref_a.ask(msg).await  ← waiting for A's reply
+→ Deadlock detected! Panic with cycle path: A(#1) -> B(#2) -> A(#1)
+```
+
+**Activation**: Enabled automatically with the `deadlock-detection` feature flag:
+
+```toml
+[dependencies]
+rsactor = { version = "0.14", features = ["deadlock-detection"] }
+```
+
+Detected scenarios include self-ask, 2-actor cycles (A → B → A), and indirect chains (A → B → C → A). When a cycle is found, the framework panics with a descriptive message showing the full cycle path, because deadlocks are design errors that should be fixed during development.
+
+For more details, see the [Deadlock Detection Guide](./docs/deadlock_detection.md).
+
 ## Handler Traits
 
 Handler traits (`TellHandler`, `AskHandler`, `WeakTellHandler`, `WeakAskHandler`) enable unified management of different actor types handling the same message in a single collection. See the [Handler Traits Documentation](./docs/handler_traits_design.md) for details.
@@ -279,6 +300,7 @@ Actor control traits (`ActorControl`, `WeakActorControl`) provide type-erased li
 - **[Architecture](./docs/Architecture.md)** - System architecture overview
 - **[Best Practices](./docs/best_practices.md)** - Recommended patterns and practices
 - **[Debugging Guide](./docs/debugging_guide.md)** - Error handling, dead letter tracking, and troubleshooting
+- **[Deadlock Detection](./docs/deadlock_detection.md)** - Runtime deadlock detection for `ask` cycles
 - **[Metrics Guide](./docs/metrics.md)** - Actor performance monitoring
 - **[Tracing Guide](./docs/tracing.md)** - Detailed observability with tracing
 - **[FAQ](./docs/FAQ.md)** - Common questions and answers

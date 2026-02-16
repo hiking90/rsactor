@@ -105,7 +105,7 @@ let result = actor_ref.blocking_ask(GetLastResult, Some(Duration::from_secs(5)))
 
 ### Potential Pitfalls:
 
-*   **Deadlocks**: If Actor A `ask`s Actor B, and Actor B concurrently `ask`s Actor A, a deadlock occurs. Design interaction flows carefully, or use `tell` to break cycles.
+*   **Deadlocks**: If Actor A `ask`s Actor B, and Actor B concurrently `ask`s Actor A, a deadlock occurs. Design interaction flows carefully, or use `tell` to break cycles. rsActor provides a **runtime deadlock detection** feature that catches these cycles before they happen — see [Deadlock Detection](../advanced/deadlock_detection.md) for details.
 *   **Performance**: Excessive `ask` where `tell` would suffice leads to performance bottlenecks. If a reply isn't strictly needed, prefer `tell`.
 
 `ask` is a powerful tool for interactions requiring a response, but should be used with awareness of its blocking nature and potential complexities.

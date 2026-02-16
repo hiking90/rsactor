@@ -2,7 +2,7 @@
 members = [".", "rsactor-derive"]
 
 [workspace.package]
-version = "0.13.1"
+version = "0.14.0"
 edition = "2021"
 rust-version = "1.75.0"
 authors = ["Jeff Kim <hiking90@gmail.com>"]
@@ -44,10 +44,11 @@ tracing = []
 metrics = []     # Actor performance metrics (message count, processing time, etc.)
 test-utils = []  # Enable dead letter counter for integration tests
                  # WARNING: Never enable in production builds!
+deadlock-detection = []  # Runtime deadlock detection for ask cycles (panics on detection)
 
 [dependencies]
 tokio.workspace = true
-rsactor-derive = { version = "0.13", path = "rsactor-derive" }
+rsactor-derive = { version = "0.14", path = "rsactor-derive" }
 tracing.workspace = true  # Now REQUIRED (was optional) - provides logging infrastructure
 futures = "0.3"
 
@@ -60,3 +61,11 @@ tracing-subscriber.workspace = true
 [[test]]
 name = "debugging_tools_tests"
 required-features = ["test-utils"]
+
+[[test]]
+name = "dead_letter_reset_test"
+required-features = ["test-utils"]
+
+[[test]]
+name = "deadlock_detection_tests"
+required-features = ["deadlock-detection"]

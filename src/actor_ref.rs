@@ -249,6 +249,28 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
+        #[cfg(feature = "deadlock-detection")]
+        let _guard = {
+            let caller = crate::CURRENT_ACTOR.try_with(|id| *id).ok();
+            if let Some(caller) = caller {
+                let callee = self.identity();
+                let mut graph = crate::wait_for_graph().lock().unwrap();
+                if caller.id == callee.id || crate::has_path(&graph, callee.id, caller.id) {
+                    let cycle = crate::format_cycle_path(&graph, caller, callee);
+                    drop(graph);
+                    panic!(
+                        "Deadlock detected: ask cycle {cycle}\n\
+                         This is a design error. Use `tell` to break the cycle, \
+                         or restructure actor dependencies."
+                    );
+                }
+                graph.insert(caller.id, callee);
+                Some(crate::WaitForGuard(caller.id))
+            } else {
+                None
+            }
+        };
+
         let (reply_tx, reply_rx) = oneshot::channel();
         let envelope = MailboxMessage::Envelope {
             payload: Box::new(msg),

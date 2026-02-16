@@ -14,7 +14,7 @@ Tracing in rsActor has two layers:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.13", features = ["tracing"] }
+rsactor = { version = "0.14", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```

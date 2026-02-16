@@ -382,7 +382,28 @@ async fn handle_slow_operation(&mut self, _: SlowOperation, _: &ActorRef<Self>) 
 }
 ```
 
-### 3. Don't Ignore Actor Termination
+### 3. Avoid Circular `ask` Dependencies
+
+Circular `ask` calls between actors cause deadlocks. Use `tell` to break cycles:
+
+```rust
+// Bad: Bidirectional ask (deadlock if A and B ask each other simultaneously)
+#[handler]
+async fn handle_request(&mut self, msg: Request, _: &ActorRef<Self>) -> Response {
+    let data = self.other_actor.ask(Query).await?;
+    Response(data)
+}
+
+// Good: Use tell for one direction to break the cycle
+#[handler]
+async fn handle_request(&mut self, msg: Request, _: &ActorRef<Self>) {
+    self.other_actor.tell(Notify { data: msg.data }).await?;
+}
+```
+
+Enable the `deadlock-detection` feature during development to catch these cycles automatically. See the [Deadlock Detection Guide](deadlock_detection.md) for details.
+
+### 4. Don't Ignore Actor Termination
 
 ```rust
 // Bad: Fire-and-forget actor creation

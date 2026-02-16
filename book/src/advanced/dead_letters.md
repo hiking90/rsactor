@@ -49,7 +49,7 @@ Enable the `test-utils` feature to count dead letters in tests:
 
 ```toml
 [dev-dependencies]
-rsactor = { version = "0.13", features = ["test-utils"] }
+rsactor = { version = "0.14", features = ["test-utils"] }
 ```
 
 ```rust
