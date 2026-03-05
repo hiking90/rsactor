@@ -293,6 +293,26 @@ use futures::FutureExt;
 // Re-export derive macros for convenient access
 pub use rsactor_derive::{message_handlers, Actor};
 
+// Internal macro used by derive macros to log handler errors.
+// When `tracing` feature is enabled, uses `tracing::error!`; otherwise, uses `eprintln!`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_handler_error {
+    (actor = $actor:expr, message_type = $msg_type:expr, $fmt:literal, $err:expr) => {{
+        #[cfg(feature = "tracing")]
+        tracing::error!(
+            actor = %$actor,
+            message_type = %$msg_type,
+            $fmt, $err
+        );
+        #[cfg(not(feature = "tracing"))]
+        eprintln!(
+            concat!("[ERROR] ", $fmt, " (actor: {}, message_type: {})"),
+            $err, $actor, $msg_type
+        );
+    }};
+}
+
 use std::{fmt::Debug, future::Future, sync::atomic::AtomicU64, sync::OnceLock};
 
 #[cfg(feature = "deadlock-detection")]
