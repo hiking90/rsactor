@@ -293,24 +293,21 @@ use futures::FutureExt;
 // Re-export derive macros for convenient access
 pub use rsactor_derive::{message_handlers, Actor};
 
-// Internal macro used by derive macros to log handler errors.
-// When `tracing` feature is enabled, uses `tracing::error!`; otherwise, uses `eprintln!`.
+/// Internal function used by derive macros to log handler errors.
+/// When `tracing` feature is enabled, uses `tracing::error!`; otherwise, uses `eprintln!`.
 #[doc(hidden)]
-#[macro_export]
-macro_rules! __log_handler_error {
-    (actor = $actor:expr, message_type = $msg_type:expr, $fmt:literal, $err:expr) => {{
-        #[cfg(feature = "tracing")]
-        tracing::error!(
-            actor = %$actor,
-            message_type = %$msg_type,
-            $fmt, $err
-        );
-        #[cfg(not(feature = "tracing"))]
-        eprintln!(
-            concat!("[ERROR] ", $fmt, " (actor: {}, message_type: {})"),
-            $err, $actor, $msg_type
-        );
-    }};
+pub fn __log_handler_error(actor: &dyn std::fmt::Display, message_type: &str, error: &dyn std::fmt::Display) {
+    #[cfg(feature = "tracing")]
+    tracing::error!(
+        actor = %actor,
+        message_type = %message_type,
+        "handler returned error: {}", error
+    );
+    #[cfg(not(feature = "tracing"))]
+    eprintln!(
+        "[ERROR] handler returned error: {} (actor: {}, message_type: {})",
+        error, actor, message_type
+    );
 }
 
 use std::{fmt::Debug, future::Future, sync::atomic::AtomicU64, sync::OnceLock};

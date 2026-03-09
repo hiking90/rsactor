@@ -532,10 +532,10 @@ fn generate_message_impl(
         quote! {
             fn on_tell_result(result: &Self::Reply, actor_ref: &rsactor::ActorRef<Self>) {
                 if let Err(ref e) = result {
-                    rsactor::__log_handler_error!(
-                        actor = actor_ref.identity(),
-                        message_type = std::any::type_name::<#message_type>(),
-                        "tell handler returned error: {}", e
+                    rsactor::__log_handler_error(
+                        &actor_ref.identity(),
+                        std::any::type_name::<#message_type>(),
+                        e
                     );
                 }
             }
