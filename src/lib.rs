@@ -296,7 +296,11 @@ pub use rsactor_derive::{message_handlers, Actor};
 /// Internal function used by derive macros to log handler errors.
 /// When `tracing` feature is enabled, uses `tracing::error!`; otherwise, uses `eprintln!`.
 #[doc(hidden)]
-pub fn __log_handler_error(actor: &dyn std::fmt::Display, message_type: &str, error: &dyn std::fmt::Display) {
+pub fn __log_handler_error(
+    actor: &dyn std::fmt::Display,
+    message_type: &str,
+    error: &dyn std::fmt::Display,
+) {
     #[cfg(feature = "tracing")]
     tracing::error!(
         actor = %actor,
