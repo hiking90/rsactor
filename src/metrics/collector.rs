@@ -119,11 +119,10 @@ impl MetricsCollector {
 
         MetricsSnapshot {
             message_count: count,
-            avg_processing_time: if count > 0 {
-                Duration::from_nanos(total_nanos / count)
-            } else {
-                Duration::ZERO
-            },
+            avg_processing_time: total_nanos
+                .checked_div(count)
+                .map(Duration::from_nanos)
+                .unwrap_or(Duration::ZERO),
             max_processing_time: Duration::from_nanos(
                 self.max_processing_nanos.load(Ordering::Relaxed),
             ),
@@ -151,12 +150,11 @@ impl MetricsCollector {
     #[inline]
     pub fn avg_processing_time(&self) -> Duration {
         let count = self.message_count.load(Ordering::Relaxed);
-        if count > 0 {
-            let total_nanos = self.total_processing_nanos.load(Ordering::Relaxed);
-            Duration::from_nanos(total_nanos / count)
-        } else {
-            Duration::ZERO
-        }
+        let total_nanos = self.total_processing_nanos.load(Ordering::Relaxed);
+        total_nanos
+            .checked_div(count)
+            .map(Duration::from_nanos)
+            .unwrap_or(Duration::ZERO)
     }
 
     /// Returns the maximum processing time observed.
