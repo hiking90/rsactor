@@ -44,6 +44,20 @@ pub struct MetricsSnapshot {
     /// This is useful for identifying slow message handlers or potential bottlenecks.
     pub max_processing_time: Duration,
 
+    /// Total number of priority messages processed by this actor.
+    ///
+    /// Counts messages delivered through the priority channel (enabled via
+    /// [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority)). Comparing
+    /// this to `message_count` lets callers detect priority-channel abuse such as
+    /// starvation of regular messages.
+    pub priority_message_count: u64,
+
+    /// Average time spent processing each priority message.
+    pub avg_priority_processing_time: Duration,
+
+    /// Maximum time spent processing any single priority message.
+    pub max_priority_processing_time: Duration,
+
     /// Total number of errors that occurred during message handling.
     ///
     /// This counts errors returned by message handlers, not framework-level errors
@@ -67,6 +81,9 @@ impl Default for MetricsSnapshot {
             message_count: 0,
             avg_processing_time: Duration::ZERO,
             max_processing_time: Duration::ZERO,
+            priority_message_count: 0,
+            avg_priority_processing_time: Duration::ZERO,
+            max_priority_processing_time: Duration::ZERO,
             error_count: 0,
             uptime: Duration::ZERO,
             last_activity: None,
@@ -96,6 +113,9 @@ mod tests {
             message_count: 42,
             avg_processing_time: Duration::from_millis(100),
             max_processing_time: Duration::from_millis(500),
+            priority_message_count: 7,
+            avg_priority_processing_time: Duration::from_micros(80),
+            max_priority_processing_time: Duration::from_millis(2),
             error_count: 3,
             uptime: Duration::from_secs(60),
             last_activity: Some(SystemTime::now()),
@@ -106,6 +126,15 @@ mod tests {
         assert_eq!(cloned.message_count, 42);
         assert_eq!(cloned.avg_processing_time, Duration::from_millis(100));
         assert_eq!(cloned.max_processing_time, Duration::from_millis(500));
+        assert_eq!(cloned.priority_message_count, 7);
+        assert_eq!(
+            cloned.avg_priority_processing_time,
+            Duration::from_micros(80)
+        );
+        assert_eq!(
+            cloned.max_priority_processing_time,
+            Duration::from_millis(2)
+        );
         assert_eq!(cloned.error_count, 3);
         assert_eq!(cloned.uptime, Duration::from_secs(60));
         assert!(cloned.last_activity.is_some());

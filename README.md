@@ -22,9 +22,12 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 | -------------------------------- | ------------------------------------------------------------ |
 | `ask` / `ask_with_timeout`       | Send a message and asynchronously await a reply              |
 | `tell` / `tell_with_timeout`     | Send a message without waiting for a reply (fire-and-forget) |
+| `tell_priority` / `ask_priority` | Send through the **opt-in** priority channel (mandatory `Duration`); bypasses the regular mailbox |
 | `blocking_ask` / `blocking_tell` | Blocking versions for `tokio::task::spawn_blocking` contexts (aliases: `ask_blocking` / `tell_blocking`) |
+| `blocking_tell_priority` / `blocking_ask_priority` | Blocking variants of the priority APIs |
 
 - **Macro-Assisted Handlers**: `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling
+- **Priority Channel** (opt-in): enable via `SpawnOptions::new().with_priority()` and spawn with `spawn_with_options()`. The priority channel is a separate mpsc with fixed capacity 1 that is polled with higher priority than the regular mailbox but lower than `kill()`. Use it for short, infrequent control-plane messages (health checks, pause/resume); see `examples/priority_signal.rs`. Sustained priority traffic can starve regular handlers — the `metrics` feature exposes both counters so you can detect this.
 
 ### Actor Lifecycle
 Three well-defined hooks for managing actor behavior:

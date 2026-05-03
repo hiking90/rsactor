@@ -71,6 +71,9 @@ pub struct ActorRef<T: Actor> {
     id: Identity,
     /// Channel for sending messages to the actor's mailbox
     sender: MailboxSender<T>,
+    /// Optional channel for sending priority messages to the actor.
+    /// `None` when the actor was spawned without `SpawnOptions::with_priority()`.
+    pub(crate) priority_sender: Option<MailboxSender<T>>,
     /// Channel for sending control signals (e.g., terminate) to the actor
     pub(crate) terminate_sender: mpsc::Sender<ControlSignal>,
     /// Per-actor metrics collector (when metrics feature is enabled)
@@ -83,12 +86,14 @@ impl<T: Actor> ActorRef<T> {
     pub(crate) fn new(
         id: Identity,
         sender: MailboxSender<T>,
+        priority_sender: Option<MailboxSender<T>>,
         terminate_sender: mpsc::Sender<ControlSignal>,
         #[cfg(feature = "metrics")] metrics: Arc<MetricsCollector>,
     ) -> Self {
         ActorRef {
             id,
             sender,
+            priority_sender,
             terminate_sender,
             #[cfg(feature = "metrics")]
             metrics,
@@ -100,7 +105,35 @@ impl<T: Actor> ActorRef<T> {
         self.id
     }
 
+    /// Returns `true` if this actor was spawned with the priority channel enabled
+    /// via [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority).
+    ///
+    /// When this returns `false`, calls to [`tell_priority`](Self::tell_priority),
+    /// [`ask_priority`](Self::ask_priority) and their blocking counterparts return
+    /// [`Error::PriorityChannelNotEnabled`](crate::Error::PriorityChannelNotEnabled).
+    #[inline]
+    pub fn has_priority_channel(&self) -> bool {
+        self.priority_sender.is_some()
+    }
+
+    /// Test-only: drops this `ActorRef`'s strong priority sender without affecting
+    /// the regular mailbox or the terminate channel.
+    ///
+    /// Used to write deterministic tests for the
+    /// [`ActorWeak::upgrade`](crate::ActorWeak::upgrade) policy where every strong
+    /// priority sender is dropped while the actor is still alive on its other
+    /// channels. Production code has no reason to drop one channel without the
+    /// others — clone or drop the entire `ActorRef` instead.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn drop_priority_sender_for_test(&mut self) {
+        self.priority_sender = None;
+    }
+
     /// Checks if the actor is still alive by verifying if its channels are open.
+    ///
+    /// The optional priority channel is intentionally **not** consulted: it is a
+    /// secondary channel, and the actor is considered alive as long as the regular
+    /// mailbox and the terminate channel remain open.
     #[inline]
     pub fn is_alive(&self) -> bool {
         // Both channels must be open for the actor to be considered alive
@@ -117,6 +150,7 @@ impl<T: Actor> ActorRef<T> {
         ActorWeak {
             id: this.id,
             sender: this.sender.downgrade(),
+            priority_sender: this.priority_sender.as_ref().map(|s| s.downgrade()),
             terminate_sender: this.terminate_sender.downgrade(),
             #[cfg(feature = "metrics")]
             metrics: this.metrics.clone(),
@@ -387,6 +421,282 @@ impl<T: Actor> ActorRef<T> {
         }
 
         result
+    }
+
+    /// Sends a message through the priority channel without awaiting a reply (fire-and-forget).
+    ///
+    /// The priority channel bypasses the regular mailbox queue: at every iteration of the
+    /// actor's runtime loop it is polled with higher priority than the regular mailbox,
+    /// but lower priority than the `kill()` (terminate) signal. This is intended for short,
+    /// infrequent control-plane messages such as health checks or pause/resume signals.
+    ///
+    /// `timeout` is **mandatory** and applies to the admission of the message into the
+    /// priority channel. The priority channel has a fixed capacity of 1, so a wedged
+    /// actor would otherwise block the sender indefinitely; the timeout makes that
+    /// failure mode visible.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::PriorityChannelNotEnabled`] if the actor was spawned without
+    ///   [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority).
+    ///   This is a configuration error and is **not** recorded as a dead letter.
+    /// - [`Error::Send`] if the actor has already stopped (recorded as a dead letter).
+    /// - [`Error::Timeout`] if admission did not complete within `timeout` (recorded as
+    ///   a dead letter).
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_tell_priority",
+        fields(
+            actor_id = %self.identity(),
+            message_type = %std::any::type_name::<M>(),
+            timeout_ms = timeout.as_millis()
+        ),
+        skip(self, msg)
+    ))]
+    pub async fn tell_priority<M>(&self, msg: M, timeout: Duration) -> Result<()>
+    where
+        M: Send + 'static,
+        T: Message<M>,
+    {
+        let Some(priority_sender) = self.priority_sender.as_ref() else {
+            #[cfg(feature = "tracing")]
+            warn!("tell_priority called on actor without a priority channel");
+            return Err(Error::PriorityChannelNotEnabled {
+                identity: self.identity(),
+            });
+        };
+
+        let envelope = MailboxMessage::Envelope {
+            payload: Box::new(msg),
+            reply_channel: None,
+            actor_ref: self.clone(),
+        };
+
+        #[cfg(feature = "tracing")]
+        debug!(
+            timeout_ms = timeout.as_millis(),
+            "Sending priority tell message"
+        );
+
+        let send_fut = priority_sender.send(envelope);
+        let result = match tokio::time::timeout(timeout, send_fut).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::ActorStopped,
+                    "tell_priority",
+                );
+                Err(Error::Send {
+                    identity: self.identity(),
+                    details: "Priority channel closed".to_string(),
+                })
+            }
+            Err(_) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::Timeout,
+                    "tell_priority",
+                );
+                Err(Error::Timeout {
+                    identity: self.identity(),
+                    timeout,
+                    operation: "tell_priority".to_string(),
+                })
+            }
+        };
+
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => debug!("Priority tell message sent successfully"),
+            Err(e) => warn!(error = %e, "Priority tell failed"),
+        }
+
+        result
+    }
+
+    /// Sends a message through the priority channel and awaits a typed reply.
+    ///
+    /// `timeout` is **mandatory** and applies to the entire round-trip (admission into
+    /// the priority channel plus reply wait). The reply travels through a dedicated
+    /// `oneshot` channel separate from the priority slot, so a single in-flight priority
+    /// message does not block another `ask_priority` from issuing a fresh request as
+    /// soon as the actor pulls the previous one off the channel.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::PriorityChannelNotEnabled`] if the actor was spawned without the
+    ///   priority channel enabled (not recorded as a dead letter).
+    /// - [`Error::Send`] if the actor has already stopped (recorded as a dead letter).
+    /// - [`Error::Timeout`] if the round-trip did not complete within `timeout`
+    ///   (recorded as a dead letter).
+    /// - [`Error::Receive`] if the reply channel was dropped before a response arrived
+    ///   (recorded as a dead letter).
+    /// - [`Error::Downcast`] if the handler returned a value of an unexpected type.
+    #[cfg_attr(feature = "tracing", tracing::instrument(
+        level = "debug",
+        name = "actor_ask_priority",
+        fields(
+            actor_id = %self.identity(),
+            message_type = %std::any::type_name::<M>(),
+            reply_type = %std::any::type_name::<T::Reply>(),
+            timeout_ms = timeout.as_millis()
+        ),
+        skip(self, msg)
+    ))]
+    pub async fn ask_priority<M>(&self, msg: M, timeout: Duration) -> Result<T::Reply>
+    where
+        T: Message<M>,
+        M: Send + 'static,
+        T::Reply: Send + 'static,
+    {
+        let Some(priority_sender) = self.priority_sender.as_ref() else {
+            #[cfg(feature = "tracing")]
+            warn!("ask_priority called on actor without a priority channel");
+            return Err(Error::PriorityChannelNotEnabled {
+                identity: self.identity(),
+            });
+        };
+
+        let result = tokio::time::timeout(timeout, async {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            let envelope = MailboxMessage::Envelope {
+                payload: Box::new(msg),
+                reply_channel: Some(reply_tx),
+                actor_ref: self.clone(),
+            };
+
+            if priority_sender.send(envelope).await.is_err() {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::ActorStopped,
+                    "ask_priority",
+                );
+                return Err(Error::Send {
+                    identity: self.identity(),
+                    details: "Priority channel closed".to_string(),
+                });
+            }
+
+            match reply_rx.await {
+                Ok(reply_any) => match reply_any.downcast::<T::Reply>() {
+                    Ok(reply) => Ok(*reply),
+                    Err(_) => Err(Error::Downcast {
+                        identity: self.identity(),
+                        expected_type: std::any::type_name::<T::Reply>().to_string(),
+                    }),
+                },
+                Err(_) => {
+                    crate::dead_letter::record::<M>(
+                        self.identity(),
+                        crate::dead_letter::DeadLetterReason::ReplyDropped,
+                        "ask_priority",
+                    );
+                    Err(Error::Receive {
+                        identity: self.identity(),
+                        details: "Reply channel closed unexpectedly".to_string(),
+                    })
+                }
+            }
+        })
+        .await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(_) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::Timeout,
+                    "ask_priority",
+                );
+                Err(Error::Timeout {
+                    identity: self.identity(),
+                    timeout,
+                    operation: "ask_priority".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Blocking equivalent of [`tell_priority`](Self::tell_priority). `timeout` is
+    /// mandatory for the same reason as the async version.
+    ///
+    /// Internally this spawns a short-lived single-thread Tokio runtime in a separate
+    /// thread, so it is safe to call from inside an existing runtime context as well as
+    /// from non-async threads.
+    pub fn blocking_tell_priority<M>(&self, msg: M, timeout: Duration) -> Result<()>
+    where
+        M: Send + 'static,
+        T: Message<M>,
+    {
+        if self.priority_sender.is_none() {
+            return Err(Error::PriorityChannelNotEnabled {
+                identity: self.identity(),
+            });
+        }
+
+        let self_clone = self.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build();
+
+            let result = match rt {
+                Ok(runtime) => runtime.block_on(self_clone.tell_priority(msg, timeout)),
+                Err(e) => Err(Error::Send {
+                    identity: self_clone.identity(),
+                    details: format!("Failed to create runtime: {}", e),
+                }),
+            };
+
+            let _ = tx.send(result);
+        });
+
+        rx.recv().map_err(|_| Error::Send {
+            identity: self.identity(),
+            details: "Priority blocking thread terminated unexpectedly".to_string(),
+        })?
+    }
+
+    /// Blocking equivalent of [`ask_priority`](Self::ask_priority). `timeout` is
+    /// mandatory for the same reason as the async version.
+    pub fn blocking_ask_priority<M>(&self, msg: M, timeout: Duration) -> Result<T::Reply>
+    where
+        T: Message<M>,
+        M: Send + 'static,
+        T::Reply: Send + 'static,
+    {
+        if self.priority_sender.is_none() {
+            return Err(Error::PriorityChannelNotEnabled {
+                identity: self.identity(),
+            });
+        }
+
+        let self_clone = self.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build();
+
+            let result = match rt {
+                Ok(runtime) => runtime.block_on(self_clone.ask_priority(msg, timeout)),
+                Err(e) => Err(Error::Send {
+                    identity: self_clone.identity(),
+                    details: format!("Failed to create runtime: {}", e),
+                }),
+            };
+
+            let _ = tx.send(result);
+        });
+
+        rx.recv().map_err(|_| Error::Send {
+            identity: self.identity(),
+            details: "Priority blocking thread terminated unexpectedly".to_string(),
+        })?
     }
 
     /// Sends an immediate termination signal to the actor.
@@ -972,6 +1282,30 @@ impl<T: Actor> ActorRef<T> {
         self.metrics.max_processing_time()
     }
 
+    /// Returns the total number of priority messages processed by this actor.
+    ///
+    /// Always `0` for actors spawned without
+    /// [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority).
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn priority_message_count(&self) -> u64 {
+        self.metrics.priority_message_count()
+    }
+
+    /// Returns the average priority message processing time.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn avg_priority_processing_time(&self) -> std::time::Duration {
+        self.metrics.avg_priority_processing_time()
+    }
+
+    /// Returns the maximum priority message processing time observed.
+    #[cfg(feature = "metrics")]
+    #[inline]
+    pub fn max_priority_processing_time(&self) -> std::time::Duration {
+        self.metrics.max_priority_processing_time()
+    }
+
     /// Returns the total number of errors during message handling.
     #[cfg(feature = "metrics")]
     #[inline]
@@ -994,15 +1328,6 @@ impl<T: Actor> ActorRef<T> {
     pub fn last_activity(&self) -> Option<std::time::SystemTime> {
         self.metrics.last_activity()
     }
-
-    /// Returns a reference to the internal metrics collector.
-    ///
-    /// This is primarily for internal use by the message processing loop.
-    #[cfg(feature = "metrics")]
-    #[inline]
-    pub(crate) fn metrics_collector(&self) -> &MetricsCollector {
-        &self.metrics
-    }
 }
 
 impl<T: Actor> Clone for ActorRef<T> {
@@ -1011,6 +1336,7 @@ impl<T: Actor> Clone for ActorRef<T> {
         ActorRef {
             id: self.id,
             sender: self.sender.clone(),
+            priority_sender: self.priority_sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
             #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),
@@ -1051,6 +1377,8 @@ pub struct ActorWeak<T: Actor> {
     id: Identity,
     /// Weak reference to the actor's mailbox sender
     sender: tokio::sync::mpsc::WeakSender<MailboxMessage<T>>,
+    /// Weak reference to the actor's optional priority sender (None if priority disabled)
+    priority_sender: Option<tokio::sync::mpsc::WeakSender<MailboxMessage<T>>>,
     /// Weak reference to the actor's terminate signal sender
     terminate_sender: tokio::sync::mpsc::WeakSender<ControlSignal>,
     /// Strong reference to metrics (survives actor drop for post-mortem analysis)
@@ -1063,15 +1391,24 @@ impl<T: Actor> ActorWeak<T> {
     ///
     /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
     /// has been dropped.
+    ///
+    /// The priority channel is treated as a secondary channel: if the original actor was
+    /// spawned with priority enabled but every strong priority sender has been dropped,
+    /// `upgrade()` still succeeds. The resulting [`ActorRef`] has
+    /// [`has_priority_channel()`](ActorRef::has_priority_channel) returning `false`, and
+    /// priority calls will fail with
+    /// [`Error::PriorityChannelNotEnabled`](crate::Error::PriorityChannelNotEnabled).
     #[inline]
     pub fn upgrade(&self) -> Option<ActorRef<T>> {
         // Try to upgrade both the mailbox sender and terminate sender
         let sender = self.sender.upgrade()?;
         let terminate_sender = self.terminate_sender.upgrade()?;
+        let priority_sender = self.priority_sender.as_ref().and_then(|s| s.upgrade());
 
         Some(ActorRef {
             id: self.id,
             sender,
+            priority_sender,
             terminate_sender,
             #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),
@@ -1106,6 +1443,7 @@ impl<T: Actor> Clone for ActorWeak<T> {
         ActorWeak {
             id: self.id,
             sender: self.sender.clone(),
+            priority_sender: self.priority_sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
             #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),

@@ -69,3 +69,7 @@ required-features = ["test-utils"]
 [[test]]
 name = "deadlock_detection_tests"
 required-features = ["deadlock-detection"]
+
+[[test]]
+name = "priority_signal_tests"
+required-features = ["test-utils"]
