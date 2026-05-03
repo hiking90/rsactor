@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use rand::RngExt;
+use rand::Rng;
 use rsactor::{message_handlers, spawn, Actor, ActorRef, ActorResult};
 use std::collections::HashMap;
 use std::time::Duration;
