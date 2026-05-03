@@ -19,6 +19,15 @@
 //!   - [`ask_with_timeout`](actor_ref::ActorRef::ask_with_timeout): Send a message and await a reply, with a specified timeout.
 //!   - [`tell_blocking`](actor_ref::ActorRef::tell_blocking): Blocking version of `tell` for use in [`tokio::task::spawn_blocking`] tasks.
 //!   - [`ask_blocking`](actor_ref::ActorRef::ask_blocking): Blocking version of `ask` for use in [`tokio::task::spawn_blocking`] tasks.
+//! - **Priority Channel** (opt-in via [`SpawnOptions::with_priority`]):
+//!   A dedicated mpsc channel of fixed capacity 1 that the runtime polls with
+//!   higher priority than the regular mailbox but lower priority than the
+//!   `kill()` (terminate signal). Use it for short, infrequent control messages
+//!   such as health checks and pause/resume. Send via
+//!   [`tell_priority`](actor_ref::ActorRef::tell_priority) /
+//!   [`ask_priority`](actor_ref::ActorRef::ask_priority). The priority channel
+//!   is **off by default**; calls on a non-priority actor return
+//!   [`Error::PriorityChannelNotEnabled`].
 //! - **Straightforward Actor Lifecycle**: Actors have [`on_start`](Actor::on_start), [`on_run`](Actor::on_run),
 //!   and [`on_stop`](Actor::on_stop) lifecycle hooks that provide a clean and intuitive actor lifecycle management system.
 //!   The framework manages the execution flow while giving developers full control over actor behavior.
@@ -544,6 +553,14 @@ static CONFIGURED_DEFAULT_MAILBOX_CAPACITY: OnceLock<usize> = OnceLock::new();
 /// The default mailbox capacity for actors.
 pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 
+/// The fixed capacity of the priority channel when it is enabled.
+///
+/// The priority channel is intentionally limited to a single in-flight slot. The slot is
+/// released as soon as the actor's runtime loop calls `recv()`, so admission resumes
+/// immediately after the actor reaches the next select! iteration. See
+/// [`SpawnOptions::with_priority`] for the rationale.
+pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
+
 /// Sets the global default buffer size for actor mailboxes.
 ///
 /// This function can only be called successfully once. Subsequent calls
@@ -563,6 +580,96 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
         })
 }
 
+/// Configuration options for spawning an actor.
+///
+/// `SpawnOptions` is a builder used by [`spawn_with_options`] to control aspects of the
+/// actor's runtime that are not part of the actor's own definition: mailbox capacity and
+/// optional activation of the priority channel.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rsactor::{spawn_with_options, SpawnOptions, Actor, ActorRef, message_handlers};
+///
+/// #[derive(Actor)]
+/// struct MyActor;
+///
+/// struct Ping;
+///
+/// #[message_handlers]
+/// impl MyActor {
+///     #[handler]
+///     async fn handle_ping(&mut self, _: Ping, _: &ActorRef<Self>) -> () {}
+/// }
+///
+/// # fn main() {
+/// let opts = SpawnOptions::new().mailbox_capacity(64).with_priority();
+/// let (actor_ref, _join) = spawn_with_options::<MyActor>(MyActor, opts);
+/// assert!(actor_ref.has_priority_channel());
+/// # }
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct SpawnOptions {
+    /// Capacity of the regular mailbox channel. Must be greater than 0.
+    /// Set via [`SpawnOptions::mailbox_capacity`].
+    pub(crate) mailbox_capacity: usize,
+    /// Whether to enable the priority channel. When `false` (default) no priority channel
+    /// is created and any call to [`tell_priority`](crate::ActorRef::tell_priority) etc.
+    /// returns [`Error::PriorityChannelNotEnabled`]. Toggled via
+    /// [`SpawnOptions::with_priority`].
+    pub(crate) priority_enabled: bool,
+}
+
+impl SpawnOptions {
+    /// Creates a new `SpawnOptions` with default mailbox capacity and the priority channel
+    /// disabled.
+    pub fn new() -> Self {
+        let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY
+            .get()
+            .copied()
+            .unwrap_or(DEFAULT_MAILBOX_CAPACITY);
+        Self {
+            mailbox_capacity: capacity,
+            priority_enabled: false,
+        }
+    }
+
+    /// Sets the mailbox capacity. Must be greater than 0.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n == 0`.
+    pub fn mailbox_capacity(mut self, n: usize) -> Self {
+        assert!(n > 0, "Mailbox capacity must be greater than 0");
+        self.mailbox_capacity = n;
+        self
+    }
+
+    /// Enables the priority channel for the spawned actor.
+    ///
+    /// When enabled, the actor gets a second mpsc channel of fixed capacity 1 that the
+    /// runtime polls with higher priority than the regular mailbox but lower than
+    /// `kill()`. Use it for short, infrequent control-plane messages such
+    /// as health checks or pause/resume signals.
+    ///
+    /// The capacity is fixed at 1 so the API enforces the intended semantics ("short and
+    /// rare"). The single slot is released the moment the actor calls `recv()` on the
+    /// channel, so admission resumes immediately at the next select! iteration. Callers
+    /// must always pass a [`Duration`](std::time::Duration) so a wedged actor can never
+    /// block a sender indefinitely.
+    pub fn with_priority(mut self) -> Self {
+        self.priority_enabled = true;
+        self
+    }
+}
+
+impl Default for SpawnOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Spawns a new actor and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
 ///
 /// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
@@ -571,11 +678,7 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 pub fn spawn<T: Actor + 'static>(
     args: T::Args,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
-    let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY
-        .get()
-        .copied()
-        .unwrap_or(DEFAULT_MAILBOX_CAPACITY);
-    spawn_with_mailbox_capacity(args, capacity)
+    spawn_with_options(args, SpawnOptions::new())
 }
 
 /// Spawns a new actor with a specified mailbox capacity and returns an `ActorRef<T>` to it, along with a `JoinHandle`.
@@ -588,8 +691,21 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
     args: T::Args,
     mailbox_capacity: usize,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
+    spawn_with_options(args, SpawnOptions::new().mailbox_capacity(mailbox_capacity))
+}
+
+/// Spawns a new actor with the given [`SpawnOptions`] and returns an `ActorRef<T>` along
+/// with a `JoinHandle`.
+///
+/// This is the most general spawn entry point. Use it when you need to enable the
+/// priority channel via [`SpawnOptions::with_priority`] or configure both mailbox
+/// capacity and priority in a single call.
+pub fn spawn_with_options<T: Actor + 'static>(
+    args: T::Args,
+    opts: SpawnOptions,
+) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     assert!(
-        mailbox_capacity > 0,
+        opts.mailbox_capacity > 0,
         "Mailbox capacity must be greater than 0"
     );
 
@@ -600,8 +716,15 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
         std::any::type_name::<T>(),
     );
 
-    let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
+    let (mailbox_tx, mailbox_rx) = mpsc::channel(opts.mailbox_capacity);
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
+
+    let (priority_tx, priority_rx) = if opts.priority_enabled {
+        let (tx, rx) = mpsc::channel(PRIORITY_CHANNEL_CAPACITY);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
 
     #[cfg(feature = "metrics")]
     let metrics = std::sync::Arc::new(metrics::MetricsCollector::new());
@@ -609,6 +732,7 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
     let actor_ref = ActorRef::new(
         actor_id,
         mailbox_tx,
+        priority_tx,
         terminate_tx,
         #[cfg(feature = "metrics")]
         metrics,
@@ -618,6 +742,7 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
         args,
         actor_ref.clone(),
         mailbox_rx,
+        priority_rx,
         terminate_rx,
     ));
 

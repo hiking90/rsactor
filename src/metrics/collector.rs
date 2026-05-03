@@ -24,14 +24,21 @@ use super::MetricsSnapshot;
 /// - Individual durations are capped at `u64::MAX` nanoseconds (~584 years)
 #[derive(Debug)]
 pub(crate) struct MetricsCollector {
-    /// Number of messages processed
+    /// Number of messages processed (regular mailbox only — priority messages are
+    /// counted separately so callers can detect priority-channel abuse).
     message_count: AtomicU64,
     /// Number of errors during message handling
     error_count: AtomicU64,
-    /// Cumulative processing time in nanoseconds (saturating)
+    /// Cumulative processing time for regular messages, in nanoseconds (saturating)
     total_processing_nanos: AtomicU64,
-    /// Maximum processing time observed in nanoseconds
+    /// Maximum regular message processing time observed in nanoseconds
     max_processing_nanos: AtomicU64,
+    /// Number of priority messages processed (regular + drained-on-stop).
+    priority_message_count: AtomicU64,
+    /// Cumulative processing time for priority messages, in nanoseconds (saturating)
+    total_priority_processing_nanos: AtomicU64,
+    /// Maximum priority message processing time observed in nanoseconds
+    max_priority_processing_nanos: AtomicU64,
     /// Last activity timestamp as milliseconds since UNIX_EPOCH
     last_activity_millis: AtomicU64,
     /// When the actor started (for uptime calculation)
@@ -46,6 +53,9 @@ impl MetricsCollector {
             error_count: AtomicU64::new(0),
             total_processing_nanos: AtomicU64::new(0),
             max_processing_nanos: AtomicU64::new(0),
+            priority_message_count: AtomicU64::new(0),
+            total_priority_processing_nanos: AtomicU64::new(0),
+            max_priority_processing_nanos: AtomicU64::new(0),
             last_activity_millis: AtomicU64::new(0),
             start_instant: Instant::now(),
         }
@@ -74,6 +84,29 @@ impl MetricsCollector {
 
         // Update max using atomic fetch_max
         self.max_processing_nanos
+            .fetch_max(nanos, Ordering::Relaxed);
+
+        self.update_last_activity();
+    }
+
+    /// Records a completed priority message processing with its duration.
+    ///
+    /// Priority messages are tracked in dedicated counters separate from regular
+    /// messages so callers can detect imbalance (e.g. starvation) by comparing the
+    /// two counts.
+    #[inline]
+    pub fn record_priority_message(&self, duration: Duration) {
+        self.priority_message_count.fetch_add(1, Ordering::Relaxed);
+
+        let nanos = duration.as_nanos().min(u64::MAX as u128) as u64;
+
+        let _ = self.total_priority_processing_nanos.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |current| Some(current.saturating_add(nanos)),
+        );
+
+        self.max_priority_processing_nanos
             .fetch_max(nanos, Ordering::Relaxed);
 
         self.update_last_activity();
@@ -116,6 +149,8 @@ impl MetricsCollector {
     pub fn snapshot(&self) -> MetricsSnapshot {
         let count = self.message_count.load(Ordering::Relaxed);
         let total_nanos = self.total_processing_nanos.load(Ordering::Relaxed);
+        let priority_count = self.priority_message_count.load(Ordering::Relaxed);
+        let total_priority_nanos = self.total_priority_processing_nanos.load(Ordering::Relaxed);
 
         MetricsSnapshot {
             message_count: count,
@@ -125,6 +160,14 @@ impl MetricsCollector {
                 .unwrap_or(Duration::ZERO),
             max_processing_time: Duration::from_nanos(
                 self.max_processing_nanos.load(Ordering::Relaxed),
+            ),
+            priority_message_count: priority_count,
+            avg_priority_processing_time: total_priority_nanos
+                .checked_div(priority_count)
+                .map(Duration::from_nanos)
+                .unwrap_or(Duration::ZERO),
+            max_priority_processing_time: Duration::from_nanos(
+                self.max_priority_processing_nanos.load(Ordering::Relaxed),
             ),
             error_count: self.error_count.load(Ordering::Relaxed),
             uptime: self.start_instant.elapsed(),
@@ -161,6 +204,29 @@ impl MetricsCollector {
     #[inline]
     pub fn max_processing_time(&self) -> Duration {
         Duration::from_nanos(self.max_processing_nanos.load(Ordering::Relaxed))
+    }
+
+    /// Returns the total number of priority messages processed.
+    #[inline]
+    pub fn priority_message_count(&self) -> u64 {
+        self.priority_message_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns the average priority message processing time.
+    #[inline]
+    pub fn avg_priority_processing_time(&self) -> Duration {
+        let count = self.priority_message_count.load(Ordering::Relaxed);
+        let total_nanos = self.total_priority_processing_nanos.load(Ordering::Relaxed);
+        total_nanos
+            .checked_div(count)
+            .map(Duration::from_nanos)
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// Returns the maximum priority message processing time observed.
+    #[inline]
+    pub fn max_priority_processing_time(&self) -> Duration {
+        Duration::from_nanos(self.max_priority_processing_nanos.load(Ordering::Relaxed))
     }
 
     /// Returns the uptime since actor start.
@@ -214,6 +280,32 @@ impl Drop for MessageProcessingGuard<'_> {
     #[inline]
     fn drop(&mut self) {
         self.collector.record_message(self.start.elapsed());
+    }
+}
+
+/// RAII guard for measuring priority message processing time.
+///
+/// Mirrors [`MessageProcessingGuard`] but records into the priority counters so the two
+/// channels can be observed independently.
+pub(crate) struct PriorityMessageProcessingGuard<'a> {
+    collector: &'a MetricsCollector,
+    start: Instant,
+}
+
+impl<'a> PriorityMessageProcessingGuard<'a> {
+    #[inline]
+    pub fn new(collector: &'a MetricsCollector) -> Self {
+        Self {
+            collector,
+            start: Instant::now(),
+        }
+    }
+}
+
+impl Drop for PriorityMessageProcessingGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.collector.record_priority_message(self.start.elapsed());
     }
 }
 

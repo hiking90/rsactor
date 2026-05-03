@@ -388,6 +388,51 @@ A13: Error handling in `rsActor` happens at several levels:
 
 ## Advanced Usage
 
+**Q: When should I use the priority channel vs the regular mailbox vs `kill()`?**
+
+A: Use this decision tree:
+
+| Need                                                           | Use                          |
+| -------------------------------------------------------------- | ---------------------------- |
+| Normal application messages (any volume)                       | `tell` / `ask`               |
+| **Short, infrequent** control-plane messages that must skip a backed-up mailbox (health checks, pause/resume, config reload, dynamic feature toggles) | `tell_priority` / `ask_priority` |
+| Tear the actor down right now, dropping pending work           | `kill()`                     |
+| Tear the actor down, but finish what's already queued          | `stop()`                     |
+
+The priority channel is **opt-in**: you must spawn the actor with
+`spawn_with_options(args, SpawnOptions::new().with_priority())`. Default
+`spawn()` and `spawn_with_mailbox_capacity()` do **not** create the priority
+channel — calling `tell_priority` on such an actor returns
+`Error::PriorityChannelNotEnabled` (a configuration error; not recorded as a
+dead letter). Check at runtime with `actor_ref.has_priority_channel()`.
+
+A few important properties:
+
+- **Capacity is fixed at 1.** The priority channel exists to serialize "short
+  and rare" signals, not to stream traffic. The slot is freed the instant the
+  actor calls `recv()`, so admission resumes immediately at the next
+  `select!` iteration. The reply channel for `ask_priority` is a separate
+  `oneshot`, so the single mpsc slot does not bottleneck `ask_priority`
+  concurrency.
+- **`Duration` is mandatory.** A wedged actor would otherwise block the
+  sender indefinitely. The timeout fires admission failures predictably and
+  records a dead letter (`DeadLetterReason::Timeout`).
+- **Priority < kill.** `kill()` still wins biased select against the
+  priority channel, so a kill is delivered even when the priority slot is
+  full.
+- **`stop()` drains the priority queue first.** Before `on_stop` runs, the
+  priority receiver is closed (refusing new sends) and any in-flight
+  priority message is processed. So a priority message sent immediately
+  before `stop()` is not lost. `kill()` does **not** drain.
+- **Starvation is your responsibility.** The priority branch is biased above
+  the regular mailbox, so a flood of priority messages will starve regular
+  handlers. Reserve the priority channel for short, infrequent signals; the
+  `metrics` feature exposes `priority_message_count` separately from
+  `message_count` so you can detect abuse.
+
+See `examples/priority_signal.rs` for a worked example with health checks
+and pause/resume signals.
+
 **Q14: Can I use rsActor with blocking code?**
 
 A14: Yes, `rsActor` provides mechanisms for working with blocking code:

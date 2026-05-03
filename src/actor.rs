@@ -37,6 +37,55 @@ macro_rules! with_actor_scope {
     }};
 }
 
+/// Process a single Envelope from any of the message-receiving paths
+/// (regular mailbox, priority mailbox, or stop-time priority drain).
+///
+/// Centralizes the tracing span, optional metrics guard, and dispatch boilerplate
+/// so the three call sites stay in sync.
+macro_rules! process_envelope {
+    (
+        actor_id = $actor_id:expr,
+        actor = $actor:expr,
+        payload = $payload:expr,
+        reply_channel = $reply_channel:expr,
+        actor_ref = $actor_ref:expr,
+        span_name = $span_name:literal,
+        guard = $guard_type:ident $(,)?
+    ) => {{
+        #[cfg(feature = "tracing")]
+        let msg_span = tracing::debug_span!($span_name);
+        #[cfg(not(feature = "tracing"))]
+        let msg_span = tracing::Span::none();
+
+        #[cfg(feature = "tracing")]
+        let start_time = std::time::Instant::now();
+
+        // Hold the metrics collector by Arc clone (1 atomic increment) rather
+        // than cloning the entire ActorRef (which would clone every channel
+        // sender — 4 atomic increments). The collector must outlive the move
+        // of $actor_ref into handle_message below.
+        #[cfg(feature = "metrics")]
+        let metrics_collector = $actor_ref.metrics.clone();
+        #[cfg(feature = "metrics")]
+        let _metrics_guard = crate::metrics::collector::$guard_type::new(&metrics_collector);
+
+        run_with_actor_scope!(
+            $actor_id,
+            $payload
+                .handle_message(&mut $actor, $actor_ref, $reply_channel)
+                .instrument(msg_span)
+        );
+
+        #[cfg(feature = "tracing")]
+        debug!(
+            "Actor {} processed {} in {:?}",
+            $actor_id,
+            $span_name,
+            start_time.elapsed()
+        );
+    }};
+}
+
 /// Defines the behavior of an actor.
 ///
 /// Actors are fundamental units of computation that communicate by exchanging messages.
@@ -456,6 +505,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     args: T::Args,
     actor_ref: ActorRef<T>,
     mut receiver: mpsc::Receiver<MailboxMessage<T>>,
+    mut priority_receiver: Option<mpsc::Receiver<MailboxMessage<T>>>,
     mut terminate_receiver: mpsc::Receiver<ControlSignal>,
 ) -> ActorResult<T> {
     let actor_id = actor_ref.identity();
@@ -544,40 +594,102 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 break; // Exit the loop
             }
 
+            // Process priority messages with higher priority than the regular mailbox.
+            // When the priority channel is disabled (`None`), this branch becomes a
+            // never-ready future and is effectively skipped on every iteration.
+            maybe_priority = async {
+                match priority_receiver.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending::<Option<MailboxMessage<T>>>().await,
+                }
+            } => {
+                match maybe_priority {
+                    Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
+                        process_envelope!(
+                            actor_id = actor_id,
+                            actor = actor,
+                            payload = payload,
+                            reply_channel = reply_channel,
+                            actor_ref = actor_ref,
+                            span_name = "actor_process_priority_message",
+                            guard = PriorityMessageProcessingGuard,
+                        );
+                    }
+                    Some(MailboxMessage::StopGracefully(_)) => {
+                        // Invariant: stop() only writes to the regular mailbox, never the
+                        // priority channel. Hitting this arm would mean a future change
+                        // started routing StopGracefully through priority too — flag it
+                        // loudly in debug builds.
+                        debug_assert!(
+                            false,
+                            "MailboxMessage::StopGracefully observed on the priority channel; \
+                             priority channel must only carry Envelope variants"
+                        );
+                    }
+                    None => {
+                        // All strong priority senders were dropped. A closed receiver
+                        // returns Ready(None) on every poll, which would busy-loop the
+                        // priority branch forever. Disable the branch by clearing the
+                        // receiver — subsequent iterations hit the `None` arm of the
+                        // async block above and resolve to `pending()`. The actor stays
+                        // alive on the regular mailbox until normal termination.
+                        priority_receiver = None;
+                    }
+                }
+            }
+
             // Process incoming messages from the actor's mailbox
             // Messages can be: regular message envelopes or graceful stop signals
             maybe_message = receiver.recv() => {
                 match maybe_message {
                     Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
-                        #[cfg(feature = "tracing")]
-                        let msg_span = tracing::debug_span!("actor_process_message");
-                        #[cfg(not(feature = "tracing"))]
-                        let msg_span = tracing::Span::none();
-
-                        #[cfg(feature = "tracing")]
-                        let start_time = std::time::Instant::now();
-
-                        // Create metrics guard to automatically record processing time
-                        // Clone actor_ref first to preserve ownership for handle_message
-                        #[cfg(feature = "metrics")]
-                        let metrics_ref = actor_ref.clone();
-                        #[cfg(feature = "metrics")]
-                        let _metrics_guard = crate::metrics::collector::MessageProcessingGuard::new(
-                            metrics_ref.metrics_collector()
+                        process_envelope!(
+                            actor_id = actor_id,
+                            actor = actor,
+                            payload = payload,
+                            reply_channel = reply_channel,
+                            actor_ref = actor_ref,
+                            span_name = "actor_process_message",
+                            guard = MessageProcessingGuard,
                         );
-
-                        run_with_actor_scope!(
-                            actor_id,
-                            payload.handle_message(&mut actor, actor_ref, reply_channel)
-                                .instrument(msg_span)
-                        );
-
-                        #[cfg(feature = "tracing")]
-                        debug!("Actor {} processed message in {:?}", actor_id, start_time.elapsed());
                     }
                     Some(MailboxMessage::StopGracefully(_)) | None => {
                         #[cfg(feature = "tracing")]
                         debug!("Actor termination due to graceful stop");
+
+                        // Drain any priority messages already enqueued before stopping.
+                        // close() refuses new priority sends (they get Closed errors and
+                        // are recorded as dead letters), then try_recv() pulls everything
+                        // currently in the slot. This closes the race where a sender
+                        // pushed a priority message just before stop() arrived.
+                        if let Some(rx) = priority_receiver.as_mut() {
+                            rx.close();
+                            while let Ok(msg) = rx.try_recv() {
+                                match msg {
+                                    MailboxMessage::Envelope { payload, reply_channel, actor_ref } => {
+                                        process_envelope!(
+                                            actor_id = actor_id,
+                                            actor = actor,
+                                            payload = payload,
+                                            reply_channel = reply_channel,
+                                            actor_ref = actor_ref,
+                                            span_name = "actor_drain_priority_message",
+                                            guard = PriorityMessageProcessingGuard,
+                                        );
+                                    }
+                                    MailboxMessage::StopGracefully(_) => {
+                                        // Same invariant as the priority select! branch:
+                                        // stop() never writes to the priority channel.
+                                        debug_assert!(
+                                            false,
+                                            "MailboxMessage::StopGracefully observed during \
+                                             priority drain; priority channel must only \
+                                             carry Envelope variants"
+                                        );
+                                    }
+                                }
+                            }
+                        }
 
                         // Call on_stop for graceful stop scenario
                         #[cfg(feature = "tracing")]
@@ -655,6 +767,9 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     // Cleanup: Close channels to signal shutdown completion
     receiver.close(); // Close the message mailbox
     terminate_receiver.close(); // Close the termination signal channel
+    if let Some(rx) = priority_receiver.as_mut() {
+        rx.close(); // Close the optional priority channel
+    }
 
     debug!("Actor {actor_id} lifecycle completed - exiting runtime loop.");
 

@@ -60,6 +60,16 @@ pub enum Error {
         /// The original JoinError from tokio
         source: tokio::task::JoinError,
     },
+    /// Error when a priority channel operation is attempted on an actor that
+    /// did not enable the priority channel via [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority).
+    ///
+    /// This is a configuration error (not a delivery failure) and is therefore
+    /// not recorded as a dead letter. Callers can guard against this with
+    /// [`ActorRef::has_priority_channel`](crate::ActorRef::has_priority_channel).
+    PriorityChannelNotEnabled {
+        /// ID of the actor that does not have a priority channel.
+        identity: Identity,
+    },
 }
 
 /// Implementation of the Display trait for Error enum.
@@ -129,6 +139,13 @@ impl std::fmt::Display for Error {
                     "Failed to join spawned task from actor {}: {}",
                     identity.name(),
                     source
+                )
+            }
+            Error::PriorityChannelNotEnabled { identity } => {
+                write!(
+                    f,
+                    "Priority channel is not enabled for actor {}: enable it via SpawnOptions::with_priority()",
+                    identity.name()
                 )
             }
         }
@@ -261,6 +278,11 @@ impl Error {
                 "Use `ActorResult::is_join_failed()` to confirm this failure type",
                 "Check for unwrap(), expect(), or panic!() calls in actor code",
                 "Verify tokio runtime wasn't shut down while actor was running",
+            ],
+            Error::PriorityChannelNotEnabled { .. } => &[
+                "Spawn the actor with SpawnOptions::new().with_priority() via spawn_with_options()",
+                "Use ActorRef::has_priority_channel() to check before sending priority messages",
+                "If priority is not required, use the regular tell()/ask() methods instead",
             ],
         }
     }

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Priority channel** (opt-in, off by default): a second mpsc channel of fixed
+  capacity 1 that is polled with higher priority than the regular mailbox
+  but lower priority than the `kill()` (terminate) signal. Designed for
+  short, infrequent control-plane messages such as health checks and
+  pause/resume signals.
+  - `SpawnOptions` builder + `spawn_with_options()` entry point.
+    `SpawnOptions::new().with_priority()` enables the priority channel.
+  - `ActorRef::tell_priority(msg, timeout)` /
+    `ActorRef::ask_priority(msg, timeout)` and their
+    `blocking_tell_priority` / `blocking_ask_priority` counterparts.
+    `Duration` is mandatory — the priority slot has capacity 1, so a wedged
+    actor would otherwise block the sender indefinitely.
+  - `ActorRef::has_priority_channel()` to detect whether the channel was
+    enabled at spawn time.
+  - `Error::PriorityChannelNotEnabled` returned when priority APIs are
+    called on an actor spawned without `with_priority()`. This is a
+    configuration error and is **not** recorded as a dead letter.
+  - `stop()` drains the priority queue before invoking `on_stop` (close-then-
+    drain), so a priority message sent immediately before `stop()` is not
+    lost. `kill()` does not drain.
+  - `metrics` feature now tracks priority messages separately:
+    `priority_message_count`, `avg_priority_processing_time`,
+    `max_priority_processing_time` are exposed both on `MetricsSnapshot`
+    and as `ActorRef` accessors. The regular `message_count` no longer
+    includes priority messages.
+  - **Note on starvation:** the priority branch wins biased select against
+    the regular mailbox, so sustained priority traffic can starve regular
+    handlers. Reserve the priority channel for short, infrequent signals —
+    the `metrics` feature exposes both counters so abuse is detectable.
+  - New example: `examples/priority_signal.rs` (health check + pause/resume).
+
 ## [0.12.0] - 2025-01-18
 
 ### ⚠️ BREAKING CHANGES
