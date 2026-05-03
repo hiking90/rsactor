@@ -2,7 +2,7 @@
 members = [".", "rsactor-derive"]
 
 [workspace.package]
-version = "0.14.1"
+version = "0.15.0"
 edition = "2021"
 rust-version = "1.75.0"
 authors = ["Jeff Kim <hiking90@gmail.com>"]
@@ -48,7 +48,7 @@ deadlock-detection = []  # Runtime deadlock detection for ask cycles (panics on 
 
 [dependencies]
 tokio.workspace = true
-rsactor-derive = { version = "0.14", path = "rsactor-derive" }
+rsactor-derive = { version = "0.15", path = "rsactor-derive" }
 tracing.workspace = true  # Now REQUIRED (was optional) - provides logging infrastructure
 futures = "0.3"
 

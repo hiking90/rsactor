@@ -66,10 +66,10 @@ Unlike broader frameworks like Actix, rsActor specializes exclusively in **local
 
 ```toml
 [dependencies]
-rsactor = "0.14" # Check crates.io for the latest version
+rsactor = "0.15" # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.14", features = ["tracing"] }
+# rsactor = { version = "0.15", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
@@ -241,7 +241,7 @@ To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.14", features = ["tracing"] }
+rsactor = { version = "0.15", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -281,7 +281,7 @@ Actor B handler: actor_ref_a.ask(msg).await  ← waiting for A's reply
 
 ```toml
 [dependencies]
-rsactor = { version = "0.14", features = ["deadlock-detection"] }
+rsactor = { version = "0.15", features = ["deadlock-detection"] }
 ```
 
 Detected scenarios include self-ask, 2-actor cycles (A → B → A), and indirect chains (A → B → C → A). When a cycle is found, the framework panics with a descriptive message showing the full cycle path, because deadlocks are design errors that should be fixed during development.
