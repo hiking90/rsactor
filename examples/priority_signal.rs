@@ -64,7 +64,7 @@ impl WorkerActor {
     // Long-running regular handler. Notice how it observes `self.paused`,
     // which the priority-channel handler can flip mid-stream.
     #[handler]
-    async fn handle_job(&mut self, msg: ProcessJob, _: &ActorRef<Self>) -> () {
+    async fn handle_job(&mut self, msg: ProcessJob, _: &ActorRef<Self>) {
         if self.paused {
             // Drop the job in this demo so we can clearly see the pause take effect.
             println!("[worker] paused — skipping job #{}", msg.id);
@@ -86,13 +86,13 @@ impl WorkerActor {
     }
 
     #[handler]
-    async fn handle_pause(&mut self, _: PauseProcessing, _: &ActorRef<Self>) -> () {
+    async fn handle_pause(&mut self, _: PauseProcessing, _: &ActorRef<Self>) {
         println!("[worker] *** PAUSE signal received ***");
         self.paused = true;
     }
 
     #[handler]
-    async fn handle_resume(&mut self, _: ResumeProcessing, _: &ActorRef<Self>) -> () {
+    async fn handle_resume(&mut self, _: ResumeProcessing, _: &ActorRef<Self>) {
         println!("[worker] *** RESUME signal received ***");
         self.paused = false;
     }
