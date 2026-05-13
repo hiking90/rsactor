@@ -637,6 +637,85 @@ async fn blocking_ask_priority_returns_reply() {
     let _ = actor_ref.stop().await;
 }
 
+// Verify that the blocking priority variants can be called directly from an
+// async context on a multi-thread runtime. The block_in_place fast path
+// reuses the current runtime instead of spawning a separate thread and
+// runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocking_tell_priority_from_async_multi_thread_context() {
+    let opts = SpawnOptions::new().with_priority();
+    let (actor_ref, _handle) = spawn_with_options::<CounterActor>((), opts);
+
+    // Direct call from async context: would panic without the fast path
+    // if it went through the new-thread+new-runtime fallback in a way
+    // that tried to nest a runtime. The fast path makes it safe.
+    actor_ref
+        .blocking_tell_priority(PriorityMsg, DEFAULT_TIMEOUT)
+        .expect("blocking_tell_priority from async ctx should succeed");
+
+    let (_normal, priority) = actor_ref.ask(GetCounts).await.unwrap();
+    assert_eq!(priority, 1);
+
+    let _ = actor_ref.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocking_ask_priority_from_async_multi_thread_context() {
+    let opts = SpawnOptions::new().with_priority();
+    let (actor_ref, _handle) = spawn_with_options::<CounterActor>((), opts);
+
+    let reply: u32 = actor_ref
+        .blocking_ask_priority(PriorityPing(7), DEFAULT_TIMEOUT)
+        .expect("blocking_ask_priority from async ctx should succeed");
+    assert_eq!(reply, 8);
+
+    let _ = actor_ref.stop().await;
+}
+
+// On a current_thread runtime, blocking_*_priority cannot take the
+// block_in_place fast path and must fall back to spawning a dedicated
+// thread with a temporary runtime. These tests pin that behaviour.
+// Invoking from `tokio::task::spawn_blocking` lets the runtime's sole thread
+// yield and drive the actor while the blocking thread waits — calling
+// directly from async ctx (or via `std::thread::spawn(...).join()`) on a
+// current_thread runtime would deadlock the actor.
+
+#[tokio::test(flavor = "current_thread")]
+async fn blocking_tell_priority_on_current_thread_runtime() {
+    let opts = SpawnOptions::new().with_priority();
+    let (actor_ref, _handle) = spawn_with_options::<CounterActor>((), opts);
+
+    let actor_ref_clone = actor_ref.clone();
+    tokio::task::spawn_blocking(move || {
+        actor_ref_clone.blocking_tell_priority(PriorityMsg, DEFAULT_TIMEOUT)
+    })
+    .await
+    .expect("spawn_blocking task should not panic")
+    .expect("blocking_tell_priority on current_thread runtime should succeed");
+
+    let (_normal, priority) = actor_ref.ask(GetCounts).await.unwrap();
+    assert_eq!(priority, 1);
+
+    let _ = actor_ref.stop().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn blocking_ask_priority_on_current_thread_runtime() {
+    let opts = SpawnOptions::new().with_priority();
+    let (actor_ref, _handle) = spawn_with_options::<CounterActor>((), opts);
+
+    let actor_ref_clone = actor_ref.clone();
+    let reply: u32 = tokio::task::spawn_blocking(move || {
+        actor_ref_clone.blocking_ask_priority(PriorityPing(20), DEFAULT_TIMEOUT)
+    })
+    .await
+    .expect("spawn_blocking task should not panic")
+    .expect("blocking_ask_priority on current_thread runtime should succeed");
+    assert_eq!(reply, 21);
+
+    let _ = actor_ref.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blocking_priority_on_disabled_actor_returns_not_enabled() {
     let (actor_ref, _handle) = spawn::<CounterActor>(());

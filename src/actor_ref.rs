@@ -5,8 +5,25 @@ use crate::error::{Error, Result};
 use crate::Identity;
 use crate::{Actor, ControlSignal, MailboxMessage, MailboxSender, Message};
 use std::time::Duration;
+use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
+
+/// If the calling thread is currently inside a multi-thread Tokio runtime,
+/// returns a `Handle` to it. Otherwise (no runtime, or current_thread runtime)
+/// returns `None`.
+///
+/// The blocking_* APIs use this to take a near-zero-cost fast path: instead of
+/// spawning a new OS thread and a fresh single-thread runtime, they call
+/// `block_in_place` + `Handle::block_on` and reuse the caller's runtime.
+/// `block_in_place` requires a multi-thread runtime, so current_thread is
+/// excluded here and falls back to the original "new thread + new runtime"
+/// path.
+#[inline]
+fn current_multi_thread_handle() -> Option<Handle> {
+    let handle = Handle::try_current().ok()?;
+    (handle.runtime_flavor() == RuntimeFlavor::MultiThread).then_some(handle)
+}
 
 #[cfg(feature = "tracing")]
 use tracing::{debug, info};
@@ -621,47 +638,135 @@ impl<T: Actor> ActorRef<T> {
     /// Blocking equivalent of [`tell_priority`](Self::tell_priority). `timeout` is
     /// mandatory for the same reason as the async version.
     ///
-    /// Internally this spawns a short-lived single-thread Tokio runtime in a separate
-    /// thread, so it is safe to call from inside an existing runtime context as well as
-    /// from non-async threads.
+    /// # Execution paths
+    ///
+    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
+    ///   to reuse the caller's runtime. No new thread or runtime is created.
+    /// - **Priority slot empty, no runtime context**: a `try_send` fast path
+    ///   admits the message immediately without spawning a thread.
+    /// - **`current_thread` runtime, or priority slot full with no runtime**:
+    ///   spawns a short-lived dedicated thread with a temporary single-thread
+    ///   runtime to await admission with the timeout.
+    ///
+    /// # Worker-pool caveat
+    ///
+    /// On a multi-thread runtime the `block_in_place` path holds the calling
+    /// worker thread for the duration of the call. Avoid invoking from
+    /// runtimes with very few workers; prefer [`tell_priority`](Self::tell_priority)
+    /// directly from async code where possible.
     pub fn blocking_tell_priority<M>(&self, msg: M, timeout: Duration) -> Result<()>
     where
         M: Send + 'static,
         T: Message<M>,
     {
-        if self.priority_sender.is_none() {
+        let Some(priority_sender) = self.priority_sender.as_ref() else {
             return Err(Error::PriorityChannelNotEnabled {
                 identity: self.identity(),
             });
+        };
+
+        // Fast path: caller is inside a multi-thread runtime. Reuse it.
+        if let Some(handle) = current_multi_thread_handle() {
+            return tokio::task::block_in_place(|| {
+                handle.block_on(self.tell_priority(msg, timeout))
+            });
         }
 
-        let self_clone = self.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let envelope = MailboxMessage::Envelope {
+            payload: Box::new(msg),
+            reply_channel: None,
+            actor_ref: self.clone(),
+        };
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+        // Fast path: priority channel has capacity 1, but if it is empty we
+        // can finish without spawning a thread or building a runtime.
+        let envelope = match priority_sender.try_send(envelope) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::ActorStopped,
+                    "tell_priority",
+                );
+                return Err(Error::Send {
+                    identity: self.identity(),
+                    details: "Priority channel closed".to_string(),
+                });
+            }
+            Err(mpsc::error::TrySendError::Full(env)) => env,
+        };
+
+        let identity = self.identity();
+        let priority_sender = priority_sender.clone();
+
+        let join = std::thread::spawn(move || -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
-                .build();
-
-            let result = match rt {
-                Ok(runtime) => runtime.block_on(self_clone.tell_priority(msg, timeout)),
-                Err(e) => Err(Error::Send {
-                    identity: self_clone.identity(),
+                .build()
+                .map_err(|e| Error::Send {
+                    identity,
                     details: format!("Failed to create runtime: {}", e),
-                }),
-            };
+                })?;
 
-            let _ = tx.send(result);
+            runtime.block_on(async {
+                match tokio::time::timeout(timeout, priority_sender.send(envelope)).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(_)) => {
+                        crate::dead_letter::record::<M>(
+                            identity,
+                            crate::dead_letter::DeadLetterReason::ActorStopped,
+                            "tell_priority",
+                        );
+                        Err(Error::Send {
+                            identity,
+                            details: "Priority channel closed".to_string(),
+                        })
+                    }
+                    Err(_) => {
+                        crate::dead_letter::record::<M>(
+                            identity,
+                            crate::dead_letter::DeadLetterReason::Timeout,
+                            "tell_priority",
+                        );
+                        Err(Error::Timeout {
+                            identity,
+                            timeout,
+                            operation: "tell_priority".to_string(),
+                        })
+                    }
+                }
+            })
         });
 
-        rx.recv().map_err(|_| Error::Send {
-            identity: self.identity(),
-            details: "Priority blocking thread terminated unexpectedly".to_string(),
-        })?
+        join.join().unwrap_or_else(|_| {
+            Err(Error::Send {
+                identity: self.identity(),
+                details: "Priority blocking thread terminated unexpectedly".to_string(),
+            })
+        })
     }
 
     /// Blocking equivalent of [`ask_priority`](Self::ask_priority). `timeout` is
     /// mandatory for the same reason as the async version.
+    ///
+    /// # Execution paths
+    ///
+    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
+    ///   to reuse the caller's runtime. No new thread or runtime is created.
+    /// - **`current_thread` runtime, or no runtime context**: spawns a short-lived
+    ///   dedicated thread with a temporary single-thread runtime to await the
+    ///   reply with the timeout.
+    ///
+    /// Unlike the `tell` variants, `ask` cannot take a `try_send` fast path
+    /// because a sync `recv_timeout` for the reply channel is unavailable.
+    ///
+    /// # Worker-pool caveat
+    ///
+    /// On a multi-thread runtime the `block_in_place` path holds the calling
+    /// worker thread for the duration of the call. Avoid invoking from
+    /// runtimes with very few workers.
     pub fn blocking_ask_priority<M>(&self, msg: M, timeout: Duration) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -674,29 +779,33 @@ impl<T: Actor> ActorRef<T> {
             });
         }
 
+        // Fast path: caller is inside a multi-thread runtime. Reuse it.
+        if let Some(handle) = current_multi_thread_handle() {
+            return tokio::task::block_in_place(|| {
+                handle.block_on(self.ask_priority(msg, timeout))
+            });
+        }
+
         let self_clone = self.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+        let join = std::thread::spawn(move || -> Result<T::Reply> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
-                .build();
-
-            let result = match rt {
-                Ok(runtime) => runtime.block_on(self_clone.ask_priority(msg, timeout)),
-                Err(e) => Err(Error::Send {
+                .build()
+                .map_err(|e| Error::Send {
                     identity: self_clone.identity(),
                     details: format!("Failed to create runtime: {}", e),
-                }),
-            };
+                })?;
 
-            let _ = tx.send(result);
+            runtime.block_on(self_clone.ask_priority(msg, timeout))
         });
 
-        rx.recv().map_err(|_| Error::Send {
-            identity: self.identity(),
-            details: "Priority blocking thread terminated unexpectedly".to_string(),
-        })?
+        join.join().unwrap_or_else(|_| {
+            Err(Error::Send {
+                identity: self.identity(),
+                details: "Priority blocking thread terminated unexpectedly".to_string(),
+            })
+        })
     }
 
     /// Sends an immediate termination signal to the actor.
@@ -767,34 +876,39 @@ impl<T: Actor> ActorRef<T> {
 
     /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
     ///
-    /// This method can be used from any thread, including non-async contexts.
-    /// It does not require a Tokio runtime context.
+    /// This method can be used from any thread, including non-async contexts,
+    /// and from within `async fn` on a multi-thread Tokio runtime.
     ///
-    /// # Timeout Behavior
+    /// # Execution paths
     ///
-    /// - **`timeout: None`**: Uses Tokio's `blocking_send` directly. This is the most efficient
-    ///   option but will block indefinitely if the mailbox is full.
-    ///
-    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary Tokio runtime
-    ///   to handle the timeout. This approach has additional overhead but guarantees the call
-    ///   will return within the specified duration.
+    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
+    ///   to reuse the caller's runtime. No new thread or runtime is created.
+    /// - **`current_thread` runtime, or no runtime context, with `timeout: None`**:
+    ///   uses Tokio's `blocking_send` directly. Most efficient, but blocks
+    ///   indefinitely if the mailbox is full.
+    /// - **`current_thread` runtime, or no runtime context, with `timeout: Some(_)`
+    ///   and mailbox empty**: a `try_send` fast path completes without spawning
+    ///   a thread.
+    /// - **`current_thread` runtime, or no runtime context, with `timeout: Some(_)`
+    ///   and mailbox full**: spawns a short-lived dedicated thread with a
+    ///   temporary single-thread runtime to await admission with the timeout.
     ///
     /// # Performance Considerations
     ///
-    /// When using a timeout, this method incurs the following overhead:
+    /// The slow-path fallback (`current_thread` runtime or no runtime, with
+    /// timeout, mailbox full) incurs:
     /// - **Thread creation**: ~50-200μs depending on the platform
     /// - **Tokio runtime creation**: ~1-10μs for a single-threaded runtime
-    /// - **Channel synchronization**: Minimal overhead for result passing
     ///
-    /// For performance-critical code paths where timeout is not required, pass `None` to avoid
-    /// this overhead. The timeout variant is designed for scenarios where bounded waiting is
-    /// more important than raw performance.
+    /// All other execution paths above are sub-microsecond.
     ///
-    /// # Thread Safety
+    /// # Worker-pool caveat
     ///
-    /// This method is safe to call from within an existing Tokio runtime context because
-    /// the timeout implementation spawns a separate thread with its own runtime, avoiding
-    /// the "cannot start a runtime from within a runtime" panic.
+    /// On a multi-thread runtime the `block_in_place` path holds the calling
+    /// worker thread for the duration of the call. Avoid invoking from
+    /// runtimes with very few workers; prefer [`tell`](Self::tell) directly
+    /// from async code where possible.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_blocking_tell",
@@ -810,6 +924,21 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T: Message<M>,
     {
+        // Fast path: caller is inside a multi-thread runtime. Reuse it via
+        // `block_in_place` + `Handle::block_on` instead of spawning a new
+        // thread and runtime. Safe to call from async contexts on a
+        // multi-thread runtime.
+        if let Some(handle) = current_multi_thread_handle() {
+            return tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    match timeout {
+                        Some(t) => self.tell_with_timeout(msg, t).await,
+                        None => self.tell(msg).await,
+                    }
+                })
+            });
+        }
+
         match timeout {
             Some(timeout_duration) => self.blocking_tell_with_timeout_impl(msg, timeout_duration),
             None => self.blocking_tell_no_timeout(msg),
@@ -858,77 +987,117 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T: Message<M>,
     {
-        let self_clone = self.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let envelope = MailboxMessage::Envelope {
+            payload: Box::new(msg),
+            reply_channel: None,
+            actor_ref: self.clone(),
+        };
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+        // Fast path: if the mailbox has room, finish without spawning a
+        // thread or building a runtime. Recovers the message back via
+        // `TrySendError::Full(envelope)` and falls through to the slow path
+        // only when the mailbox is actually full.
+        let envelope = match self.sender.try_send(envelope) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::ActorStopped,
+                    "blocking_tell",
+                );
+                return Err(Error::Send {
+                    identity: self.identity(),
+                    details: "Mailbox channel closed".to_string(),
+                });
+            }
+            Err(mpsc::error::TrySendError::Full(env)) => env,
+        };
+
+        let identity = self.identity();
+        let sender = self.sender.clone();
+
+        let join = std::thread::spawn(move || -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
-                .build();
-
-            let result = match rt {
-                Ok(runtime) => runtime.block_on(async {
-                    tokio::time::timeout(timeout, self_clone.tell(msg))
-                        .await
-                        .map_err(|_| {
-                            crate::dead_letter::record::<M>(
-                                self_clone.identity(),
-                                crate::dead_letter::DeadLetterReason::Timeout,
-                                "blocking_tell",
-                            );
-                            Error::Timeout {
-                                identity: self_clone.identity(),
-                                timeout,
-                                operation: "blocking_tell".to_string(),
-                            }
-                        })?
-                }),
-                Err(e) => Err(Error::Send {
-                    identity: self_clone.identity(),
+                .build()
+                .map_err(|e| Error::Send {
+                    identity,
                     details: format!("Failed to create runtime: {}", e),
-                }),
-            };
+                })?;
 
-            let _ = tx.send(result);
+            runtime.block_on(async {
+                match tokio::time::timeout(timeout, sender.send(envelope)).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(_)) => {
+                        crate::dead_letter::record::<M>(
+                            identity,
+                            crate::dead_letter::DeadLetterReason::ActorStopped,
+                            "blocking_tell",
+                        );
+                        Err(Error::Send {
+                            identity,
+                            details: "Mailbox channel closed".to_string(),
+                        })
+                    }
+                    Err(_) => {
+                        crate::dead_letter::record::<M>(
+                            identity,
+                            crate::dead_letter::DeadLetterReason::Timeout,
+                            "blocking_tell",
+                        );
+                        Err(Error::Timeout {
+                            identity,
+                            timeout,
+                            operation: "blocking_tell".to_string(),
+                        })
+                    }
+                }
+            })
         });
 
-        rx.recv().map_err(|_| Error::Send {
-            identity: self.identity(),
-            details: "Timeout thread terminated unexpectedly".to_string(),
-        })?
+        join.join().unwrap_or_else(|_| {
+            Err(Error::Send {
+                identity: self.identity(),
+                details: "Timeout thread terminated unexpectedly".to_string(),
+            })
+        })
     }
 
     /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
     ///
-    /// This method can be used from any thread, including non-async contexts.
-    /// It does not require a Tokio runtime context.
+    /// This method can be used from any thread, including non-async contexts,
+    /// and from within `async fn` on a multi-thread Tokio runtime.
     ///
-    /// # Timeout Behavior
+    /// # Execution paths
     ///
-    /// - **`timeout: None`**: Uses Tokio's `blocking_send` and `blocking_recv` directly.
-    ///   This is the most efficient option but will block indefinitely if the actor
-    ///   never responds.
-    ///
-    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary Tokio runtime
-    ///   to handle the timeout. This approach has additional overhead but guarantees the call
-    ///   will return within the specified duration.
+    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
+    ///   to reuse the caller's runtime. No new thread or runtime is created.
+    /// - **`current_thread` runtime, or no runtime context, with `timeout: None`**:
+    ///   uses Tokio's `blocking_send` and `blocking_recv` directly. Most
+    ///   efficient, but blocks indefinitely if the actor never responds.
+    /// - **`current_thread` runtime, or no runtime context, with `timeout: Some(_)`**:
+    ///   spawns a short-lived dedicated thread with a temporary single-thread
+    ///   runtime to await the reply with the timeout. Unlike the `tell`
+    ///   variants, no `try_send` fast path is possible because a sync
+    ///   `recv_timeout` for the reply channel is unavailable.
     ///
     /// # Performance Considerations
     ///
-    /// When using a timeout, this method incurs the following overhead:
+    /// The slow-path fallback (`current_thread` runtime or no runtime, with
+    /// timeout) incurs:
     /// - **Thread creation**: ~50-200μs depending on the platform
     /// - **Tokio runtime creation**: ~1-10μs for a single-threaded runtime
-    /// - **Channel synchronization**: Minimal overhead for result passing
     ///
-    /// For performance-critical code paths where timeout is not required, pass `None` to avoid
-    /// this overhead. The timeout variant is designed for scenarios where bounded waiting is
-    /// more important than raw performance.
+    /// All other execution paths above are sub-microsecond plus the actor's
+    /// own reply latency.
     ///
-    /// # Thread Safety
+    /// # Worker-pool caveat
     ///
-    /// This method is safe to call from within an existing Tokio runtime context because
-    /// the timeout implementation spawns a separate thread with its own runtime, avoiding
-    /// the "cannot start a runtime from within a runtime" panic.
+    /// On a multi-thread runtime the `block_in_place` path holds the calling
+    /// worker thread for the duration of the call. Avoid invoking from
+    /// runtimes with very few workers; prefer [`ask`](Self::ask) directly
+    /// from async code where possible.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_blocking_ask",
@@ -946,6 +1115,21 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
+        // Fast path: caller is inside a multi-thread runtime. Reuse it via
+        // `block_in_place` + `Handle::block_on` instead of spawning a new
+        // thread and runtime. Safe to call from async contexts on a
+        // multi-thread runtime.
+        if let Some(handle) = current_multi_thread_handle() {
+            return tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    match timeout {
+                        Some(t) => self.ask_with_timeout(msg, t).await,
+                        None => self.ask(msg).await,
+                    }
+                })
+            });
+        }
+
         match timeout {
             Some(timeout_duration) => self.blocking_ask_with_timeout_impl(msg, timeout_duration),
             None => self.blocking_ask_no_timeout(msg),
@@ -1032,43 +1216,40 @@ impl<T: Actor> ActorRef<T> {
         T::Reply: Send + 'static,
     {
         let self_clone = self.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
+        let join = std::thread::spawn(move || -> Result<T::Reply> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
-                .build();
-
-            let result = match rt {
-                Ok(runtime) => runtime.block_on(async {
-                    tokio::time::timeout(timeout, self_clone.ask(msg))
-                        .await
-                        .map_err(|_| {
-                            crate::dead_letter::record::<M>(
-                                self_clone.identity(),
-                                crate::dead_letter::DeadLetterReason::Timeout,
-                                "blocking_ask",
-                            );
-                            Error::Timeout {
-                                identity: self_clone.identity(),
-                                timeout,
-                                operation: "blocking_ask".to_string(),
-                            }
-                        })?
-                }),
-                Err(e) => Err(Error::Send {
+                .build()
+                .map_err(|e| Error::Send {
                     identity: self_clone.identity(),
                     details: format!("Failed to create runtime: {}", e),
-                }),
-            };
+                })?;
 
-            let _ = tx.send(result);
+            runtime.block_on(async {
+                tokio::time::timeout(timeout, self_clone.ask(msg))
+                    .await
+                    .map_err(|_| {
+                        crate::dead_letter::record::<M>(
+                            self_clone.identity(),
+                            crate::dead_letter::DeadLetterReason::Timeout,
+                            "blocking_ask",
+                        );
+                        Error::Timeout {
+                            identity: self_clone.identity(),
+                            timeout,
+                            operation: "blocking_ask".to_string(),
+                        }
+                    })?
+            })
         });
 
-        rx.recv().map_err(|_| Error::Send {
-            identity: self.identity(),
-            details: "Timeout thread terminated unexpectedly".to_string(),
-        })?
+        join.join().unwrap_or_else(|_| {
+            Err(Error::Send {
+                identity: self.identity(),
+                details: "Timeout thread terminated unexpectedly".to_string(),
+            })
+        })
     }
 
     /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
