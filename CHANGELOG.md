@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster `blocking_*` APIs from `async fn` contexts.** When called on a
+  multi-thread Tokio runtime (e.g. from an `async fn → sync fn → blocking_*`
+  bridge or from `spawn_blocking`), `blocking_tell`, `blocking_ask`,
+  `blocking_tell_priority`, and `blocking_ask_priority` now reuse the
+  caller's runtime via `tokio::task::block_in_place` +
+  `Handle::block_on` instead of spawning a fresh thread and runtime. Cost
+  drops from ~tens of μs to sub-μs on the most common call shape.
+- **`try_send` fast path for `tell` variants on the fallback.** When no
+  Tokio runtime is active (or it is `current_thread`) and the mailbox /
+  priority slot has room, `blocking_tell` with a timeout and
+  `blocking_tell_priority` now complete without spawning a thread or
+  building a runtime. `ask` variants still take the slow path because a
+  sync `recv_timeout` for the reply channel is unavailable.
+- Mailbox-closed dead-letter records emitted by `blocking_tell` with a
+  timeout now use the operation label `"blocking_tell"` (previously
+  `"tell"` when the slow path delegated through the async `tell`). The
+  timeout case and the no-timeout case were already labeled
+  `"blocking_tell"`; this aligns the remaining edge case.
+
 ## [0.15.0] - 2026-05-03
 
 ### Added

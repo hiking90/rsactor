@@ -388,3 +388,108 @@ async fn test_blocking_tell_timeout_on_stopped_actor() {
         "blocking_tell on stopped actor should fail"
     );
 }
+
+// The following tests cover the `async fn -> sync fn -> blocking_*` bridge.
+// On a multi-thread runtime the blocking_* APIs detect the current runtime
+// and use `block_in_place` + `Handle::block_on` to reuse it. Before that
+// change, calling `blocking_tell(_, None)` directly from an async context
+// would panic because tokio's `blocking_send` rejects async contexts.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocking_tell_from_async_multi_thread_context() {
+    let (actor_ref, handle) = spawn::<RuntimelessTestActor>(0);
+
+    // No timeout: this would panic on the old code path because it called
+    // `blocking_send` directly. The block_in_place fast path makes it safe.
+    actor_ref
+        .blocking_tell(IncrementMsg(7), None)
+        .expect("blocking_tell (no timeout) from async ctx should succeed");
+
+    // With timeout: takes the same fast path; verify it still works.
+    actor_ref
+        .blocking_tell(IncrementMsg(3), Some(Duration::from_secs(5)))
+        .expect("blocking_tell (timeout) from async ctx should succeed");
+
+    let counter = actor_ref
+        .ask(GetCounterMsg)
+        .await
+        .expect("Failed to get counter");
+    assert_eq!(counter, 10);
+
+    actor_ref.stop().await.expect("Failed to stop actor");
+    handle.await.expect("Actor task failed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_blocking_ask_from_async_multi_thread_context() {
+    let (actor_ref, handle) = spawn::<RuntimelessTestActor>(42);
+
+    // No timeout: previously would panic from async ctx. Fast path makes it safe.
+    let val = actor_ref
+        .blocking_ask(GetCounterMsg, None)
+        .expect("blocking_ask (no timeout) from async ctx should succeed");
+    assert_eq!(val, 42);
+
+    let val = actor_ref
+        .blocking_ask(GetCounterMsg, Some(Duration::from_secs(5)))
+        .expect("blocking_ask (timeout) from async ctx should succeed");
+    assert_eq!(val, 42);
+
+    actor_ref.stop().await.expect("Failed to stop actor");
+    handle.await.expect("Actor task failed");
+}
+
+// On a current_thread runtime, the block_in_place fast path is NOT eligible
+// (block_in_place requires multi_thread). The blocking_* APIs must therefore
+// fall through to the spawn-thread + new-runtime path. These tests pin that
+// behaviour by invoking from `tokio::task::spawn_blocking` so that the test
+// task yields and the runtime's sole thread is free to drive the actor.
+// Calling the blocking_* APIs directly from `async fn` (or via a synchronous
+// `std::thread::spawn(...).join()`) on a current_thread runtime would
+// deadlock — the single runtime thread would be parked while the actor
+// needed it to make progress. This is a fundamental property of
+// current_thread runtimes, not a regression.
+// `timeout: None` is omitted here because the fallback uses `blocking_send`
+// directly which still panics in async context.
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_blocking_tell_with_timeout_on_current_thread_runtime() {
+    let (actor_ref, handle) = spawn::<RuntimelessTestActor>(0);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let actor_ref_clone = actor_ref.clone();
+    tokio::task::spawn_blocking(move || {
+        actor_ref_clone.blocking_tell(IncrementMsg(11), Some(Duration::from_secs(5)))
+    })
+    .await
+    .expect("spawn_blocking task should not panic")
+    .expect("blocking_tell with timeout on current_thread runtime should succeed");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let counter = actor_ref
+        .ask(GetCounterMsg)
+        .await
+        .expect("Failed to get counter");
+    assert_eq!(counter, 11);
+
+    actor_ref.stop().await.expect("Failed to stop actor");
+    handle.await.expect("Actor task failed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_blocking_ask_with_timeout_on_current_thread_runtime() {
+    let (actor_ref, handle) = spawn::<RuntimelessTestActor>(13);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let actor_ref_clone = actor_ref.clone();
+    let val = tokio::task::spawn_blocking(move || {
+        actor_ref_clone.blocking_ask(GetCounterMsg, Some(Duration::from_secs(5)))
+    })
+    .await
+    .expect("spawn_blocking task should not panic")
+    .expect("blocking_ask with timeout on current_thread runtime should succeed");
+    assert_eq!(val, 13);
+
+    actor_ref.stop().await.expect("Failed to stop actor");
+    handle.await.expect("Actor task failed");
+}
