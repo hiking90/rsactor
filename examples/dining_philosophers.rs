@@ -66,6 +66,7 @@ struct Philosopher {
 impl Actor for Philosopher {
     type Args = (usize, String, ActorRef<Table>);
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let (id, name, table_ref) = args;
@@ -338,6 +339,7 @@ struct Table {
 impl Actor for Table {
     type Args = usize;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         println!("Table actor is ready with {args} forks.");

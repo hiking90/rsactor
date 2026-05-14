@@ -13,14 +13,14 @@ use std::fmt::Debug;
 pub enum FailurePhase {
     /// Actor failed during the [`on_start`](crate::Actor::on_start) lifecycle hook.
     OnStart,
-    /// Actor failed during execution in the [`on_run`](crate::Actor::on_run) lifecycle hook.
-    OnRun,
+    /// Actor failed during execution in the [`on_idle`](crate::Actor::on_idle) lifecycle hook.
+    OnIdle,
     /// Actor failed during the [`on_stop`](crate::Actor::on_stop) lifecycle hook.
     OnStop,
-    /// Actor failed during [`on_run`](crate::Actor::on_run), and then
+    /// Actor failed during [`on_idle`](crate::Actor::on_idle), and then
     /// [`on_stop`](crate::Actor::on_stop) also failed during cleanup.
-    /// The primary error is from `on_run`; the `on_stop` error is logged.
-    OnRunThenOnStop,
+    /// The primary error is from `on_idle`; the `on_stop` error is logged.
+    OnIdleThenOnStop,
 }
 
 /// Implements Display for FailurePhase to provide human-readable error messages.
@@ -31,9 +31,9 @@ impl std::fmt::Display for FailurePhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FailurePhase::OnStart => write!(f, "OnStart"),
-            FailurePhase::OnRun => write!(f, "OnRun"),
+            FailurePhase::OnIdle => write!(f, "OnIdle"),
             FailurePhase::OnStop => write!(f, "OnStop"),
-            FailurePhase::OnRunThenOnStop => write!(f, "OnRunThenOnStop"),
+            FailurePhase::OnIdleThenOnStop => write!(f, "OnIdleThenOnStop"),
         }
     }
 }
@@ -61,6 +61,7 @@ impl std::fmt::Display for FailurePhase {
 /// # impl Actor for MyActor {
 /// #     type Args = ();
 /// #     type Error = anyhow::Error;
+/// #     type IdleEvent = ();
 /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self> { Ok(MyActor) }
 /// # }
 /// # async fn example() -> Result<()> {
@@ -88,6 +89,7 @@ impl std::fmt::Display for FailurePhase {
 /// # impl Actor for MyActor {
 /// #     type Args = ();
 /// #     type Error = anyhow::Error;
+/// #     type IdleEvent = ();
 /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self> { Ok(MyActor) }
 /// # }
 /// # async fn restart_actor() -> Result<(ActorRef<MyActor>, tokio::task::JoinHandle<ActorResult<MyActor>>)> {
@@ -225,27 +227,27 @@ impl<T: Actor> ActorResult<T> {
     /// Returns `true` if the actor failed during runtime.
     ///
     /// This indicates that the actor started successfully but encountered an error
-    /// during its normal operation in the [`on_run`](crate::Actor::on_run) lifecycle phase.
+    /// during its normal operation in the [`on_idle`](crate::Actor::on_idle) lifecycle phase.
     /// Also returns `true` when `on_stop` additionally failed during cleanup
-    /// ([`FailurePhase::OnRunThenOnStop`]).
+    /// ([`FailurePhase::OnIdleThenOnStop`]).
     pub fn is_runtime_failed(&self) -> bool {
         matches!(
             self,
             ActorResult::Failed {
-                phase: FailurePhase::OnRun | FailurePhase::OnRunThenOnStop,
+                phase: FailurePhase::OnIdle | FailurePhase::OnIdleThenOnStop,
                 ..
             }
         )
     }
 
-    /// Returns `true` if `on_stop` also failed after an `on_run` error.
+    /// Returns `true` if `on_stop` also failed after an `on_idle` error.
     ///
-    /// The primary error is from `on_run`; the `on_stop` error is logged separately.
+    /// The primary error is from `on_idle`; the `on_stop` error is logged separately.
     pub fn is_cleanup_failed(&self) -> bool {
         matches!(
             self,
             ActorResult::Failed {
-                phase: FailurePhase::OnRunThenOnStop,
+                phase: FailurePhase::OnIdleThenOnStop,
                 ..
             }
         )
@@ -281,6 +283,7 @@ impl<T: Actor> ActorResult<T> {
     /// # impl Actor for MyActor {
     /// #     type Args = ();
     /// #     type Error = anyhow::Error;
+    /// #     type IdleEvent = ();
     /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> { Ok(MyActor) }
     /// # }
     /// # fn example(result: ActorResult<MyActor>) {
@@ -312,6 +315,7 @@ impl<T: Actor> ActorResult<T> {
     /// # impl Actor for MyActor {
     /// #     type Args = ();
     /// #     type Error = anyhow::Error;
+    /// #     type IdleEvent = ();
     /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
     /// #         Ok(MyActor { state: "ready".to_string() })
     /// #     }
@@ -382,6 +386,7 @@ impl<T: Actor> ActorResult<T> {
     /// # impl Actor for MyActor {
     /// #     type Args = ();
     /// #     type Error = anyhow::Error;
+    /// #     type IdleEvent = ();
     /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> { Ok(MyActor) }
     /// # }
     /// # fn example(result: ActorResult<MyActor>) -> Result<MyActor, anyhow::Error> {

@@ -8,6 +8,7 @@ struct SimpleActor {
 
 impl Actor for SimpleActor {
     type Error = String;
+    type IdleEvent = ();
     type Args = i32;
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
@@ -41,6 +42,7 @@ struct GenericActor<T: Send + std::fmt::Debug + Clone + 'static> {
 
 impl<T: Send + std::fmt::Debug + Clone + 'static> Actor for GenericActor<T> {
     type Error = String;
+    type IdleEvent = ();
     type Args = ();
 
     async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {

@@ -30,6 +30,7 @@ struct DropTestArgs {
 impl Actor for DropTestActor {
     type Args = DropTestArgs;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         debug!("DropTestActor (id: {}) started.", actor_ref.identity());

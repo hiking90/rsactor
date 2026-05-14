@@ -9,8 +9,10 @@
 //! 3. Send data from the background task back to the actor using actor messages
 
 use anyhow::Result;
+use futures::stream::StreamExt;
 use rsactor::{message_handlers, Actor, ActorRef, ActorWeak};
 use std::time::Duration;
+use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, info};
 
 // Define message types for our actor
@@ -36,7 +38,15 @@ enum TaskCommand {
 /// Message to send a command to the background task
 struct SendTaskCommand(TaskCommand);
 
-/// Define our actor that will use await_next_event/on_event pattern
+/// Idle events delivered by the periodic stream subscribed in `on_start`.
+#[derive(Debug, Clone, Copy)]
+struct GenerateData;
+
+/// Define our actor — driven by a subscribed `IntervalStream` rather than by
+/// open-coded timer state inside `on_run`. The interval can be reconfigured at
+/// runtime via [`SendTaskCommand`]; the previous stream is replaced by simply
+/// subscribing a new one and letting the old one complete (here it never
+/// completes, so both keep firing — see the handler comment).
 struct DataProcessorActor {
     /// Current processing factor (multiplier for incoming values)
     factor: f64,
@@ -44,15 +54,12 @@ struct DataProcessorActor {
     latest_value: Option<f64>,
     /// Latest timestamp when data was received
     latest_timestamp: Option<std::time::Instant>,
-    /// Interval for generating data
-    interval: tokio::time::Interval,
-    /// Whether the actor is running
-    running: bool,
 }
 
 impl Actor for DataProcessorActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = GenerateData;
 
     async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!(
@@ -60,38 +67,33 @@ impl Actor for DataProcessorActor {
             actor_ref.identity()
         );
 
-        let mut actor = Self {
+        actor_ref.subscribe_idle(
+            IntervalStream::new(tokio::time::interval(Duration::from_millis(500)))
+                .map(|_| GenerateData),
+        )?;
+
+        info!("DataProcessorActor started with event-based processing");
+        Ok(Self {
             factor: 1.0,
             latest_value: None,
             latest_timestamp: None,
-            interval: tokio::time::interval(Duration::from_millis(500)),
-            running: true,
-        };
-
-        // Reset the interval to ensure it starts ticking from now
-        actor.interval = tokio::time::interval(Duration::from_millis(500));
-        actor.running = true;
-
-        info!("DataProcessorActor started with event-based processing");
-        Ok(actor)
+        })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        self.interval.tick().await;
-
+    async fn on_idle(
+        &mut self,
+        _event: GenerateData,
+        _actor_ref: &ActorWeak<Self>,
+    ) -> Result<(), Self::Error> {
         // Generate a random value (simulating sensor data or similar)
         let raw_value = rand::random::<f64>() * 100.0;
-
-        // Process the data directly (no need to send to self via message)
         let processed_value = raw_value * self.factor;
 
-        // Update our state
         self.latest_value = Some(processed_value);
         self.latest_timestamp = Some(std::time::Instant::now());
 
         debug!("Generated data: original={raw_value:.2}, processed={processed_value:.2}");
-
-        Ok(true) // Continue calling on_run
+        Ok(())
     }
 }
 
@@ -139,13 +141,25 @@ impl DataProcessorActor {
     async fn handle_send_task_command(
         &mut self,
         msg: SendTaskCommand,
-        _actor_ref: &ActorRef<Self>,
+        actor_ref: &ActorRef<Self>,
     ) -> bool {
         match msg.0 {
             TaskCommand::ChangeInterval(new_interval) => {
-                self.interval = tokio::time::interval(new_interval);
-                info!("Successfully changed interval");
-                true
+                // Subscribe an additional IntervalStream at the new cadence.
+                // The original 500ms stream continues to fire — this is the
+                // intentional contract of `subscribe_idle` (additive, not
+                // replacement). Use a per-stream cancellation token, a finite
+                // `take_until`, or a fused-stream pattern if you need
+                // replacement semantics.
+                let result = actor_ref.subscribe_idle(
+                    IntervalStream::new(tokio::time::interval(new_interval)).map(|_| GenerateData),
+                );
+                if result.is_ok() {
+                    info!("Subscribed additional generator at {:?}", new_interval);
+                    true
+                } else {
+                    false
+                }
             }
         }
     }

@@ -10,11 +10,13 @@
 //! - Tests for supervision patterns
 
 use anyhow::Result;
+use futures::stream::StreamExt;
 use rsactor::{spawn, Actor, ActorRef, ActorResult, ActorWeak, Message};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
+use tokio_stream::wrappers::IntervalStream;
 use tracing::info;
 
 // Test messages
@@ -38,26 +40,28 @@ struct PanicTestActor {
 }
 
 impl Actor for PanicTestActor {
-    type Args = Option<u32>; // Optional panic threshold for on_run
+    type Args = Option<u32>; // Optional panic threshold for on_idle
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("PanicTestActor started with ID: {}", actor_ref.identity());
+        actor_ref.subscribe_idle(
+            IntervalStream::new(tokio::time::interval(Duration::from_millis(10))).map(|_| ()),
+        )?;
         Ok(PanicTestActor {
             counter: 0,
             panic_threshold: args,
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+    async fn on_idle(&mut self, _: (), _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         if let Some(threshold) = self.panic_threshold {
             if self.counter >= threshold {
-                panic!("Counter reached threshold {threshold} - intentional panic in on_run!");
+                panic!("Counter reached threshold {threshold} - intentional panic in on_idle!");
             }
         }
-
-        sleep(Duration::from_millis(10)).await;
-        Ok(true)
+        Ok(())
     }
 
     async fn on_stop(
@@ -393,6 +397,7 @@ mod advanced_tests {
     impl Actor for StartupPanicActor {
         type Args = bool; // true to panic during on_start
         type Error = anyhow::Error;
+        type IdleEvent = ();
 
         async fn on_start(
             should_panic: Self::Args,
@@ -439,6 +444,7 @@ mod advanced_tests {
     impl Actor for StopPanicActor {
         type Args = bool; // true to panic during on_stop
         type Error = anyhow::Error;
+        type IdleEvent = ();
 
         async fn on_start(
             panic_on_stop: Self::Args,
@@ -496,6 +502,7 @@ mod advanced_tests {
     impl Actor for KillTestActor {
         type Args = bool;
         type Error = anyhow::Error;
+        type IdleEvent = ();
 
         async fn on_start(
             should_panic_on_stop: Self::Args,
@@ -703,6 +710,7 @@ mod integration_tests {
         impl Actor for ServiceActor {
             type Args = ();
             type Error = anyhow::Error;
+            type IdleEvent = ();
 
             async fn on_start(
                 _args: Self::Args,
@@ -782,6 +790,7 @@ mod integration_tests {
         impl Actor for SimpleActor {
             type Args = u32;
             type Error = anyhow::Error;
+            type IdleEvent = ();
 
             async fn on_start(
                 id: Self::Args,

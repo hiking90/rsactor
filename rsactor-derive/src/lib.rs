@@ -53,6 +53,7 @@
 //! impl Actor for MyActor {
 //!     type Args = Self;
 //!     type Error = Infallible;
+//!     type IdleEvent = ();
 //!
 //!     async fn on_start(
 //!         args: Self::Args,
@@ -164,6 +165,7 @@ use syn::{
 /// impl rsactor::Actor for MyActor {
 ///     type Args = Self;
 ///     type Error = std::convert::Infallible;
+///     type IdleEvent = ();
 ///
 ///     async fn on_start(
 ///         args: Self::Args,
@@ -204,6 +206,7 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
                 impl #impl_generics rsactor::Actor for #name #ty_generics #where_clause {
                     type Args = Self;
                     type Error = std::convert::Infallible;
+                    type IdleEvent = ();
 
                     async fn on_start(
                         args: Self::Args,

@@ -1,9 +1,11 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::actor::IdleEventStream;
 use crate::error::{Error, Result};
 use crate::Identity;
 use crate::{Actor, ControlSignal, MailboxMessage, MailboxSender, Message};
+use futures::stream::{Stream, StreamExt};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
@@ -76,6 +78,10 @@ pub struct ActorRef<T: Actor> {
     pub(crate) priority_sender: Option<MailboxSender<T>>,
     /// Channel for sending control signals (e.g., terminate) to the actor
     pub(crate) terminate_sender: mpsc::Sender<ControlSignal>,
+    /// Channel for registering new idle-event streams with the actor's runtime.
+    /// Each subscribed stream is merged into the runtime's `SelectAll` and its
+    /// events drive [`Actor::on_idle`](crate::Actor::on_idle).
+    pub(crate) idle_subscribe_sender: mpsc::Sender<IdleEventStream<T>>,
     /// Per-actor metrics collector (when metrics feature is enabled)
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Arc<MetricsCollector>,
@@ -88,6 +94,7 @@ impl<T: Actor> ActorRef<T> {
         sender: MailboxSender<T>,
         priority_sender: Option<MailboxSender<T>>,
         terminate_sender: mpsc::Sender<ControlSignal>,
+        idle_subscribe_sender: mpsc::Sender<IdleEventStream<T>>,
         #[cfg(feature = "metrics")] metrics: Arc<MetricsCollector>,
     ) -> Self {
         ActorRef {
@@ -95,6 +102,7 @@ impl<T: Actor> ActorRef<T> {
             sender,
             priority_sender,
             terminate_sender,
+            idle_subscribe_sender,
             #[cfg(feature = "metrics")]
             metrics,
         }
@@ -152,9 +160,77 @@ impl<T: Actor> ActorRef<T> {
             sender: this.sender.downgrade(),
             priority_sender: this.priority_sender.as_ref().map(|s| s.downgrade()),
             terminate_sender: this.terminate_sender.downgrade(),
+            idle_subscribe_sender: this.idle_subscribe_sender.downgrade(),
             #[cfg(feature = "metrics")]
             metrics: this.metrics.clone(),
         }
+    }
+
+    /// Registers a [`Stream`] of idle events to be merged into the actor's
+    /// runtime. Each event yielded by the stream is dispatched to
+    /// [`Actor::on_idle`](crate::Actor::on_idle).
+    ///
+    /// Streams are owned by the runtime — their internal state (timer schedules,
+    /// channel buffers, etc.) survives across runtime-loop iterations, so a
+    /// stream like [`tokio_stream::wrappers::IntervalStream`] fires reliably even
+    /// when the surrounding `select!` arm is cancelled by a higher-priority
+    /// branch. This is the chief reason to prefer subscriptions over open-coded
+    /// idle loops.
+    ///
+    /// Subscription can be called any number of times, from any context with
+    /// access to an [`ActorRef`] — typically from [`Actor::on_start`] for the
+    /// initial sources, and from message handlers to attach additional sources
+    /// dynamically.
+    ///
+    /// This method is synchronous and never awaits. It uses [`try_send`] under
+    /// the hood so that subscriptions inside `on_start` cannot deadlock the
+    /// runtime: at that moment the lifecycle is still awaiting `on_start`, so
+    /// the subscribe channel's receiver is not yet being polled and any
+    /// `.await` would block forever. The bounded buffer (capacity
+    /// [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`](crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY))
+    /// absorbs bursts; an explicit `Err` is returned if it is exceeded.
+    ///
+    /// [`try_send`]: tokio::sync::mpsc::Sender::try_send
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Send`] when:
+    /// - The actor is no longer alive (channel closed); or
+    /// - The subscribe buffer is full. In that case, batch your subscriptions
+    ///   across separate handler invocations or raise
+    ///   [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`](crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Inside `on_start`:
+    /// actor_ref.subscribe_idle(
+    ///     tokio_stream::wrappers::IntervalStream::new(
+    ///         tokio::time::interval(std::time::Duration::from_secs(1))
+    ///     ).map(|_| Tick)
+    /// )?;
+    /// ```
+    pub fn subscribe_idle<S>(&self, stream: S) -> Result<()>
+    where
+        S: Stream<Item = T::IdleEvent> + Send + 'static,
+    {
+        let boxed: IdleEventStream<T> = stream.boxed();
+        self.idle_subscribe_sender
+            .try_send(boxed)
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => Error::Send {
+                    identity: self.identity(),
+                    details: format!(
+                        "Idle subscribe channel full (capacity {}); batch subscriptions across \
+                         handler invocations or raise IDLE_SUBSCRIBE_CHANNEL_CAPACITY",
+                        crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY
+                    ),
+                },
+                mpsc::error::TrySendError::Closed(_) => Error::Send {
+                    identity: self.identity(),
+                    details: "Idle subscribe channel closed (actor is no longer alive)".to_string(),
+                },
+            })
     }
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget).
@@ -1338,6 +1414,7 @@ impl<T: Actor> Clone for ActorRef<T> {
             sender: self.sender.clone(),
             priority_sender: self.priority_sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
+            idle_subscribe_sender: self.idle_subscribe_sender.clone(),
             #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),
         }
@@ -1381,6 +1458,8 @@ pub struct ActorWeak<T: Actor> {
     priority_sender: Option<tokio::sync::mpsc::WeakSender<MailboxMessage<T>>>,
     /// Weak reference to the actor's terminate signal sender
     terminate_sender: tokio::sync::mpsc::WeakSender<ControlSignal>,
+    /// Weak reference to the actor's idle-subscribe channel sender
+    idle_subscribe_sender: tokio::sync::mpsc::WeakSender<IdleEventStream<T>>,
     /// Strong reference to metrics (survives actor drop for post-mortem analysis)
     #[cfg(feature = "metrics")]
     metrics: Arc<MetricsCollector>,
@@ -1398,18 +1477,26 @@ impl<T: Actor> ActorWeak<T> {
     /// [`has_priority_channel()`](ActorRef::has_priority_channel) returning `false`, and
     /// priority calls will fail with
     /// [`Error::PriorityChannelNotEnabled`](crate::Error::PriorityChannelNotEnabled).
+    ///
+    /// The mailbox, terminate, and idle-subscribe channels are all *primary* channels and
+    /// must all upgrade for `upgrade()` to succeed. In practice their strong-sender counts
+    /// move in lockstep — every [`ActorRef`] clone owns one of each — so they live and die
+    /// together; the joint check is defensive rather than restrictive.
     #[inline]
     pub fn upgrade(&self) -> Option<ActorRef<T>> {
-        // Try to upgrade both the mailbox sender and terminate sender
+        // Try to upgrade the three primary channel senders (mailbox, terminate,
+        // idle-subscribe). The priority channel, when present, is best-effort.
         let sender = self.sender.upgrade()?;
         let terminate_sender = self.terminate_sender.upgrade()?;
         let priority_sender = self.priority_sender.as_ref().and_then(|s| s.upgrade());
+        let idle_subscribe_sender = self.idle_subscribe_sender.upgrade()?;
 
         Some(ActorRef {
             id: self.id,
             sender,
             priority_sender,
             terminate_sender,
+            idle_subscribe_sender,
             #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),
         })
@@ -1445,6 +1532,7 @@ impl<T: Actor> Clone for ActorWeak<T> {
             sender: self.sender.clone(),
             priority_sender: self.priority_sender.clone(),
             terminate_sender: self.terminate_sender.clone(),
+            idle_subscribe_sender: self.idle_subscribe_sender.clone(),
             #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),
         }

@@ -15,6 +15,7 @@ struct GenericActor<T: Send + Debug + Clone + 'static> {
 // ---- Actor Trait Implementation ----
 impl<T: Send + Debug + Clone + 'static> Actor for GenericActor<T> {
     type Args = Option<T>; // Initial value for data
+    type IdleEvent = ();
     type Error = anyhow::Error;
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
@@ -325,6 +326,7 @@ struct BiGenericActor<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone
 impl<K: Send + Debug + Clone + 'static, V: Send + Debug + Clone + 'static> Actor
     for BiGenericActor<K, V>
 {
+    type IdleEvent = ();
     type Args = (Option<K>, Option<V>);
     type Error = anyhow::Error;
 
@@ -413,6 +415,7 @@ where
 {
     type Args = (U, W);
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(TriGenericActor {
@@ -565,6 +568,7 @@ struct SerializableActor<T: Serializable> {
 impl<T: Serializable> Actor for SerializableActor<T> {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(SerializableActor { data: None })

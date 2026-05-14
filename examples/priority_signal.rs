@@ -50,6 +50,7 @@ struct ResumeProcessing;
 impl Actor for WorkerActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self> {
         Ok(WorkerActor {

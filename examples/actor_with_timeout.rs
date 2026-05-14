@@ -18,6 +18,7 @@ struct TimeoutDemoActor {
 impl Actor for TimeoutDemoActor {
     type Args = String;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("{} actor (id: {}) started", args, actor_ref.identity());
