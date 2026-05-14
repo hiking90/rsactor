@@ -17,6 +17,7 @@ struct RuntimelessTestActor {
 impl Actor for RuntimelessTestActor {
     type Args = i32;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(Self { counter: args })

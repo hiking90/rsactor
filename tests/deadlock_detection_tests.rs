@@ -25,6 +25,7 @@ struct SequentialPing(ActorRef<WorkerActor>, ActorRef<WorkerActor>);
 impl Actor for WorkerActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(WorkerActor)
@@ -70,6 +71,7 @@ struct TriggerSelfAsk;
 impl Actor for SelfAskActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(SelfAskActor)
@@ -123,6 +125,7 @@ struct CyclePong;
 impl Actor for CycleActorA {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(CycleActorA)
@@ -132,6 +135,7 @@ impl Actor for CycleActorA {
 impl Actor for CycleActorB {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(CycleActorB)
@@ -220,6 +224,7 @@ struct ChainPong;
 impl Actor for ChainActorA {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(ChainActorA)
@@ -229,6 +234,7 @@ impl Actor for ChainActorA {
 impl Actor for ChainActorB {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(ChainActorB)
@@ -238,6 +244,7 @@ impl Actor for ChainActorB {
 impl Actor for ChainActorC {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(ChainActorC)

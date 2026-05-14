@@ -17,6 +17,7 @@ struct RequesterActor {
 impl Actor for RequesterActor {
     type Args = ActorRef<WorkerActor>;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(
         args: Self::Args,
@@ -96,6 +97,7 @@ struct WorkerActor;
 impl Actor for WorkerActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(
         _args: Self::Args,

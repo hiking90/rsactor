@@ -3,9 +3,14 @@
 
 use crate::actor_ref::ActorRef;
 use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage};
+use futures::stream::{BoxStream, SelectAll, StreamExt};
 use std::{fmt::Debug, future::Future};
 use tokio::sync::mpsc;
 use tracing::{debug, error, Instrument};
+
+/// Boxed, dynamically-typed stream of idle events delivered to an actor's [`Actor::on_idle`]
+/// handler. Subscriptions are added via [`ActorRef::subscribe_idle`].
+pub(crate) type IdleEventStream<T> = BoxStream<'static, <T as Actor>::IdleEvent>;
 
 /// Wrap a future with CURRENT_ACTOR scope and await it.
 /// Used for on_start, message handler, on_stop.
@@ -18,21 +23,6 @@ macro_rules! run_with_actor_scope {
         #[cfg(not(feature = "deadlock-detection"))]
         {
             $fut.await
-        }
-    }};
-}
-
-/// Wrap a future with CURRENT_ACTOR scope without awaiting.
-/// Used for tokio::select! branch expressions (on_run).
-macro_rules! with_actor_scope {
-    ($actor_id:expr, $fut:expr) => {{
-        #[cfg(feature = "deadlock-detection")]
-        {
-            crate::CURRENT_ACTOR.scope($actor_id, $fut)
-        }
-        #[cfg(not(feature = "deadlock-detection"))]
-        {
-            $fut
         }
     }};
 }
@@ -93,16 +83,16 @@ macro_rules! process_envelope {
 ///
 /// # Error Handling
 ///
-/// Actor lifecycle methods ([`on_start`](Actor::on_start), [`on_run`](Actor::on_run), [`on_stop`](Actor::on_stop)) can return errors. How these errors
+/// Actor lifecycle methods ([`on_start`](Actor::on_start), [`on_idle`](Actor::on_idle), [`on_stop`](Actor::on_stop)) can return errors. How these errors
 /// are handled depends on when they occur:
 ///
 /// 1. Errors in [`on_start`](Actor::on_start): The actor fails to initialize. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
 ///    [`FailurePhase::OnStart`](crate::FailurePhase::OnStart) and `actor` set to `None`.
 ///
-/// 2. Errors in [`on_run`](Actor::on_run): The actor terminates during runtime. The error is captured in
+/// 2. Errors in [`on_idle`](Actor::on_idle): The actor terminates during runtime. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
-///    [`FailurePhase::OnRun`](crate::FailurePhase::OnRun) and `actor` contains the actor instance.
+///    [`FailurePhase::OnIdle`](crate::FailurePhase::OnIdle) and `actor` contains the actor instance.
 ///
 /// 3. Errors in [`on_stop`](Actor::on_stop): The actor fails during cleanup. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
@@ -124,9 +114,26 @@ pub trait Actor: Sized + Send + 'static {
     /// Type for arguments passed to [`on_start`](Actor::on_start) for actor initialization.
     /// This type provides the necessary data to create an instance of the actor.
     type Args: Send;
-    /// The error type that can be returned by the actor\'s lifecycle methods.
-    /// Used in [`on_start`](Actor::on_start), [`on_run`](Actor::on_run), and [`on_stop`](Actor::on_stop).
+    /// The error type that can be returned by the actor's lifecycle methods.
+    /// Used in [`on_start`](Actor::on_start), [`on_idle`](Actor::on_idle), and [`on_stop`](Actor::on_stop).
     type Error: Send + Debug;
+    /// Event type carried by streams subscribed via
+    /// [`ActorRef::subscribe_idle`](crate::actor_ref::ActorRef::subscribe_idle) and dispatched
+    /// to [`on_idle`](Actor::on_idle).
+    ///
+    /// Actors that never subscribe an idle stream should set this to `()`. The
+    /// `#[derive(Actor)]` macro fills this in automatically. When implementing
+    /// [`Actor`] manually, declare it explicitly:
+    ///
+    /// ```rust,ignore
+    /// impl Actor for MyActor {
+    ///     type Args = ();
+    ///     type Error = anyhow::Error;
+    ///     type IdleEvent = ();
+    ///     // ...
+    /// }
+    /// ```
+    type IdleEvent: Send + 'static;
 
     /// Called when the actor is started. This is required for actor creation.
     ///
@@ -177,6 +184,7 @@ pub trait Actor: Sized + Send + 'static {
     /// impl Actor for SimpleActor {
     ///     type Args = String; // Name parameter
     ///     type Error = anyhow::Error;
+    ///     type IdleEvent = ();
     ///
     ///     async fn on_start(name: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
     ///         // Create and return the actor instance
@@ -216,106 +224,87 @@ pub trait Actor: Sized + Send + 'static {
         actor_ref: &ActorRef<Self>,
     ) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send;
 
-    /// The idle handler for the actor, similar to `on_idle` in traditional event loops.
+    /// Handler invoked for each event yielded by streams subscribed via
+    /// [`ActorRef::subscribe_idle`](crate::actor_ref::ActorRef::subscribe_idle).
     ///
-    /// This method is called when the actor's message queue is empty, allowing the actor to
-    /// perform background processing or periodic tasks. The return value controls whether
-    /// `on_run` continues to be called:
+    /// The runtime owns a [`SelectAll`](futures::stream::SelectAll) of every subscribed
+    /// stream and polls it as one branch of its `select!` loop. When any stream yields an
+    /// event, `on_idle` is called with `&mut self` and full mutable access to actor state —
+    /// no concurrent borrow with message handlers, no surprise cancellation of work in
+    /// progress. A returned `Err` terminates the actor with
+    /// [`FailurePhase::OnIdle`](crate::FailurePhase::OnIdle).
     ///
-    /// - `Ok(true)`: Continue calling `on_run` (equivalent to `G_SOURCE_CONTINUE` in GTK+)
-    /// - `Ok(false)`: Stop calling `on_run`, only process messages (equivalent to `G_SOURCE_REMOVE`)
-    /// - `Err(e)`: Terminate the actor with an error
+    /// # Why a stream — not a free-form async block
     ///
-    /// # Key characteristics:
+    /// In rsActor 0.15 and earlier, idle work was expressed via `on_run`, an async method the
+    /// runtime called repeatedly inside `select!`. Each iteration produced a *new* future, so
+    /// any timing or async state created inside `on_run` (e.g. a raw `tokio::time::sleep`)
+    /// was dropped whenever a message arrived — a 1-second sleep that races with frequent
+    /// messages may never fire.
     ///
-    /// - **Idle Processing**: `on_run` is only called when the message queue is empty,
-    ///   thanks to the `biased` selection in the runtime loop. Messages always have
-    ///   higher priority than idle processing.
+    /// Subscription-based idle events move the timing/event state out of the cancellable
+    /// future and into a [`Stream`](futures::Stream) owned by the runtime. Stream
+    /// implementations like [`IntervalStream`](https://docs.rs/tokio-stream) are
+    /// cancel-safe by construction: even when the surrounding `select!` arm is cancelled,
+    /// the stream's internal schedule survives across iterations.
     ///
-    /// - **Dynamic Control**: The return value allows dynamic control over idle processing.
-    ///   Return `Ok(true)` to continue, or `Ok(false)` when idle processing is no longer needed.
+    /// # Priority relative to messages
     ///
-    /// - **State Persistence Across Invocations**: Because `on_run` can be invoked multiple
-    ///   times by the runtime (each time generating a new `Future`), any state intended
-    ///   to persist across these distinct invocations *must* be stored as fields within
-    ///   the actor's struct (`self`). Local variables declared inside `on_run` are ephemeral
-    ///   and will not be preserved if `on_run` completes and is subsequently re-invoked.
+    /// The runtime's `select!` is `biased` with this order: terminate signal, priority
+    /// mailbox, new subscriptions, regular mailbox, idle events. Idle events therefore
+    /// have *lower* priority than messages — high message throughput can starve idle
+    /// processing. This mirrors the previous `on_run` semantics. If you need strict
+    /// fairness, send self-tells from a separate task instead.
     ///
-    /// - **Full State Access**: `on_run` has full mutable access to the actor's state (`self`).
-    ///   Modifications to `self` within `on_run` are visible to subsequent message handlers
-    ///   and future `on_run` invocations.
+    /// # Common patterns
     ///
-    /// - **Essential Await Points**: The `Future` returned by `on_run` must yield control
-    ///   to the Tokio runtime via `.await` points, especially within any internal loops.
-    ///   Lacking these, the `on_run` task could block the actor's ability to process messages
-    ///   or perform other concurrent activities.
+    /// **Periodic tick:** subscribe an [`IntervalStream`](https://docs.rs/tokio-stream)
+    /// in `on_start` and react in `on_idle`.
     ///
-    /// # Common patterns:
+    /// ```rust,no_run
+    /// # use rsactor::{Actor, ActorRef, ActorWeak};
+    /// # use anyhow::Result;
+    /// # use std::time::Duration;
+    /// # use futures::stream::StreamExt;
+    /// # struct MyActor { ticks: u32 }
+    /// # impl Actor for MyActor {
+    /// # type Args = ();
+    /// # type Error = anyhow::Error;
+    /// # type IdleEvent = ();
+    /// # async fn on_start(_: (), actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+    /// #     // pseudo-code: wrap a tokio::time::Interval as a stream and subscribe
+    /// #     // actor_ref.subscribe_idle(IntervalStream::new(...).map(|_| ()))?;
+    /// #     Ok(MyActor { ticks: 0 })
+    /// # }
+    /// async fn on_idle(&mut self, _: (), actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    ///     self.ticks += 1;
+    ///     println!("tick {} on actor {}", self.ticks, actor_weak.identity());
+    ///     Ok(())
+    /// }
+    /// # }
+    /// ```
     ///
-    /// 1. **Periodic tasks**: For executing work at regular intervals.
-    ///    ```rust,no_run
-    ///    # use rsactor::{Actor, ActorRef, ActorWeak, Message, spawn};
-    ///    # use anyhow::Result;
-    ///    # use std::time::Duration;
-    ///    # use tokio::time::{Interval, MissedTickBehavior};
-    ///    # struct MyActor {
-    ///    #     interval: Interval,
-    ///    #     ticks_done: u32,
-    ///    # }
-    ///    # impl Actor for MyActor {
-    ///    # type Args = Duration;
-    ///    # type Error = anyhow::Error;
-    ///    # async fn on_start(duration: Self::Args, _actor_ref: &ActorRef<MyActor>) -> std::result::Result<Self, Self::Error> {
-    ///    #     let mut interval = tokio::time::interval(duration);
-    ///    #     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    ///    #     Ok(MyActor { interval, ticks_done: 0 })
-    ///    # }
-    ///    async fn on_run(&mut self, actor_weak: &ActorWeak<MyActor>) -> std::result::Result<bool, Self::Error> {
-    ///        self.interval.tick().await;
-    ///        println!("Periodic task executed by actor {}", actor_weak.identity());
-    ///        self.ticks_done += 1;
+    /// **Dynamic subscription:** add a new idle source from a message handler.
     ///
-    ///        // Stop idle processing after 10 ticks, but actor continues processing messages
-    ///        if self.ticks_done >= 10 {
-    ///            return Ok(false);
-    ///        }
+    /// ```rust,ignore
+    /// async fn handle_start_sensor(&mut self, _: StartSensor, actor_ref: &ActorRef<Self>) {
+    ///     actor_ref
+    ///         .subscribe_idle(self.sensor.events().map(MyEvent::SensorTick))
+    ///         .ok();
+    /// }
+    /// ```
     ///
-    ///        Ok(true)  // Continue calling on_run
-    ///    }
-    ///    # }
-    ///    ```
+    /// # Default implementation
     ///
-    /// 2. **One-time initialization then message-only**: Perform setup work, then only handle messages.
-    ///    ```rust,no_run
-    ///    # use rsactor::{Actor, ActorRef, ActorWeak};
-    ///    # struct MyActor { initialized: bool }
-    ///    # impl Actor for MyActor {
-    ///    # type Args = ();
-    ///    # type Error = anyhow::Error;
-    ///    # async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> { Ok(MyActor { initialized: false }) }
-    ///    async fn on_run(&mut self, _: &ActorWeak<Self>) -> std::result::Result<bool, Self::Error> {
-    ///        if !self.initialized {
-    ///            // Perform one-time initialization
-    ///            self.initialized = true;
-    ///        }
-    ///        Ok(false)  // No more idle processing needed
-    ///    }
-    ///    # }
-    ///    ```
-    ///
-    /// # Default Implementation
-    ///
-    /// The default implementation returns `Ok(false)`, meaning `on_run` is called once
-    /// and then disabled. Actors that don't override `on_run` will only process messages.
+    /// The default returns `Ok(())` immediately. Actors that never subscribe an idle stream
+    /// can leave this unimplemented and set `type IdleEvent = ();`.
     #[allow(unused_variables)]
-    fn on_run(
+    fn on_idle(
         &mut self,
+        event: Self::IdleEvent,
         actor_weak: &ActorWeak<Self>,
-    ) -> impl Future<Output = std::result::Result<bool, Self::Error>> + Send {
-        // Default implementation returns Ok(false) to indicate no idle processing needed.
-        // The actor will only process messages without calling on_run again.
-        // Override this method and return Ok(true) to have on_run called repeatedly.
-        async { Ok(false) }
+    ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send {
+        async { Ok(()) }
     }
 
     /// Called when the actor is about to stop. This allows the actor to perform cleanup tasks.
@@ -323,7 +312,7 @@ pub trait Actor: Sized + Send + 'static {
     /// This method is called when the actor is stopping, including:
     /// - Explicit stop via [`ActorRef::stop`](crate::actor_ref::ActorRef::stop) (graceful termination)
     /// - Explicit kill via [`ActorRef::kill`](crate::actor_ref::ActorRef::kill) (immediate termination)
-    /// - Cleanup after an [`on_run`](Actor::on_run) error
+    /// - Cleanup after an [`on_idle`](Actor::on_idle) error
     ///
     /// It is **not** called if the actor fails during message processing (handler panic/error).
     /// The result of this method affects the final [`ActorResult`](crate::ActorResult) returned when awaiting the join handle.
@@ -343,6 +332,7 @@ pub trait Actor: Sized + Send + 'static {
     /// # impl Actor for MyActor {
     /// #     type Args = ();
     /// #     type Error = anyhow::Error;
+    /// #     type IdleEvent = ();
     /// #     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
     /// #         Ok(MyActor { /* ... */ })
     /// #     }
@@ -489,7 +479,7 @@ pub trait Message<T: Send + 'static>: Actor {
 ///                    ┌─────────────┐
 ///                    │ Message     │
 ///                    │ Processing  │
-///                    │ + on_run    │
+///                    │ + on_idle   │
 ///                    └─────────────┘
 /// ```
 #[cfg_attr(feature = "tracing", tracing::instrument(
@@ -507,7 +497,13 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     mut receiver: mpsc::Receiver<MailboxMessage<T>>,
     mut priority_receiver: Option<mpsc::Receiver<MailboxMessage<T>>>,
     mut terminate_receiver: mpsc::Receiver<ControlSignal>,
+    idle_subscribe_receiver: mpsc::Receiver<IdleEventStream<T>>,
 ) -> ActorResult<T> {
+    // Track the subscribe channel as Option to mirror the priority-channel
+    // close-detection pattern: when all strong senders drop and `recv()`
+    // returns None, replace with `None` so the select arm becomes pending and
+    // does not busy-loop. We still allow normal shutdown via the mailbox arm.
+    let mut idle_subscribe_receiver = Some(idle_subscribe_receiver);
     let actor_id = actor_ref.identity();
 
     #[cfg(feature = "tracing")]
@@ -540,17 +536,34 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     drop(actor_ref); // Drop the strong reference to allow graceful shutdown detection
 
     let mut killed = false;
-    let mut idle_enabled = true;
 
-    // Main actor processing loop - handles three concurrent operations:
-    // 1. Termination signals (highest priority via biased select)
-    // 2. Incoming messages from the mailbox
-    // 3. Actor's on_run lifecycle method execution
+    // Aggregates every stream registered via `ActorRef::subscribe_idle`. New
+    // streams arrive on `idle_subscribe_receiver`; completed streams are removed
+    // automatically by `SelectAll`. The branch below is guarded so the runtime
+    // does not poll the empty set forever — `futures::stream::SelectAll::next()`
+    // on an empty set returns `Poll::Ready(None)` immediately, which would
+    // busy-loop without the guard.
+    let mut idle_streams: SelectAll<IdleEventStream<T>> = SelectAll::new();
+
+    // Drain any subscriptions queued during `on_start`. The subscribe arm in
+    // the main loop would install them one per select! iteration; doing this
+    // synchronously up front means the very first iteration can already
+    // service idle events and avoids N round-trips through the select! when
+    // `on_start` calls `subscribe_idle` N times.
+    if let Some(rx) = idle_subscribe_receiver.as_mut() {
+        while let Ok(stream) = rx.try_recv() {
+            idle_streams.push(stream);
+        }
+    }
+
+    // Main actor processing loop. The `tokio::select!` is `biased` with this
+    // priority order: termination signals → priority mailbox → new idle
+    // subscriptions → regular mailbox → idle events.
     loop {
         #[cfg(feature = "tracing")]
-        let on_run_span = tracing::debug_span!("actor_on_run");
+        let on_idle_span = tracing::debug_span!("actor_on_idle");
         #[cfg(not(feature = "tracing"))]
-        let on_run_span = tracing::Span::none();
+        let on_idle_span = tracing::Span::none();
 
         tokio::select! {
             // Handle termination signals with highest priority using biased selection
@@ -638,6 +651,31 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 }
             }
 
+            // Install newly subscribed idle streams as soon as they arrive.
+            // Subscriptions are typically pushed from `on_start` (before this
+            // loop runs the first time) or from a message handler that just
+            // completed. Polling this branch ahead of the regular mailbox
+            // ensures freshly-added streams are active before the next message
+            // is processed. When the channel closes (all `ActorRef`/`ActorWeak`
+            // strong senders dropped) we set the option to None so the branch
+            // becomes pending — graceful termination then propagates via the
+            // mailbox arm below.
+            maybe_subscription = async {
+                match idle_subscribe_receiver.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending::<Option<IdleEventStream<T>>>().await,
+                }
+            } => {
+                match maybe_subscription {
+                    Some(stream) => {
+                        idle_streams.push(stream);
+                    }
+                    None => {
+                        idle_subscribe_receiver = None;
+                    }
+                }
+            }
+
             // Process incoming messages from the actor's mailbox
             // Messages can be: regular message envelopes or graceful stop signals
             maybe_message = receiver.recv() => {
@@ -715,50 +753,48 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 }
             }
 
-            // Execute the actor's on_run method (idle handler) when enabled.
-            // This branch is disabled when on_run returns Ok(false).
-            maybe_result = with_actor_scope!(
-                actor_id,
-                actor.on_run(&actor_weak).instrument(on_run_span)
-            ), if idle_enabled => {
-                match maybe_result {
-                    Ok(true) => {
-                        // on_run completed successfully, continue calling on_run
-                    }
-                    Ok(false) => {
-                        // on_run indicated no more idle processing needed
-                        idle_enabled = false;
-                    }
-                    Err(e) => {
-                        // on_run returned an error - terminate the actor with failure status
-                        let error_msg = format!("Actor {actor_id} on_run error: {e:?}");
-                        error!("{error_msg}");
+            // Dispatch one event from the merged set of subscribed idle streams
+            // to the actor's `on_idle` handler. The `if !idle_streams.is_empty()`
+            // guard is essential: `SelectAll::next()` on an empty set resolves
+            // to `Poll::Ready(None)` immediately and would busy-loop.
+            //
+            // Each underlying stream is responsible for its own cancel-safety.
+            // Streams that complete (return None) are removed from the set
+            // automatically by `SelectAll`.
+            Some(event) = idle_streams.next(), if !idle_streams.is_empty() => {
+                let result = run_with_actor_scope!(
+                    actor_id,
+                    actor.on_idle(event, &actor_weak).instrument(on_idle_span)
+                );
 
-                        // Call on_stop for cleanup even after on_run failure
-                        #[cfg(feature = "tracing")]
-                        let on_stop_span = tracing::debug_span!("actor_on_stop", killed = false);
-                        #[cfg(not(feature = "tracing"))]
-                        let on_stop_span = tracing::Span::none();
+                if let Err(e) = result {
+                    let error_msg = format!("Actor {actor_id} on_idle error: {e:?}");
+                    error!("{error_msg}");
 
-                        let phase = if let Err(stop_err) = run_with_actor_scope!(
-                            actor_id,
-                            actor.on_stop(&actor_weak, false).instrument(on_stop_span)
-                        ) {
-                            error!(
-                                "Actor {actor_id} on_stop failed during on_run error cleanup: {stop_err:?}"
-                            );
-                            FailurePhase::OnRunThenOnStop
-                        } else {
-                            FailurePhase::OnRun
-                        };
+                    // Call on_stop for cleanup even after on_idle failure
+                    #[cfg(feature = "tracing")]
+                    let on_stop_span = tracing::debug_span!("actor_on_stop", killed = false);
+                    #[cfg(not(feature = "tracing"))]
+                    let on_stop_span = tracing::Span::none();
 
-                        return ActorResult::Failed {
-                            actor: Some(actor),
-                            error: e,
-                            phase,
-                            killed,
-                        };
-                    }
+                    let phase = if let Err(stop_err) = run_with_actor_scope!(
+                        actor_id,
+                        actor.on_stop(&actor_weak, false).instrument(on_stop_span)
+                    ) {
+                        error!(
+                            "Actor {actor_id} on_stop failed during on_idle error cleanup: {stop_err:?}"
+                        );
+                        FailurePhase::OnIdleThenOnStop
+                    } else {
+                        FailurePhase::OnIdle
+                    };
+
+                    return ActorResult::Failed {
+                        actor: Some(actor),
+                        error: e,
+                        phase,
+                        killed,
+                    };
                 }
             }
         }
@@ -769,6 +805,9 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     terminate_receiver.close(); // Close the termination signal channel
     if let Some(rx) = priority_receiver.as_mut() {
         rx.close(); // Close the optional priority channel
+    }
+    if let Some(rx) = idle_subscribe_receiver.as_mut() {
+        rx.close(); // Close the idle subscribe channel
     }
 
     debug!("Actor {actor_id} lifecycle completed - exiting runtime loop.");

@@ -12,6 +12,7 @@ struct GenericClosureTestActor {
 impl Actor for GenericClosureTestActor {
     type Args = ();
     type Error = AnyError;
+    type IdleEvent = ();
 
     async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(GenericClosureTestActor {

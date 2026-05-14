@@ -261,9 +261,9 @@ impl Error {
                 "This usually indicates a bug in handler implementation",
             ],
             Error::Runtime { .. } => &[
-                "Check if on_start() or on_run() returned an error",
+                "Check if on_start() or on_idle() returned an error",
                 "Look for panic messages in the error details field",
-                "Use `ActorResult::is_start_failed()` or `is_run_failed()` to identify failure phase",
+                "Use `ActorResult::is_startup_failed()` or `is_runtime_failed()` to identify failure phase",
                 "Call `ActorResult::error()` to get the underlying error details",
                 "Initialize tracing-subscriber and set RUST_LOG=debug for lifecycle diagnostics",
             ],

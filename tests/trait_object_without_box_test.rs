@@ -12,6 +12,7 @@ struct TraitObjectTestActor {
 impl Actor for TraitObjectTestActor {
     type Args = ();
     type Error = AnyError;
+    type IdleEvent = ();
 
     async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(TraitObjectTestActor { counter: 0 })

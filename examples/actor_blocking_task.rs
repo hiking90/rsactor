@@ -59,6 +59,7 @@ struct SyncDataProcessorActor {
 impl Actor for SyncDataProcessorActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!(

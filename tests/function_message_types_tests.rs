@@ -17,6 +17,7 @@ struct FunctionHandlerTestActor {
 impl Actor for FunctionHandlerTestActor {
     type Args = ();
     type Error = AnyError;
+    type IdleEvent = ();
 
     async fn on_start(
         _args: Self::Args,

@@ -1,7 +1,9 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
+use futures::stream::StreamExt;
 use rsactor::{spawn, Actor, ActorRef, ActorResult, ActorWeak, FailurePhase, Message};
+use tokio_stream::wrappers::IntervalStream;
 
 // Dummy message for test actors
 #[derive(Debug)]
@@ -17,16 +19,11 @@ struct TestActor {
 impl Actor for TestActor {
     type Args = (String, i32);
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let (id, value) = args;
         Ok(TestActor { id, value })
-    }
-
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        // Simple idle handler that continues running
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        Ok(true)
     }
 }
 
@@ -52,24 +49,29 @@ struct FailureTestArgs {
 impl Actor for FailureTestActor {
     type Args = FailureTestArgs;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
-    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         if args.fail_on_start {
             return Err(anyhow::anyhow!("Test failure in on_start"));
         }
+        // Subscribe a fast IntervalStream so `on_idle` fires repeatedly and we
+        // can simulate runtime failures via the actor's `id` flag below.
+        actor_ref.subscribe_idle(
+            IntervalStream::new(tokio::time::interval(std::time::Duration::from_millis(50)))
+                .map(|_| ()),
+        )?;
         Ok(FailureTestActor {
             id: args.id,
             value: args.value,
         })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+    async fn on_idle(&mut self, _: (), _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         if self.id.contains("fail_on_run") {
-            return Err(anyhow::anyhow!("Test failure in on_run"));
+            return Err(anyhow::anyhow!("Test failure in on_idle"));
         }
-        // Simple idle handler that continues running
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        Ok(true)
+        Ok(())
     }
 
     async fn on_stop(
@@ -275,7 +277,7 @@ async fn test_actor_result_failed_on_run() {
     // Test error access
     assert!(result.error().is_some(), "Should have error");
     if let Some(error) = result.error() {
-        assert!(error.to_string().contains("Test failure in on_run"));
+        assert!(error.to_string().contains("Test failure in on_idle"));
     }
 }
 
@@ -368,18 +370,18 @@ async fn test_actor_result_failed_on_stop_killed() {
 #[tokio::test]
 async fn test_failure_phase_display() {
     assert_eq!(FailurePhase::OnStart.to_string(), "OnStart");
-    assert_eq!(FailurePhase::OnRun.to_string(), "OnRun");
+    assert_eq!(FailurePhase::OnIdle.to_string(), "OnIdle");
     assert_eq!(FailurePhase::OnStop.to_string(), "OnStop");
 }
 
 #[tokio::test]
 async fn test_failure_phase_equality() {
     assert_eq!(FailurePhase::OnStart, FailurePhase::OnStart);
-    assert_eq!(FailurePhase::OnRun, FailurePhase::OnRun);
+    assert_eq!(FailurePhase::OnIdle, FailurePhase::OnIdle);
     assert_eq!(FailurePhase::OnStop, FailurePhase::OnStop);
 
-    assert_ne!(FailurePhase::OnStart, FailurePhase::OnRun);
-    assert_ne!(FailurePhase::OnRun, FailurePhase::OnStop);
+    assert_ne!(FailurePhase::OnStart, FailurePhase::OnIdle);
+    assert_ne!(FailurePhase::OnIdle, FailurePhase::OnStop);
     assert_ne!(FailurePhase::OnStart, FailurePhase::OnStop);
 }
 
@@ -414,7 +416,7 @@ async fn test_actor_result_from_failed_with_actor() {
             value: 456,
         }),
         error: anyhow::anyhow!("test error"),
-        phase: FailurePhase::OnRun,
+        phase: FailurePhase::OnIdle,
         killed: false,
     };
 
@@ -559,7 +561,7 @@ async fn test_all_boolean_combinations() {
             value: 4,
         }),
         error: anyhow::anyhow!("error4"),
-        phase: FailurePhase::OnRun,
+        phase: FailurePhase::OnIdle,
         killed: false,
     };
     assert!(!result4.is_completed() && !result4.was_killed() && result4.is_runtime_failed());

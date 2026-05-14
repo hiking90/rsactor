@@ -2,49 +2,63 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use futures::stream::StreamExt;
 use rsactor::{message_handlers, Actor, ActorRef, ActorWeak};
 use tokio::time::{interval, Duration};
+use tokio_stream::wrappers::IntervalStream;
 use tracing::info;
 
 // Message types
 struct Increment; // Message to increment the actor's counter
 struct Decrement; // Message to decrement the actor's counter
 
+/// Periodic idle events delivered by the streams subscribed in `on_start`.
+#[derive(Debug, Clone, Copy)]
+enum Tick {
+    Fast, // every 300ms
+    Slow, // every 1s
+}
+
 // Define the actor struct
 struct MyActor {
-    count: u32,                        // Internal state of the actor
-    start_up: std::time::Instant,      // Optional field to track the start time
-    tick_300ms: tokio::time::Interval, // Interval for 300ms ticks
-    tick_1s: tokio::time::Interval,    // Interval for 1s ticks
+    count: u32,                   // Internal state of the actor
+    start_up: std::time::Instant, // Optional field to track the start time
 }
 
 // Implement the Actor trait for MyActor
 impl Actor for MyActor {
-    type Args = Self;
-    type Error = anyhow::Error; // Define the error type for actor operations
+    type Args = u32; // initial count
+    type Error = anyhow::Error;
+    type IdleEvent = Tick;
 
-    // Called when the actor is started
-    async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        info!("MyActor started. Initial count: {}.", args.count);
-        Ok(args)
+    // Called when the actor is started. Subscribes the two periodic streams that
+    // drive the actor's idle work. Stream state (the next-tick instant) lives in
+    // the runtime's `SelectAll`, so ticks are never cancelled by message arrivals.
+    async fn on_start(
+        initial: Self::Args,
+        actor_ref: &ActorRef<Self>,
+    ) -> Result<Self, Self::Error> {
+        info!("MyActor started. Initial count: {}.", initial);
+
+        actor_ref.subscribe_idle(
+            IntervalStream::new(interval(Duration::from_millis(300))).map(|_| Tick::Fast),
+        )?;
+        actor_ref.subscribe_idle(
+            IntervalStream::new(interval(Duration::from_secs(1))).map(|_| Tick::Slow),
+        )?;
+
+        Ok(MyActor {
+            count: initial,
+            start_up: std::time::Instant::now(),
+        })
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
-        tokio::select! {
-            // Executes when the 300ms interval timer ticks.
-            _ = self.tick_300ms.tick() => {
-                println!("300ms tick. Elapsed: {:?}",
-                    self.start_up.elapsed()); // Print the current count
-            }
-            // Executes when the 1s interval timer ticks. (Currently no specific action)
-            _ = self.tick_1s.tick() => {
-                println!("1s tick. Elapsed: {:?} ",
-                    self.start_up.elapsed()); // Print the current count
-            }
+    async fn on_idle(&mut self, event: Tick, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        match event {
+            Tick::Fast => println!("300ms tick. Elapsed: {:?}", self.start_up.elapsed()),
+            Tick::Slow => println!("1s tick. Elapsed: {:?}", self.start_up.elapsed()),
         }
-
-        Ok(true) // Continue calling on_run
+        Ok(())
     }
 }
 
@@ -84,16 +98,11 @@ async fn main() -> Result<()> {
 
     println!("Spawning MyActor...");
 
-    let my_actor = MyActor {
-        count: 100,
-        start_up: std::time::Instant::now(),
-        tick_300ms: interval(Duration::from_millis(300)),
-        tick_1s: interval(Duration::from_secs(1)),
-    };
-
     // Spawn the actor. This returns an ActorRef for sending messages
-    // and a JoinHandle to await the actor's completion.
-    let (actor_ref, join_handle) = rsactor::spawn::<MyActor>(my_actor); // MODIFIED: use system.spawn and await
+    // and a JoinHandle to await the actor's completion. The initial counter
+    // value is passed via `Args`; the actor's idle streams are subscribed
+    // inside `on_start` so they outlive `select!` cancellation.
+    let (actor_ref, join_handle) = rsactor::spawn::<MyActor>(100);
 
     tokio::time::sleep(Duration::from_millis(700)).await;
 

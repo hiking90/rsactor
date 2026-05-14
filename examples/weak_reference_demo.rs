@@ -25,6 +25,7 @@ struct PingActor {
 impl Actor for PingActor {
     type Args = String;
     type Error = AnyError;
+    type IdleEvent = ();
 
     async fn on_start(
         args: Self::Args,

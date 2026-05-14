@@ -17,6 +17,7 @@ struct MessageHandlerTestActor {
 impl Actor for MessageHandlerTestActor {
     type Args = ();
     type Error = AnyError;
+    type IdleEvent = ();
 
     async fn on_start(
         _args: Self::Args,

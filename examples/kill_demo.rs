@@ -16,6 +16,7 @@ struct DemoActor {
 impl Actor for DemoActor {
     type Args = String;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(
         args: Self::Args,

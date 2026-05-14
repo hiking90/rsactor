@@ -59,6 +59,7 @@ struct PriorityPing(u32);
 impl Actor for CounterActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
         Ok(CounterActor {
@@ -111,6 +112,7 @@ struct GetPriorityCount;
 impl Actor for BlockingActor {
     type Args = (Arc<AtomicU32>, Arc<Notify>);
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(
         (started, release): Self::Args,
@@ -810,6 +812,7 @@ impl Actor for OrderActor {
         Arc<Notify>,
     );
     type Error = anyhow::Error;
+    type IdleEvent = ();
     async fn on_start(
         (log, r1_started, r1_release): Self::Args,
         _: &ActorRef<Self>,

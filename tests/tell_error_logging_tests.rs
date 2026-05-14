@@ -24,6 +24,7 @@ struct AutoDetectActor;
 impl Actor for AutoDetectActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(
         _args: Self::Args,
@@ -75,6 +76,7 @@ struct TellErrActor;
 impl Actor for TellErrActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
         Ok(TellErrActor)
     }
@@ -108,6 +110,7 @@ struct TellOkActor;
 impl Actor for TellOkActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
         Ok(TellOkActor)
     }
@@ -140,6 +143,7 @@ struct AskNoInvokeActor;
 impl Actor for AskNoInvokeActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
         Ok(AskNoInvokeActor)
     }
@@ -168,6 +172,7 @@ struct NoLogActor;
 impl Actor for NoLogActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
         Ok(NoLogActor)
     }
@@ -197,6 +202,7 @@ struct ForceResultActor;
 impl Actor for ForceResultActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
     async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
         Ok(ForceResultActor)
     }

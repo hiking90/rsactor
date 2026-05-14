@@ -1,8 +1,10 @@
 // Tests specifically designed to improve code coverage
 // These tests target uncovered code paths identified by llvm-cov
 
+use futures::stream::StreamExt;
 use rsactor::{spawn, Actor, ActorRef, ActorWeak, Identity};
 use std::time::Duration;
+use tokio_stream::wrappers::IntervalStream;
 
 /// Initialize tracing subscriber for tests
 /// This enables coverage of tracing-related code paths
@@ -316,22 +318,31 @@ mod on_run_error_tests {
     impl Actor for FailingOnRunActor {
         type Args = u32; // Number of times to succeed before failing
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(
             args: Self::Args,
-            _actor_ref: &ActorRef<Self>,
+            actor_ref: &ActorRef<Self>,
         ) -> Result<Self, Self::Error> {
+            actor_ref
+                .subscribe_idle(
+                    IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
+                        .map(|_| ()),
+                )
+                .map_err(|e| e.to_string())?;
             Ok(Self { fail_count: args })
         }
 
-        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        async fn on_idle(
+            &mut self,
+            _: (),
+            _actor_weak: &ActorWeak<Self>,
+        ) -> Result<(), Self::Error> {
             if self.fail_count > 0 {
                 self.fail_count -= 1;
-                // Use a short sleep to yield control
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok(true)
+                Ok(())
             } else {
-                Err("Intentional on_run failure".to_string())
+                Err("Intentional on_idle failure".to_string())
             }
         }
     }
@@ -350,13 +361,13 @@ mod on_run_error_tests {
 
         // Verify the error message
         let error = result.error().unwrap();
-        assert_eq!(error, "Intentional on_run failure");
+        assert_eq!(error, "Intentional on_idle failure");
 
         // The actor_ref should no longer be alive
         assert!(!actor_ref.is_alive());
     }
 
-    // Actor that fails in both on_run and on_stop
+    // Actor that fails in both on_idle and on_stop
     struct FailingOnRunAndOnStopActor {
         fail_count: u32,
     }
@@ -364,21 +375,31 @@ mod on_run_error_tests {
     impl Actor for FailingOnRunAndOnStopActor {
         type Args = u32;
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(
             args: Self::Args,
-            _actor_ref: &ActorRef<Self>,
+            actor_ref: &ActorRef<Self>,
         ) -> Result<Self, Self::Error> {
+            actor_ref
+                .subscribe_idle(
+                    IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
+                        .map(|_| ()),
+                )
+                .map_err(|e| e.to_string())?;
             Ok(Self { fail_count: args })
         }
 
-        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        async fn on_idle(
+            &mut self,
+            _: (),
+            _actor_weak: &ActorWeak<Self>,
+        ) -> Result<(), Self::Error> {
             if self.fail_count > 0 {
                 self.fail_count -= 1;
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok(true)
+                Ok(())
             } else {
-                Err("Intentional on_run failure".to_string())
+                Err("Intentional on_idle failure".to_string())
             }
         }
 
@@ -387,8 +408,8 @@ mod on_run_error_tests {
             _actor_weak: &ActorWeak<Self>,
             _killed: bool,
         ) -> Result<(), Self::Error> {
-            // This error is logged but not propagated (on_run error takes precedence)
-            Err("Intentional on_stop failure during on_run cleanup".to_string())
+            // This error is logged but not propagated (on_idle error takes precedence)
+            Err("Intentional on_stop failure during on_idle cleanup".to_string())
         }
     }
 
@@ -404,14 +425,14 @@ mod on_run_error_tests {
         assert!(result.is_failed());
         assert!(result.is_runtime_failed());
 
-        // The error should be from on_run (on_stop error is only logged)
+        // The error should be from on_idle (on_stop error is only logged)
         let error = result.error().unwrap();
-        assert_eq!(error, "Intentional on_run failure");
+        assert_eq!(error, "Intentional on_idle failure");
 
-        // Phase should be OnRunThenOnStop since both on_run and on_stop failed
+        // Phase should be OnIdleThenOnStop since both on_idle and on_stop failed
         match &result {
             rsactor::ActorResult::Failed { phase, .. } => {
-                assert_eq!(*phase, rsactor::FailurePhase::OnRunThenOnStop);
+                assert_eq!(*phase, rsactor::FailurePhase::OnIdleThenOnStop);
             }
             _ => panic!("Expected Failed result"),
         }
@@ -435,6 +456,7 @@ mod on_stop_error_tests {
     impl Actor for FailingOnStopActor {
         type Args = ();
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
             Ok(Self)
@@ -506,6 +528,7 @@ mod on_start_error_tests {
     impl Actor for FailingOnStartActor {
         type Args = bool; // true = succeed, false = fail
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(succeed: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
             if succeed {
@@ -701,6 +724,7 @@ mod actor_result_from_tests {
         impl Actor for FailOnStopActor {
             type Args = i32;
             type Error = String;
+            type IdleEvent = ();
 
             async fn on_start(args: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
                 Ok(Self { value: args })
@@ -735,6 +759,7 @@ mod actor_result_from_tests {
         impl Actor for FailOnStartActor {
             type Args = ();
             type Error = String;
+            type IdleEvent = ();
 
             async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
                 Err("on_start error".to_string())
@@ -1085,6 +1110,7 @@ mod actor_result_methods_tests {
         impl Actor for FailActor {
             type Args = ();
             type Error = String;
+            type IdleEvent = ();
 
             async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, String> {
                 Err("failed".to_string())
@@ -1121,6 +1147,7 @@ mod actor_result_methods_tests {
         impl Actor for FailActorForError {
             type Args = ();
             type Error = String;
+            type IdleEvent = ();
 
             async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, String> {
                 Err("into_error_test".to_string())
@@ -1326,7 +1353,7 @@ mod failure_phase_tests {
     #[test]
     fn test_failure_phase_display_all_variants() {
         assert_eq!(format!("{}", FailurePhase::OnStart), "OnStart");
-        assert_eq!(format!("{}", FailurePhase::OnRun), "OnRun");
+        assert_eq!(format!("{}", FailurePhase::OnIdle), "OnIdle");
         assert_eq!(format!("{}", FailurePhase::OnStop), "OnStop");
     }
 
@@ -1336,8 +1363,8 @@ mod failure_phase_tests {
         let debug_str = format!("{:?}", FailurePhase::OnStart);
         assert!(debug_str.contains("OnStart"));
 
-        let debug_str = format!("{:?}", FailurePhase::OnRun);
-        assert!(debug_str.contains("OnRun"));
+        let debug_str = format!("{:?}", FailurePhase::OnIdle);
+        assert!(debug_str.contains("OnIdle"));
 
         let debug_str = format!("{:?}", FailurePhase::OnStop);
         assert!(debug_str.contains("OnStop"));
@@ -1345,7 +1372,7 @@ mod failure_phase_tests {
 
     #[test]
     fn test_failure_phase_clone_copy() {
-        let phase = FailurePhase::OnRun;
+        let phase = FailurePhase::OnIdle;
         let cloned = phase;
         let copied = phase;
 
@@ -1388,6 +1415,7 @@ mod actor_result_debug_tests {
         impl Actor for FailDebugActor {
             type Args = ();
             type Error = String;
+            type IdleEvent = ();
 
             async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, String> {
                 Err("debug test failure".to_string())
@@ -1824,11 +1852,16 @@ mod stop_edge_cases_tests {
 }
 
 // ============================================================================
-// Tests for on_run returning Ok(false) (actor.rs)
+// Tests for a finite idle stream (drives `on_idle` once, then completes).
+// This replaces the old `on_run` returning `Ok(false)` semantics: in B-1 the
+// stream itself controls how many events are produced, so a single-shot
+// stream produces a single `on_idle` call and then is automatically removed
+// from the runtime's `SelectAll`.
 // ============================================================================
 
 mod on_run_disable_tests {
     use super::*;
+    use futures::stream;
 
     struct OnRunDisableActor {
         run_count: u32,
@@ -1837,15 +1870,19 @@ mod on_run_disable_tests {
     impl Actor for OnRunDisableActor {
         type Args = ();
         type Error = String;
+        type IdleEvent = ();
 
-        async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        async fn on_start(_: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            // One-shot stream: yields a single `()` and then ends.
+            actor_ref
+                .subscribe_idle(stream::once(async {}))
+                .map_err(|e| e.to_string())?;
             Ok(Self { run_count: 0 })
         }
 
-        async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        async fn on_idle(&mut self, _: (), _: &ActorWeak<Self>) -> Result<(), Self::Error> {
             self.run_count += 1;
-            // Return false after first run to disable further on_run calls
-            Ok(false)
+            Ok(())
         }
     }
 
@@ -1860,23 +1897,23 @@ mod on_run_disable_tests {
     }
 
     #[tokio::test]
-    async fn test_on_run_returns_false_disables_idle_processing() {
+    async fn test_finite_idle_stream_dispatches_once() {
         init_test_logger();
         let (actor_ref, handle) = spawn::<OnRunDisableActor>(());
 
-        // Wait for on_run to execute once
+        // Wait for the one-shot stream to fire.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Check run count - should be 1 (on_run was called once, returned false)
         let run_count: u32 = actor_ref.ask(GetRunCount).await.unwrap();
-        assert_eq!(run_count, 1, "on_run should have been called exactly once");
+        assert_eq!(run_count, 1, "on_idle should have been called exactly once");
 
-        // Wait more and check again - should still be 1
+        // Wait more and check again - the stream completed, so SelectAll
+        // removed it; on_idle does not fire again.
         tokio::time::sleep(Duration::from_millis(100)).await;
         let run_count: u32 = actor_ref.ask(GetRunCount).await.unwrap();
         assert_eq!(
             run_count, 1,
-            "on_run should not have been called again after returning false"
+            "on_idle should not be called again after the stream completed"
         );
 
         actor_ref.stop().await.unwrap();
@@ -1898,6 +1935,7 @@ mod message_trait_tests {
     impl Actor for MessageTraitActor {
         type Args = ();
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
             Ok(Self {
@@ -2043,6 +2081,7 @@ mod actual_timeout_tests {
     impl Actor for TimeoutTestActor {
         type Args = ();
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
             Ok(Self)
@@ -2123,17 +2162,25 @@ mod lifecycle_phase_tests {
     impl Actor for LifecyclePhaseActor {
         type Args = std::sync::Arc<AtomicU32>;
         type Error = String;
+        type IdleEvent = ();
 
-        async fn on_start(tracker: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        async fn on_start(
+            tracker: Self::Args,
+            actor_ref: &ActorRef<Self>,
+        ) -> Result<Self, Self::Error> {
             tracker.fetch_add(1, Ordering::SeqCst); // 1
+                                                    // One-shot idle stream to drive on_idle exactly once.
+            actor_ref
+                .subscribe_idle(futures::stream::once(async {}))
+                .map_err(|e| e.to_string())?;
             Ok(Self {
                 phase_tracker: tracker,
             })
         }
 
-        async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+        async fn on_idle(&mut self, _: (), _: &ActorWeak<Self>) -> Result<(), Self::Error> {
             self.phase_tracker.fetch_add(10, Ordering::SeqCst); // 11
-            Ok(false) // Don't continue
+            Ok(())
         }
 
         async fn on_stop(&mut self, _: &ActorWeak<Self>, _killed: bool) -> Result<(), Self::Error> {
@@ -2149,10 +2196,10 @@ mod lifecycle_phase_tests {
 
         let (actor_ref, handle) = spawn::<LifecyclePhaseActor>(tracker.clone());
 
-        // Wait for on_run to execute
+        // Wait for on_idle to execute
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // After on_start and on_run, should be 11
+        // After on_start and on_idle, should be 11
         let value = tracker.load(Ordering::SeqCst);
         assert!(value >= 11, "Expected at least 11, got {}", value);
 
@@ -2182,6 +2229,7 @@ mod metrics_api_tests {
     impl Actor for MetricsTestActor {
         type Args = ();
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
             Ok(Self)
@@ -2373,6 +2421,7 @@ mod tell_with_timeout_tests {
     impl Actor for SlowTellActor {
         type Args = ();
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
             Ok(Self)
@@ -2426,6 +2475,7 @@ mod blocking_timeout_expiry_tests {
     impl Actor for BlockingTimeoutActor {
         type Args = ();
         type Error = String;
+        type IdleEvent = ();
 
         async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
             Ok(Self)

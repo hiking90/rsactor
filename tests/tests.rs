@@ -1,8 +1,10 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
+use futures::stream::StreamExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_stream::wrappers::IntervalStream;
 use tracing::debug;
 
 use rsactor::{
@@ -27,6 +29,7 @@ struct TestArgs {
 impl Actor for TestActor {
     type Args = TestArgs;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         debug!("TestActor (id: {}) started.", actor_ref.identity());
@@ -306,6 +309,7 @@ struct LifecycleErrorActor {
 impl Actor for LifecycleErrorActor {
     type Args = LifecycleErrorArgs;
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let _id = actor_ref.identity();
@@ -313,6 +317,10 @@ impl Actor for LifecycleErrorActor {
         if args.fail_on_start {
             Err(anyhow::anyhow!("simulated on_start failure"))
         } else {
+            actor_ref.subscribe_idle(
+                IntervalStream::new(tokio::time::interval(std::time::Duration::from_millis(50)))
+                    .map(|_| ()),
+            )?;
             Ok(LifecycleErrorActor {
                 _id,
                 fail_on_run: args.fail_on_run,
@@ -324,14 +332,12 @@ impl Actor for LifecycleErrorActor {
         }
     }
 
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+    async fn on_idle(&mut self, _: (), _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         *self.on_run_attempted.lock().await = true;
         if self.fail_on_run {
-            Err(anyhow::anyhow!("simulated on_run failure"))
+            Err(anyhow::anyhow!("simulated on_idle failure"))
         } else {
-            // Continue idle processing
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            Ok(true)
+            Ok(())
         }
     }
 
@@ -411,7 +417,7 @@ async fn test_actor_fail_on_run() {
 
     match result {
         rsactor::ActorResult::Failed { actor, error, .. } => {
-            assert!(error.to_string().contains("simulated on_run failure"));
+            assert!(error.to_string().contains("simulated on_idle failure"));
             if let Some(actor) = actor {
                 assert!(*actor.on_start_attempted.lock().await);
                 assert!(*actor.on_run_attempted.lock().await);
@@ -473,6 +479,7 @@ struct PanicActor {}
 impl Actor for PanicActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(PanicActor {})
@@ -496,6 +503,7 @@ struct StringErrorActor {
 impl Actor for StringErrorActor {
     type Args = Arc<Mutex<bool>>;
     type Error = String; // Using String as the error type
+    type IdleEvent = ();
 
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         let on_start_called = args;
@@ -605,6 +613,7 @@ struct DummyActor;
 impl Actor for DummyActor {
     type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = ();
 
     async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         Ok(DummyActor)
@@ -1086,7 +1095,7 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
         } => {
             assert_eq!(
                 phase,
-                rsactor::FailurePhase::OnRunThenOnStop,
+                rsactor::FailurePhase::OnIdleThenOnStop,
                 "Should fail in OnRunThenOnStop phase when both on_run and on_stop fail"
             );
             assert!(
@@ -1094,7 +1103,7 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
                 "Should not be marked as killed for on_run failure scenario"
             );
             // The error should be from on_run, not on_stop
-            assert!(error.to_string().contains("simulated on_run failure"));
+            assert!(error.to_string().contains("simulated on_idle failure"));
 
             if let Some(actor) = actor {
                 assert!(
@@ -1150,14 +1159,14 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
         } => {
             assert_eq!(
                 phase,
-                rsactor::FailurePhase::OnRun,
+                rsactor::FailurePhase::OnIdle,
                 "Should fail in OnRun phase"
             );
             assert!(
                 !killed,
                 "Should not be marked as killed for on_run failure scenario"
             );
-            assert!(error.to_string().contains("simulated on_run failure"));
+            assert!(error.to_string().contains("simulated on_idle failure"));
 
             if let Some(actor) = actor {
                 assert!(

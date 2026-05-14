@@ -28,9 +28,10 @@
 //!   [`ask_priority`](actor_ref::ActorRef::ask_priority). The priority channel
 //!   is **off by default**; calls on a non-priority actor return
 //!   [`Error::PriorityChannelNotEnabled`].
-//! - **Straightforward Actor Lifecycle**: Actors have [`on_start`](Actor::on_start), [`on_run`](Actor::on_run),
-//!   and [`on_stop`](Actor::on_stop) lifecycle hooks that provide a clean and intuitive actor lifecycle management system.
-//!   The framework manages the execution flow while giving developers full control over actor behavior.
+//! - **Straightforward Actor Lifecycle**: Actors have [`on_start`](Actor::on_start), [`on_idle`](Actor::on_idle),
+//!   and [`on_stop`](Actor::on_stop) lifecycle hooks. Idle work is driven by streams subscribed via
+//!   [`ActorRef::subscribe_idle`](actor_ref::ActorRef::subscribe_idle) — each yielded event is dispatched to
+//!   `on_idle` with `&mut self`, so timer / channel state never gets cancelled by a competing `select!` arm.
 //! - **Graceful Shutdown & Kill**: Actors can be stopped gracefully or killed immediately.
 //! - **Typed Messages**: Messages are strongly typed, and replies are also typed.
 //! - **Macro for Message Handling**:
@@ -51,7 +52,7 @@
 //!
 //! ## Core Concepts
 //!
-//! - **[`Actor`]**: Trait defining actor behavior and lifecycle hooks ([`on_start`](Actor::on_start) required, [`on_run`](Actor::on_run) optional).
+//! - **[`Actor`]**: Trait defining actor behavior and lifecycle hooks ([`on_start`](Actor::on_start) required, [`on_idle`](Actor::on_idle) optional).
 //! - **[`Message<M>`](actor::Message)**: Trait for handling a message type `M` and defining its reply type.
 //! - **[`ActorRef`]**: Handle for sending messages to an actor.
 //! - **[`spawn`]**: Function to create and start an actor, returning an [`ActorRef`] and a `JoinHandle`.
@@ -138,9 +139,10 @@
 //! impl Actor for MyActor {
 //!     type Args = String;
 //!     type Error = anyhow::Error;
+//!     type IdleEvent = ();
 //!
 //!     // on_start is required and must be implemented.
-//!     // on_run and on_stop are optional and have default implementations.
+//!     // on_idle and on_stop are optional and have default implementations.
 //!     async fn on_start(initial_data: Self::Args, actor_ref: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
 //!         println!("MyActor (id: {}) started with data: '{}'", actor_ref.identity(), initial_data);
 //!         Ok(MyActor {
@@ -561,6 +563,24 @@ pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 /// [`SpawnOptions::with_priority`] for the rationale.
 pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 
+/// Capacity of the idle-subscribe channel used by
+/// [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle).
+///
+/// Subscriptions are rare events (typically a handful per actor, established
+/// during `on_start` or in response to occasional control messages), and the
+/// runtime drains the channel on every loop iteration. The buffer absorbs
+/// bursts that occur **before the runtime enters its select! loop** —
+/// specifically, every subscription made inside `on_start` is queued here
+/// because the receiver is not polled until `on_start` returns. A capacity of
+/// 32 leaves comfortable headroom for fan-out patterns (e.g. one subscription
+/// per item in a small config list) without resorting to an unbounded channel.
+///
+/// `subscribe_idle` uses `try_send` and returns [`Error::Send`] when the
+/// buffer is full, so the failure mode is a loud, actionable error rather
+/// than a silent hang — callers can batch or raise this constant if it is
+/// ever hit in practice.
+pub const IDLE_SUBSCRIBE_CHANNEL_CAPACITY: usize = 32;
+
 /// Sets the global default buffer size for actor mailboxes.
 ///
 /// This function can only be called successfully once. Subsequent calls
@@ -718,6 +738,7 @@ pub fn spawn_with_options<T: Actor + 'static>(
 
     let (mailbox_tx, mailbox_rx) = mpsc::channel(opts.mailbox_capacity);
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
+    let (idle_subscribe_tx, idle_subscribe_rx) = mpsc::channel(IDLE_SUBSCRIBE_CHANNEL_CAPACITY);
 
     let (priority_tx, priority_rx) = if opts.priority_enabled {
         let (tx, rx) = mpsc::channel(PRIORITY_CHANNEL_CAPACITY);
@@ -734,6 +755,7 @@ pub fn spawn_with_options<T: Actor + 'static>(
         mailbox_tx,
         priority_tx,
         terminate_tx,
+        idle_subscribe_tx,
         #[cfg(feature = "metrics")]
         metrics,
     );
@@ -744,6 +766,7 @@ pub fn spawn_with_options<T: Actor + 'static>(
         mailbox_rx,
         priority_rx,
         terminate_rx,
+        idle_subscribe_rx,
     ));
 
     (actor_ref, join_handle)
