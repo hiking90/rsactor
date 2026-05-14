@@ -958,6 +958,7 @@ async fn test_actor_fail_on_stop_during_graceful_stop() {
             error,
             phase,
             killed,
+            ..
         } => {
             assert_eq!(
                 phase,
@@ -1021,6 +1022,7 @@ async fn test_actor_fail_on_stop_during_kill() {
             error,
             phase,
             killed,
+            ..
         } => {
             assert_eq!(
                 phase,
@@ -1080,6 +1082,7 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
             error,
             phase,
             killed,
+            ..
         } => {
             assert_eq!(
                 phase,
@@ -1144,6 +1147,7 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
             error,
             phase,
             killed,
+            ..
         } => {
             assert_eq!(
                 phase,

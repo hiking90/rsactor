@@ -147,6 +147,7 @@ async fn main() -> Result<()> {
             error,
             phase,
             killed,
+            ..
         } => {
             println!(
                 "Actor stop failed: {}. Phase: {}, Killed: {}. Final count: {}",

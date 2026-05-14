@@ -27,6 +27,40 @@ fn current_multi_thread_handle() -> Option<Handle> {
     (handle.runtime_flavor() == RuntimeFlavor::MultiThread).then_some(handle)
 }
 
+/// Slow-path helper shared by `blocking_*` APIs: spawns a dedicated thread,
+/// builds a single-thread Tokio runtime on it, and runs `fut` to completion.
+///
+/// Used only when the caller is *not* inside a multi-thread runtime (i.e. when
+/// the fast `block_in_place` path is unavailable). Centralizes the
+/// thread/runtime/join boilerplate so all four slow paths report errors
+/// identically.
+///
+/// `panic_msg` describes the failure surfaced when the spawned thread itself
+/// panics (the `join.join()` returns `Err`); it is wrapped in `Error::Send`.
+fn run_blocking_with_runtime<F, R>(identity: Identity, panic_msg: &'static str, fut: F) -> Result<R>
+where
+    F: std::future::Future<Output = Result<R>> + Send + 'static,
+    R: Send + 'static,
+{
+    let join = std::thread::spawn(move || -> Result<R> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .map_err(|e| Error::Send {
+                identity,
+                details: format!("Failed to create runtime: {}", e),
+            })?;
+        runtime.block_on(fut)
+    });
+
+    join.join().unwrap_or_else(|_| {
+        Err(Error::Send {
+            identity,
+            details: panic_msg.to_string(),
+        })
+    })
+}
+
 #[cfg(feature = "tracing")]
 use tracing::{debug, info};
 
@@ -377,7 +411,9 @@ impl<T: Actor> ActorRef<T> {
             let caller = crate::CURRENT_ACTOR.try_with(|id| *id).ok();
             if let Some(caller) = caller {
                 let callee = self.identity();
-                let mut graph = crate::wait_for_graph().lock().unwrap();
+                let mut graph = crate::wait_for_graph()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if caller.id == callee.id || crate::has_path(&graph, callee.id, caller.id) {
                     let cycle = crate::format_cycle_path(&graph, caller, callee);
                     drop(graph);
@@ -772,16 +808,10 @@ impl<T: Actor> ActorRef<T> {
         let identity = self.identity();
         let priority_sender = priority_sender.clone();
 
-        let join = std::thread::spawn(move || -> Result<()> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .map_err(|e| Error::Send {
-                    identity,
-                    details: format!("Failed to create runtime: {}", e),
-                })?;
-
-            runtime.block_on(async {
+        run_blocking_with_runtime(
+            identity,
+            "Priority blocking thread terminated unexpectedly",
+            async move {
                 match tokio::time::timeout(timeout, priority_sender.send(envelope)).await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(_)) => {
@@ -808,15 +838,8 @@ impl<T: Actor> ActorRef<T> {
                         })
                     }
                 }
-            })
-        });
-
-        join.join().unwrap_or_else(|_| {
-            Err(Error::Send {
-                identity: self.identity(),
-                details: "Priority blocking thread terminated unexpectedly".to_string(),
-            })
-        })
+            },
+        )
     }
 
     /// Blocking equivalent of [`ask_priority`](Self::ask_priority). `timeout` is
@@ -859,25 +882,11 @@ impl<T: Actor> ActorRef<T> {
         }
 
         let self_clone = self.clone();
-
-        let join = std::thread::spawn(move || -> Result<T::Reply> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .map_err(|e| Error::Send {
-                    identity: self_clone.identity(),
-                    details: format!("Failed to create runtime: {}", e),
-                })?;
-
-            runtime.block_on(self_clone.ask_priority(msg, timeout))
-        });
-
-        join.join().unwrap_or_else(|_| {
-            Err(Error::Send {
-                identity: self.identity(),
-                details: "Priority blocking thread terminated unexpectedly".to_string(),
-            })
-        })
+        run_blocking_with_runtime(
+            self.identity(),
+            "Priority blocking thread terminated unexpectedly",
+            async move { self_clone.ask_priority(msg, timeout).await },
+        )
     }
 
     /// Sends an immediate termination signal to the actor.
@@ -1085,16 +1094,10 @@ impl<T: Actor> ActorRef<T> {
         let identity = self.identity();
         let sender = self.sender.clone();
 
-        let join = std::thread::spawn(move || -> Result<()> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .map_err(|e| Error::Send {
-                    identity,
-                    details: format!("Failed to create runtime: {}", e),
-                })?;
-
-            runtime.block_on(async {
+        run_blocking_with_runtime(
+            identity,
+            "Timeout thread terminated unexpectedly",
+            async move {
                 match tokio::time::timeout(timeout, sender.send(envelope)).await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(_)) => {
@@ -1121,15 +1124,8 @@ impl<T: Actor> ActorRef<T> {
                         })
                     }
                 }
-            })
-        });
-
-        join.join().unwrap_or_else(|_| {
-            Err(Error::Send {
-                identity: self.identity(),
-                details: "Timeout thread terminated unexpectedly".to_string(),
-            })
-        })
+            },
+        )
     }
 
     /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
@@ -1285,40 +1281,28 @@ impl<T: Actor> ActorRef<T> {
         T::Reply: Send + 'static,
     {
         let self_clone = self.clone();
+        let identity = self.identity();
 
-        let join = std::thread::spawn(move || -> Result<T::Reply> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .map_err(|e| Error::Send {
-                    identity: self_clone.identity(),
-                    details: format!("Failed to create runtime: {}", e),
-                })?;
-
-            runtime.block_on(async {
+        run_blocking_with_runtime(
+            identity,
+            "Timeout thread terminated unexpectedly",
+            async move {
                 tokio::time::timeout(timeout, self_clone.ask(msg))
                     .await
                     .map_err(|_| {
                         crate::dead_letter::record::<M>(
-                            self_clone.identity(),
+                            identity,
                             crate::dead_letter::DeadLetterReason::Timeout,
                             "blocking_ask",
                         );
                         Error::Timeout {
-                            identity: self_clone.identity(),
+                            identity,
                             timeout,
                             operation: "blocking_ask".to_string(),
                         }
                     })?
-            })
-        });
-
-        join.join().unwrap_or_else(|_| {
-            Err(Error::Send {
-                identity: self.identity(),
-                details: "Timeout thread terminated unexpectedly".to_string(),
-            })
-        })
+            },
+        )
     }
 
     /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
