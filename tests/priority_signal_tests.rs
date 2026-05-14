@@ -157,7 +157,7 @@ async fn default_spawn_has_no_priority_channel() {
         !actor_ref.has_priority_channel(),
         "spawn() must not enable the priority channel"
     );
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -184,7 +184,7 @@ async fn tell_priority_on_disabled_actor_returns_not_enabled_error() {
         "PriorityChannelNotEnabled must not increment the dead letter counter"
     );
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -202,7 +202,7 @@ async fn ask_priority_on_disabled_actor_returns_not_enabled_error() {
     assert!(matches!(err, Error::PriorityChannelNotEnabled { .. }));
     assert_eq!(dead_letter_count(), before);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +260,7 @@ async fn priority_bypasses_saturated_regular_mailbox() {
     // Drain the rest gracefully.
     release.notify_one();
     release.notify_one();
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -274,7 +274,7 @@ async fn ask_priority_returns_typed_reply() {
         .unwrap();
     assert_eq!(reply, 42);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +304,7 @@ async fn kill_overtakes_pending_priority_messages() {
 
     // Kill the actor. Per §5.A-1, kill MUST overtake pending priority messages
     // and the queued PingPriority MUST NOT be processed.
-    actor_ref.kill().unwrap();
+    actor_ref.kill();
     release.notify_one(); // unblock the in-flight handler so the loop progresses
 
     let result = handle.await.unwrap();
@@ -343,7 +343,7 @@ async fn priority_message_pending_at_stop_is_processed_before_on_stop() {
         .tell_priority(PingPriority, DEFAULT_TIMEOUT)
         .await
         .unwrap();
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     release.notify_one();
 
     let result = handle.await.unwrap();
@@ -400,7 +400,7 @@ async fn stop_drain_loop_processes_racing_priority_send() {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
 
         // Race: spawn a few priority senders concurrently with releasing the
         // blocker. Some sends will be accepted, some will be rejected after
@@ -451,7 +451,7 @@ async fn priority_send_after_stop_drain_records_dead_letter() {
 
     let opts = SpawnOptions::new().with_priority();
     let (actor_ref, handle) = spawn_with_options::<CounterActor>((), opts);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     let before = dead_letter_count();
@@ -513,7 +513,7 @@ async fn tell_priority_timeout_on_wedged_actor_records_dead_letter() {
 
     // Cleanup: release the wedge and shut down.
     release.notify_one();
-    actor_ref.kill().unwrap();
+    actor_ref.kill();
     let _ = handle.await;
 }
 
@@ -575,7 +575,7 @@ async fn actor_weak_upgrade_succeeds_when_only_priority_strong_dropped() {
         .unwrap_err();
     assert!(matches!(err, Error::PriorityChannelNotEnabled { .. }));
 
-    let _ = upgraded.stop().await;
+    upgraded.stop().await;
 }
 
 #[tokio::test]
@@ -598,7 +598,7 @@ async fn actor_weak_upgrade_preserves_priority_when_other_strong_alive() {
     );
 
     drop(other_strong);
-    let _ = upgraded.stop().await;
+    upgraded.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +619,7 @@ async fn blocking_tell_priority_succeeds_when_enabled() {
     let (_normal, priority) = actor_ref.ask(GetCounts).await.unwrap();
     assert_eq!(priority, 1);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -636,7 +636,7 @@ async fn blocking_ask_priority_returns_reply() {
     .unwrap();
     assert_eq!(reply, 100);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 // Verify that the blocking priority variants can be called directly from an
@@ -658,7 +658,7 @@ async fn blocking_tell_priority_from_async_multi_thread_context() {
     let (_normal, priority) = actor_ref.ask(GetCounts).await.unwrap();
     assert_eq!(priority, 1);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -671,7 +671,7 @@ async fn blocking_ask_priority_from_async_multi_thread_context() {
         .expect("blocking_ask_priority from async ctx should succeed");
     assert_eq!(reply, 8);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 // On a current_thread runtime, blocking_*_priority cannot take the
@@ -698,7 +698,7 @@ async fn blocking_tell_priority_on_current_thread_runtime() {
     let (_normal, priority) = actor_ref.ask(GetCounts).await.unwrap();
     assert_eq!(priority, 1);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -715,7 +715,7 @@ async fn blocking_ask_priority_on_current_thread_runtime() {
     .expect("blocking_ask_priority on current_thread runtime should succeed");
     assert_eq!(reply, 21);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -729,7 +729,7 @@ async fn blocking_priority_on_disabled_actor_returns_not_enabled() {
     .unwrap()
     .unwrap_err();
     assert!(matches!(err, Error::PriorityChannelNotEnabled { .. }));
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -780,7 +780,7 @@ async fn capacity_one_serializes_concurrent_priority_admission() {
     );
 
     release.notify_one();
-    actor_ref.kill().unwrap();
+    actor_ref.kill();
 }
 
 // ---------------------------------------------------------------------------
@@ -873,7 +873,7 @@ async fn priority_handler_runs_before_queued_regular_messages() {
 
     // Release R1 and let everything drain.
     r1_release.notify_one();
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     let order = log.lock().unwrap().clone();
@@ -931,5 +931,5 @@ async fn priority_metrics_counters_are_distinct_from_regular() {
     assert_eq!(actor_ref.priority_message_count(), 3);
     assert_eq!(actor_ref.message_count(), 6);
 
-    let _ = actor_ref.stop().await;
+    actor_ref.stop().await;
 }

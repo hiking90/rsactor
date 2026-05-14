@@ -67,7 +67,7 @@
 //!
 //!     // Dead letters are automatically logged when message delivery fails
 //!     let (actor_ref, handle) = spawn::<MyActor>(MyActor);
-//!     actor_ref.stop().await.unwrap();
+//!     actor_ref.stop().await;
 //!     handle.await.unwrap();
 //!
 //!     // This will log a dead letter warning

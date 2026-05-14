@@ -31,11 +31,11 @@
 //!
 //! // Stop all actors gracefully
 //! for control in &controls {
-//!     control.stop().await?;
+//!     control.stop().await;
 //! }
 //! ```
 
-use crate::{Actor, ActorRef, ActorWeak, BoxFuture, Identity, Result};
+use crate::{Actor, ActorRef, ActorWeak, BoxFuture, Identity};
 use futures::FutureExt;
 use std::fmt;
 
@@ -59,7 +59,7 @@ use std::fmt;
 ///
 /// // Stop all actors
 /// for control in &controls {
-///     control.stop().await?;
+///     control.stop().await;
 /// }
 /// ```
 pub trait ActorControl: Send + Sync {
@@ -72,12 +72,15 @@ pub trait ActorControl: Send + Sync {
     /// Gracefully stops the actor.
     ///
     /// The actor will process all remaining messages in its mailbox before stopping.
-    fn stop(&self) -> BoxFuture<'_, Result<()>>;
+    /// Idempotent: a closed mailbox is treated as "stop already in flight".
+    fn stop(&self) -> BoxFuture<'_, ()>;
 
     /// Immediately terminates the actor.
     ///
     /// The actor will stop without processing remaining messages.
-    fn kill(&self) -> Result<()>;
+    /// Idempotent: a closed or full terminate channel is treated as
+    /// "termination already in flight".
+    fn kill(&self);
 
     /// Downgrades to a weak control reference.
     fn downgrade(&self) -> Box<dyn WeakActorControl>;
@@ -109,7 +112,7 @@ pub trait ActorControl: Send + Sync {
 ///
 /// for control in &weak_controls {
 ///     if let Some(strong) = control.upgrade() {
-///         strong.stop().await?;
+///         strong.stop().await;
 ///     }
 /// }
 /// ```
@@ -172,11 +175,11 @@ impl<T: Actor + 'static> ActorControl for ActorRef<T> {
         ActorRef::is_alive(self)
     }
 
-    fn stop(&self) -> BoxFuture<'_, Result<()>> {
+    fn stop(&self) -> BoxFuture<'_, ()> {
         ActorRef::stop(self).boxed()
     }
 
-    fn kill(&self) -> Result<()> {
+    fn kill(&self) {
         ActorRef::kill(self)
     }
 

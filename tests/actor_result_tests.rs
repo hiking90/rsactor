@@ -99,7 +99,7 @@ async fn test_actor_result_completed_stopped_normally() {
 
     // Wait for actor to start and then stop it gracefully
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    actor_ref.stop().await.expect("Stop should succeed");
+    actor_ref.stop().await;
 
     let result = handle.await.expect("Actor should complete");
 
@@ -153,7 +153,7 @@ async fn test_actor_result_completed_killed() {
 
     // Wait for actor to start and then kill it
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    actor_ref.kill().expect("Kill should succeed");
+    actor_ref.kill();
 
     let result = handle.await.expect("Actor should complete");
 
@@ -292,7 +292,7 @@ async fn test_actor_result_failed_on_stop_graceful() {
 
     // Wait for actor to start and then stop it gracefully
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    actor_ref.stop().await.expect("Stop should succeed");
+    actor_ref.stop().await;
 
     let result = handle.await.expect("Handle should not fail");
 
@@ -334,7 +334,7 @@ async fn test_actor_result_failed_on_stop_killed() {
 
     // Wait for actor to start and then kill it
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    actor_ref.kill().expect("Kill should succeed");
+    actor_ref.kill();
 
     let result = handle.await.expect("Handle should not fail");
 
@@ -621,7 +621,7 @@ async fn test_blocking_tell_works_outside_runtime() {
     thread_handle.join().expect("Thread should not panic");
 
     // Clean up
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     let _result = handle.await.expect("Actor task failed");
 }
 
@@ -653,7 +653,7 @@ async fn test_blocking_ask_works_outside_runtime() {
     thread_handle.join().expect("Thread should not panic");
 
     // Clean up
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     let _result = handle.await.expect("Actor task failed");
 }
 

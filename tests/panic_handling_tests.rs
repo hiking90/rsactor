@@ -130,7 +130,7 @@ mod tests {
         assert_eq!(result, 8);
 
         // Stop gracefully
-        actor_ref.stop().await?;
+        actor_ref.stop().await;
         let actor_result = join_handle.await.unwrap();
 
         match actor_result {
@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(result, 5);
 
         // Stop gracefully
-        actor_ref.stop().await?;
+        actor_ref.stop().await;
         let actor_result = join_handle.await.unwrap();
 
         match actor_result {
@@ -234,7 +234,7 @@ mod tests {
         // Verify counter was reset
         assert_eq!(actor_ref.ask(SafeMessage(1)).await?, 1);
 
-        actor_ref.stop().await?;
+        actor_ref.stop().await;
         join_handle.await.unwrap();
 
         Ok(())
@@ -265,8 +265,8 @@ mod tests {
         assert!(result.is_err());
 
         // Clean up
-        actor_ref1.stop().await?;
-        actor_ref3.stop().await?;
+        actor_ref1.stop().await;
+        actor_ref3.stop().await;
 
         let result1 = join_handle1.await.unwrap();
         let result3 = join_handle3.await.unwrap();
@@ -373,7 +373,7 @@ mod supervision_tests {
         assert_eq!(actor_ref.ask(SafeMessage(2)).await?, 3);
 
         // Stop gracefully
-        actor_ref.stop().await?;
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
 
         assert!(matches!(result, ActorResult::Completed { .. }));
@@ -428,7 +428,7 @@ mod advanced_tests {
     async fn test_successful_on_start() -> Result<()> {
         let (actor_ref, join_handle) = spawn::<StartupPanicActor>(false);
 
-        actor_ref.stop().await?;
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
 
         assert!(matches!(result, ActorResult::Completed { .. }));
@@ -469,7 +469,7 @@ mod advanced_tests {
     async fn test_panic_during_on_stop() -> Result<()> {
         let (actor_ref, join_handle) = spawn::<StopPanicActor>(true);
 
-        actor_ref.stop().await?;
+        actor_ref.stop().await;
         let join_result = join_handle.await;
 
         // on_stop panic should be caught
@@ -483,7 +483,7 @@ mod advanced_tests {
     async fn test_normal_on_stop() -> Result<()> {
         let (actor_ref, join_handle) = spawn::<StopPanicActor>(false);
 
-        actor_ref.stop().await?;
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
 
         assert!(matches!(result, ActorResult::Completed { .. }));
@@ -530,7 +530,7 @@ mod advanced_tests {
 
         async fn handle(&mut self, _msg: KillMessage, actor_ref: &ActorRef<Self>) -> Self::Reply {
             // Actor kills itself
-            let _ = actor_ref.kill();
+            actor_ref.kill();
         }
     }
 
@@ -538,13 +538,13 @@ mod advanced_tests {
     async fn test_kill_vs_graceful_stop_with_panic() -> Result<()> {
         // Test graceful stop with panic
         let (actor_ref1, join_handle1) = spawn::<KillTestActor>(true);
-        actor_ref1.stop().await?;
+        actor_ref1.stop().await;
         let result1 = join_handle1.await;
         assert!(result1.is_err() && result1.unwrap_err().is_panic());
 
         // Test kill (should not trigger on_stop panic)
         let (actor_ref2, join_handle2) = spawn::<KillTestActor>(true);
-        let _ = actor_ref2.kill();
+        actor_ref2.kill();
         let result2 = join_handle2.await.unwrap();
         assert!(matches!(
             result2,
@@ -833,8 +833,8 @@ mod integration_tests {
         assert_eq!(actor3_ref.ask(SimpleMsg).await?, 3);
 
         // Clean up
-        actor1_ref.stop().await?;
-        actor3_ref.stop().await?;
+        actor1_ref.stop().await;
+        actor3_ref.stop().await;
 
         let result1 = actor1_handle.await.unwrap();
         let result2 = actor2_handle.await;

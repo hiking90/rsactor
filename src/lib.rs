@@ -179,7 +179,7 @@
 //! let current_data: String = actor_ref.ask(GetData).await?;
 //! let new_count: u32 = actor_ref.ask(IncrementMsg(5)).await?;
 //!
-//! actor_ref.stop().await?;
+//! actor_ref.stop().await;
 //! let actor_result = join_handle.await?;
 //! # Ok(())
 //! # }
@@ -305,7 +305,11 @@ use futures::FutureExt;
 pub use rsactor_derive::{message_handlers, Actor};
 
 /// Internal function used by derive macros to log handler errors.
-/// When `tracing` feature is enabled, uses `tracing::error!`; otherwise, uses `eprintln!`.
+///
+/// This surfaces user-handler `Result::Err` values through the most appropriate channel:
+/// when the `tracing` feature is enabled, it emits a structured `tracing::error!` event;
+/// otherwise it falls back to `eprintln!` so users who have not wired up a subscriber
+/// still see handler errors on stderr instead of silently dropping them.
 #[doc(hidden)]
 pub fn __log_handler_error(
     actor: &dyn std::fmt::Display,
@@ -325,7 +329,7 @@ pub fn __log_handler_error(
     );
 }
 
-use std::{fmt::Debug, future::Future, sync::atomic::AtomicU64, sync::OnceLock};
+use std::{future::Future, sync::atomic::AtomicU64, sync::OnceLock};
 
 #[cfg(feature = "deadlock-detection")]
 use std::collections::HashMap;
@@ -334,7 +338,7 @@ use std::sync::Mutex;
 
 use tokio::sync::{mpsc, oneshot};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Identity {
     /// Unique ID of the actor
     pub id: u64,

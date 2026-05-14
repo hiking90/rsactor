@@ -199,7 +199,7 @@ pub trait Actor: Sized + Send + 'static {
     ///     let (actor_ref, join_handle) = spawn::<SimpleActor>("MyActor".to_string());
     ///
     ///     // Gracefully stop the actor using [`stop`](crate::actor_ref::ActorRef::stop)
-    ///     actor_ref.stop().await?;
+    ///     actor_ref.stop().await;
     ///
     ///     // Wait for the actor to complete and get its final state
     ///     // The JoinHandle returns an [`ActorResult`](crate::ActorResult) enum
@@ -312,6 +312,8 @@ pub trait Actor: Sized + Send + 'static {
     /// This method is called when the actor is stopping, including:
     /// - Explicit stop via [`ActorRef::stop`](crate::actor_ref::ActorRef::stop) (graceful termination)
     /// - Explicit kill via [`ActorRef::kill`](crate::actor_ref::ActorRef::kill) (immediate termination)
+    /// - Implicit shutdown when every strong [`ActorRef`](crate::actor_ref::ActorRef) has been
+    ///   dropped (treated as graceful termination, so `killed = false`)
     /// - Cleanup after an [`on_idle`](Actor::on_idle) error
     ///
     /// It is **not** called if the actor fails during message processing (handler panic/error).
@@ -451,15 +453,21 @@ pub trait Message<T: Send + 'static>: Actor {
 /// initialization through message processing to termination. It orchestrates:
 ///
 /// 1. **Initialization**: Calls `on_start` to create the actor instance
-/// 2. **Runtime Loop**: Concurrently handles messages and executes `on_run`
+/// 2. **Runtime Loop**: Concurrently handles messages and dispatches idle events to `on_idle`
 /// 3. **Termination**: Manages graceful/forceful shutdown and calls `on_stop`
 ///
 /// # Arguments
 ///
 /// * `args` - Initialization arguments passed to the actor's `on_start` method
 /// * `actor_ref` - Strong reference to the actor (dropped after initialization)
-/// * `receiver` - Channel receiver for incoming messages
+/// * `receiver` - Channel receiver for the regular mailbox
+/// * `priority_receiver` - Optional channel receiver for the priority mailbox.
+///   `None` when the actor was spawned without
+///   [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority).
 /// * `terminate_receiver` - Channel receiver for termination signals
+/// * `idle_subscribe_receiver` - Channel receiver for new idle-event stream
+///   subscriptions registered via
+///   [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle)
 ///
 /// # Returns
 ///

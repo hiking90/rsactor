@@ -113,7 +113,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Message count: {}", metrics.message_count);
         println!("  Avg processing time: {:?}", metrics.avg_processing_time);
         println!("  Max processing time: {:?}", metrics.max_processing_time);
-        println!("  Error count: {}", metrics.error_count);
         println!("  Uptime: {:?}", metrics.uptime);
         println!("  Last activity: {:?}", metrics.last_activity);
 
@@ -134,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Message count after ask: {}", actor_ref.message_count());
 
     // Graceful shutdown
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     let result = handle.await?;
 
     println!("\nActor completed: {:?}", result.is_completed());

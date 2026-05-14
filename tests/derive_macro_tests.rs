@@ -59,7 +59,7 @@ async fn test_derive_actor_basic_functionality() {
     assert_eq!(new_value, 100);
 
     // Stop the actor
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -73,7 +73,7 @@ async fn test_derive_actor_error_type() {
     // This test ensures the actor can be spawned without error handling
     let (actor_ref, join_handle) = spawn::<TestActor>(actor_instance);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 
     // The join handle should complete successfully
     let result = join_handle.await.unwrap();
@@ -100,7 +100,7 @@ async fn test_derive_actor_args_type() {
     assert_eq!(value, original_value);
     assert_eq!(name, original_name);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test with a unit struct
@@ -124,7 +124,7 @@ async fn test_derive_actor_unit_struct() {
     let response = actor_ref.ask(Ping).await.unwrap();
     assert_eq!(response, "pong");
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test with a tuple struct
@@ -161,7 +161,7 @@ async fn test_derive_actor_tuple_struct() {
     assert_eq!(first, "hello");
     assert_eq!(second, 456);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test with an enum
@@ -244,7 +244,7 @@ async fn test_derive_actor_enum_basic() {
     let state = actor_ref.ask(GetState).await.unwrap();
     assert!(matches!(state, StateActor::Idle));
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -276,7 +276,7 @@ async fn test_derive_actor_enum_state_transitions() {
     let processing_data = actor_ref.ask(GetProcessingData).await.unwrap();
     assert_eq!(processing_data, None);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -291,7 +291,7 @@ async fn test_derive_actor_enum_variant_data() {
     let is_idle = actor_ref.ask(IsIdle).await.unwrap();
     assert!(!is_idle);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -309,7 +309,7 @@ async fn test_derive_actor_enum_completed_variant() {
     let is_idle = actor_ref.ask(IsIdle).await.unwrap();
     assert!(!is_idle);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test with a simple enum without data
@@ -383,7 +383,7 @@ async fn test_derive_actor_simple_enum() {
     let direction = actor_ref.ask(GetDirection).await.unwrap();
     assert_eq!(direction, DirectionActor::East);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -415,7 +415,7 @@ async fn test_derive_actor_enum_full_rotation() {
         assert_eq!(direction, expected);
     }
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // =============================================================================
@@ -459,7 +459,7 @@ async fn test_message_handlers_macro_basic() {
     let result = actor_ref.ask(TestMessage).await.unwrap();
     assert_eq!(result, 42);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test for generic support in derive macro
@@ -505,7 +505,7 @@ async fn test_derive_actor_with_generics() {
     let new_data = actor_ref.ask(SetData("world".to_string())).await.unwrap();
     assert_eq!(new_data, "world");
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -520,7 +520,7 @@ async fn test_derive_actor_with_generics_numeric() {
     let new_data = actor_ref.ask(SetData(456)).await.unwrap();
     assert_eq!(new_data, 456);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test actor with complex where clauses and multiple generic parameters
@@ -594,7 +594,7 @@ async fn test_derive_actor_multi_generics() {
     let new_both = actor_ref.ask(MultiGetBoth).await.unwrap();
     assert_eq!(new_both, (vec![4, 5], "updated".to_string()));
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test edge cases for handler method validation
@@ -650,7 +650,7 @@ async fn test_handler_edge_cases() {
     let value = actor_ref.ask(EdgeGetValue).await.unwrap();
     assert_eq!(value, 3); // 1 + 2
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test that the derive macro works with complex struct patterns
@@ -730,7 +730,7 @@ async fn test_complex_struct_actor() {
     let new_data = actor_ref.ask(ComplexGetPrivateData).await.unwrap();
     assert_eq!(new_data, vec![1, 2, 3, 4]);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // Test that lifetimes and references work correctly in messages
@@ -777,7 +777,7 @@ async fn test_reference_handling() {
     let data = actor_ref.ask(GetDataRef).await.unwrap();
     assert_eq!(data, "updated_data");
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 // =============================================================================
@@ -906,9 +906,9 @@ async fn test_enhanced_macro_features_integration() {
     assert_eq!(complex_id, 999);
 
     // Stop all actors
-    generic_ref.stop().await.unwrap();
-    multi_ref.stop().await.unwrap();
-    complex_ref.stop().await.unwrap();
+    generic_ref.stop().await;
+    multi_ref.stop().await;
+    complex_ref.stop().await;
 }
 
 // Test macro resilience with edge cases
@@ -936,9 +936,9 @@ async fn test_macro_edge_cases() {
     assert_eq!(processing_data, Some("edge_processing".to_string()));
 
     // Stop all actors
-    unit_ref.stop().await.unwrap();
-    tuple_ref.stop().await.unwrap();
-    enum_ref.stop().await.unwrap();
+    unit_ref.stop().await;
+    tuple_ref.stop().await;
+    enum_ref.stop().await;
 }
 
 // Performance test to ensure macros don't introduce significant overhead
@@ -967,7 +967,7 @@ async fn test_macro_performance() {
 
     // Clean up
     for actor_ref in actors {
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
     }
 
     let duration = start.elapsed();
@@ -1210,7 +1210,7 @@ async fn test_successful_error_handling_examples() {
     let result = actor_ref.ask(ValidMessage).await.unwrap();
     assert_eq!(result, 42);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -1271,7 +1271,7 @@ async fn test_multiple_handlers_same_actor() {
     let new_name = actor_ref.ask(SetName("updated".to_string())).await.unwrap();
     assert_eq!(new_name, "updated");
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -1324,7 +1324,7 @@ async fn test_handler_with_result_return_type() {
     let result = actor_ref.ask(GetNegative).await.unwrap();
     assert_eq!(result, Err("Value is not negative".to_string()));
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 
     // Test with negative value
     let actor = ResultActor { value: -10 };
@@ -1336,7 +1336,7 @@ async fn test_handler_with_result_return_type() {
     let result = actor_ref.ask(GetNegative).await.unwrap();
     assert_eq!(result, Ok(-10));
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -1390,7 +1390,7 @@ async fn test_handler_with_option_return_type() {
     let at_10 = actor_ref.ask(GetAt(10)).await.unwrap();
     assert_eq!(at_10, None);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 
 #[tokio::test]
@@ -1441,5 +1441,5 @@ async fn test_mixed_handler_patterns() {
     let result = actor_ref.ask(Reset).await.unwrap();
     assert_eq!(result, 0);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }

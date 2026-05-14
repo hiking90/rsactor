@@ -99,7 +99,7 @@ async fn test_tell_handler_from_actor_ref() {
     assert!(handler.as_control().is_alive());
 
     // Stop via actor_ref (lifecycle control is separate from handler)
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -127,8 +127,8 @@ async fn test_tell_handler_multiple_actors_same_message() {
     }
 
     // Stop all actors via actor_ref
-    actor_a.stop().await.expect("stop should succeed");
-    actor_b.stop().await.expect("stop should succeed");
+    actor_a.stop().await;
+    actor_b.stop().await;
 
     let result_a = handle_a.await.expect("actor A should complete");
     let result_b = handle_b.await.expect("actor B should complete");
@@ -165,7 +165,7 @@ async fn test_tell_handler_clone_boxed() {
         .await
         .expect("cloned handler tell should succeed");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -191,7 +191,7 @@ async fn test_tell_handler_clone_trait() {
     handlers[0].tell(Ping).await.expect("should work");
     handlers_clone[0].tell(Ping).await.expect("should work");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -211,7 +211,7 @@ async fn test_tell_handler_debug() {
     assert!(debug_str.contains("TellHandler"));
     assert!(debug_str.contains("identity"));
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -226,7 +226,7 @@ async fn test_tell_handler_kill() {
     let _handler: Box<dyn TellHandler<Ping>> = (&actor_ref).into();
 
     // Kill via actor_ref (lifecycle control is separate from handler)
-    actor_ref.kill().expect("kill should succeed");
+    actor_ref.kill();
 
     let result = handle.await.expect("actor should complete");
     assert!(result.was_killed());
@@ -253,7 +253,7 @@ async fn test_ask_handler_from_actor_ref() {
     assert_eq!(status.name, "ask_test");
     assert!(status.alive);
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -283,8 +283,8 @@ async fn test_ask_handler_multiple_actors_same_reply_type() {
     assert_eq!(responses[1].name, "ActorB-100");
 
     // Stop all actors via actor_ref
-    actor_a.stop().await.expect("stop should succeed");
-    actor_b.stop().await.expect("stop should succeed");
+    actor_a.stop().await;
+    actor_b.stop().await;
 
     let _ = handle_a.await;
     let _ = handle_b.await;
@@ -307,7 +307,7 @@ async fn test_ask_handler_clone() {
 
     assert_eq!(status1, status2);
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -341,7 +341,7 @@ async fn test_weak_tell_handler_from_actor_weak() {
         .expect("upgrade should succeed while actor is alive");
     strong.tell(Ping).await.expect("tell should succeed");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -358,7 +358,7 @@ async fn test_weak_tell_handler_upgrade_after_stop() {
     let weak_handler: Box<dyn WeakTellHandler<Ping>> = actor_weak.into();
 
     // Stop the actor
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     drop(actor_ref);
 
     let _ = handle.await;
@@ -394,8 +394,8 @@ async fn test_weak_tell_handler_multiple_actors() {
     }
 
     // Stop actors
-    actor_a.stop().await.expect("stop should succeed");
-    actor_b.stop().await.expect("stop should succeed");
+    actor_a.stop().await;
+    actor_b.stop().await;
 
     let _ = handle_a.await;
     let _ = handle_b.await;
@@ -418,7 +418,7 @@ async fn test_weak_tell_handler_batch_operations() {
         strong.tell(Ping).await.expect("should work");
     }
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -444,7 +444,7 @@ async fn test_weak_tell_handler_clone() {
     assert!(weak_handler.upgrade().is_some());
     assert!(weak_clone.upgrade().is_some());
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -469,7 +469,7 @@ async fn test_weak_ask_handler_from_actor_weak() {
 
     assert_eq!(status.name, "weak_ask");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -500,8 +500,8 @@ async fn test_weak_ask_handler_multiple_actors() {
     assert_eq!(responses[0].name, "WeakAskA");
     assert_eq!(responses[1].name, "ActorB-77");
 
-    actor_a.stop().await.expect("stop should succeed");
-    actor_b.stop().await.expect("stop should succeed");
+    actor_a.stop().await;
+    actor_b.stop().await;
 
     let _ = handle_a.await;
     let _ = handle_b.await;
@@ -529,7 +529,7 @@ async fn test_tell_handler_as_control() {
     assert!(control.is_alive());
 
     // Stop via control
-    control.stop().await.expect("stop should succeed");
+    control.stop().await;
 
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
@@ -556,7 +556,7 @@ async fn test_ask_handler_as_control() {
     assert_eq!(status.name, "ask_as_control");
 
     // Kill via control
-    control.kill().expect("kill should succeed");
+    control.kill();
 
     let result = handle.await.expect("actor should complete");
     assert!(result.was_killed());
@@ -584,7 +584,7 @@ async fn test_handler_as_control_multiple_actors() {
 
     // Stop all via unified control interface
     for control in &controls {
-        control.stop().await.expect("stop should succeed");
+        control.stop().await;
     }
 
     let result_a = handle_a.await.expect("actor A should complete");
@@ -620,7 +620,7 @@ async fn test_downgrade_from_tell_handler() {
     let upgraded = weak_handler.upgrade().expect("should be able to upgrade");
     upgraded.tell(Ping).await.expect("tell should work");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -648,7 +648,7 @@ async fn test_downgrade_from_ask_handler() {
 
     assert_eq!(status.name, "ask_downgrade");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -683,7 +683,7 @@ async fn test_roundtrip_strong_weak_strong() {
     strong1.tell(Ping).await.expect("should work");
     strong2.tell(Ping).await.expect("should work");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -706,7 +706,7 @@ async fn test_from_actor_ref_ownership() {
 
     handler.tell(Ping).await.expect("should work");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -726,7 +726,7 @@ async fn test_from_actor_ref_reference() {
     // Original actor_ref is still usable
     actor_ref.tell(Ping).await.expect("should work");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -745,7 +745,7 @@ async fn test_from_actor_weak_ownership() {
 
     assert!(handler.upgrade().is_some());
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -766,7 +766,7 @@ async fn test_from_actor_weak_reference() {
     assert!(handler.upgrade().is_some());
     assert!(actor_weak.upgrade().is_some());
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -790,7 +790,7 @@ async fn test_tell_handler_with_timeout() {
         .await
         .expect("tell_with_timeout should succeed");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -812,7 +812,7 @@ async fn test_ask_handler_with_timeout() {
 
     assert_eq!(status.name, "ask_timeout");
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -845,7 +845,7 @@ async fn test_all_handlers_debug_formatting() {
     assert!(weak_tell_debug.contains("WeakTellHandler"));
     assert!(weak_ask_debug.contains("WeakAskHandler"));
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 

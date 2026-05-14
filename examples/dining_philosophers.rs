@@ -484,9 +484,7 @@ async fn main() -> Result<()> {
     // Shutdown actors gracefully
     println!("\nShutting down philosophers...");
     for p_ref in philosopher_refs.iter() {
-        p_ref.stop().await.unwrap_or_else(|e| {
-            eprintln!("Error stopping philosopher: {e:?}");
-        });
+        p_ref.stop().await;
     }
 
     // Wait for actors to terminate
@@ -494,9 +492,7 @@ async fn main() -> Result<()> {
     let results = futures::future::join_all(philosopher_join_handles).await;
 
     println!("\nShutting down table...");
-    if let Err(e) = table_ref.stop().await {
-        eprintln!("Error stopping table: {e:?}");
-    }
+    table_ref.stop().await;
 
     println!("\nWaiting for table to terminate...");
     match table_join_handle.await {

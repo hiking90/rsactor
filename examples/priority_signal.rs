@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
         .tell_priority(ResumeProcessing, Duration::from_secs(1))
         .await?;
 
-    actor.stop().await?;
+    actor.stop().await;
     let result = join.await?;
     if let Some(final_state) = result.actor() {
         println!(

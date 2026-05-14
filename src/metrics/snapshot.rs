@@ -20,13 +20,7 @@ use std::time::{Duration, SystemTime};
 /// let metrics = actor_ref.metrics();
 ///
 /// println!("Messages processed: {}", metrics.message_count);
-/// println!("Error rate: {:.2}%",
-///     if metrics.message_count > 0 {
-///         (metrics.error_count as f64 / metrics.message_count as f64) * 100.0
-///     } else {
-///         0.0
-///     }
-/// );
+/// println!("Average processing time: {:?}", metrics.avg_processing_time);
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -58,12 +52,6 @@ pub struct MetricsSnapshot {
     /// Maximum time spent processing any single priority message.
     pub max_priority_processing_time: Duration,
 
-    /// Total number of errors that occurred during message handling.
-    ///
-    /// This counts errors returned by message handlers, not framework-level errors
-    /// like channel closure or timeouts.
-    pub error_count: u64,
-
     /// Time elapsed since the actor was started.
     ///
     /// This is measured from when the actor's `on_start` completed successfully.
@@ -84,7 +72,6 @@ impl Default for MetricsSnapshot {
             priority_message_count: 0,
             avg_priority_processing_time: Duration::ZERO,
             max_priority_processing_time: Duration::ZERO,
-            error_count: 0,
             uptime: Duration::ZERO,
             last_activity: None,
         }
@@ -102,7 +89,6 @@ mod tests {
         assert_eq!(snapshot.message_count, 0);
         assert_eq!(snapshot.avg_processing_time, Duration::ZERO);
         assert_eq!(snapshot.max_processing_time, Duration::ZERO);
-        assert_eq!(snapshot.error_count, 0);
         assert_eq!(snapshot.uptime, Duration::ZERO);
         assert!(snapshot.last_activity.is_none());
     }
@@ -116,7 +102,6 @@ mod tests {
             priority_message_count: 7,
             avg_priority_processing_time: Duration::from_micros(80),
             max_priority_processing_time: Duration::from_millis(2),
-            error_count: 3,
             uptime: Duration::from_secs(60),
             last_activity: Some(SystemTime::now()),
         };
@@ -135,7 +120,6 @@ mod tests {
             cloned.max_priority_processing_time,
             Duration::from_millis(2)
         );
-        assert_eq!(cloned.error_count, 3);
         assert_eq!(cloned.uptime, Duration::from_secs(60));
         assert!(cloned.last_activity.is_some());
     }
@@ -147,6 +131,5 @@ mod tests {
 
         assert!(debug_str.contains("MetricsSnapshot"));
         assert!(debug_str.contains("message_count"));
-        assert!(debug_str.contains("error_count"));
     }
 }

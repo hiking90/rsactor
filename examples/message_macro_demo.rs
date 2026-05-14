@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
 
     println!("📊 Final count: {}", actor_ref.ask(GetCount).await?);
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     let result = join_handle.await?;
 
     match result {

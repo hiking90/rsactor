@@ -116,7 +116,7 @@ async fn setup_actor() -> (
 async fn test_spawn_and_actor_ref_id() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     let result = handle.await.expect("Actor task failed");
     assert!(
         result.is_completed(),
@@ -164,7 +164,7 @@ async fn test_actor_ref_ask() {
         .expect("ask failed for GetCounterMsg after update");
     assert_eq!(count_after_update, 10);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     let _result = handle.await.expect("Actor task failed");
 }
 
@@ -184,7 +184,7 @@ async fn test_actor_ref_tell() {
         Some("UpdateCounterMsg".to_string())
     );
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     let _result = handle.await.expect("Actor task failed");
 }
 
@@ -200,7 +200,7 @@ async fn test_actor_ref_stop() {
         .expect("ask sent before stop should succeed");
     assert_eq!(count_val, 100);
 
-    actor_ref.stop().await.expect("stop command failed");
+    actor_ref.stop().await;
 
     let result = handle.await.expect("Actor task failed");
     assert!(
@@ -247,7 +247,7 @@ async fn test_actor_ref_kill() {
 
     // Immediately send kill, without waiting for the previous message to be processed.
     // The dedicated terminate channel and biased select in Runtime should prioritize this.
-    actor_ref.kill().expect("kill command failed");
+    actor_ref.kill();
 
     let result = handle.await.expect("Actor task failed to complete");
 
@@ -585,10 +585,7 @@ async fn test_actor_with_string_error_type() {
     assert_eq!(reply, "SimpleMsg processed");
 
     // Stop the actor
-    actor_ref
-        .stop()
-        .await
-        .expect("Failed to stop StringErrorActor");
+    actor_ref.stop().await;
     let result = handle.await.expect("StringErrorActor task failed");
 
     assert!(
@@ -628,7 +625,7 @@ async fn test_spawn_and_stop_dummy_actor() {
     // if on_start does nothing.
     // tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-    actor_ref.stop().await.expect("Failed to stop dummy actor");
+    actor_ref.stop().await;
     let result = handle.await.expect("Dummy actor task failed");
 
     assert!(
@@ -669,7 +666,7 @@ async fn test_actor_ref_blocking_tell() {
         Some("UpdateCounterMsg".to_string())
     );
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -717,7 +714,7 @@ async fn test_actor_ref_blocking_ask() {
 
     join_handle.await.expect("Blocking task panicked");
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -755,7 +752,7 @@ async fn test_actor_ref_blocking_ask_no_timeout() {
         .await
         .expect("Blocking task for blocking_ask with None timeout panicked");
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -764,13 +761,9 @@ async fn test_actor_ref_kill_multiple_times() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
 
     // Call kill multiple times
-    actor_ref.kill().expect("First kill command failed");
-    actor_ref
-        .kill()
-        .expect("Second kill command should also succeed (idempotent)");
-    actor_ref
-        .kill()
-        .expect("Third kill command should also succeed (idempotent)");
+    actor_ref.kill();
+    actor_ref.kill();
+    actor_ref.kill();
 
     let result = handle.await.expect("Actor task failed to complete");
 
@@ -810,10 +803,7 @@ async fn test_actor_ref_is_alive() {
         "Actor should be alive after spawn (stop test)"
     );
 
-    actor_ref_stop_test
-        .stop()
-        .await
-        .expect("Failed to stop actor (stop test)");
+    actor_ref_stop_test.stop().await;
     let result_stop = handle_stop_test
         .await
         .expect("Actor task failed after stop (stop test)");
@@ -843,9 +833,7 @@ async fn test_actor_ref_is_alive() {
         "Actor should be alive before kill (kill test)"
     );
 
-    actor_ref_kill_test
-        .kill()
-        .expect("kill command failed (kill test)");
+    actor_ref_kill_test.kill();
     let result_kill = handle_kill_test
         .await
         .expect("Actor task failed after kill (kill test)");
@@ -897,7 +885,7 @@ async fn test_ask_with_timeout() {
         .expect("ask_with_timeout for GetCounterMsg should succeed");
     assert_eq!(count, 0);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -928,7 +916,7 @@ async fn test_tell_with_timeout() {
     // it's hard to create a realistic timeout situation for tell_with_timeout
     // Without introducing artificial delays or mocks
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -955,7 +943,7 @@ async fn test_actor_fail_on_stop_during_graceful_stop() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Gracefully stop the actor - this should trigger on_stop failure
-    actor_ref.stop().await.expect("stop command should succeed");
+    actor_ref.stop().await;
 
     let result = handle.await.expect("Join handle should not fail");
     assert!(
@@ -1018,7 +1006,7 @@ async fn test_actor_fail_on_stop_during_kill() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Kill the actor - this should trigger on_stop failure
-    actor_ref.kill().expect("kill command should succeed");
+    actor_ref.kill();
 
     let result = handle.await.expect("Join handle should not fail");
     assert!(
@@ -1208,7 +1196,7 @@ async fn test_actor_on_stop_success_during_graceful_stop() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Gracefully stop the actor - this should succeed
-    actor_ref.stop().await.expect("stop command should succeed");
+    actor_ref.stop().await;
 
     let result = handle.await.expect("Join handle should not fail");
     assert!(
@@ -1260,7 +1248,7 @@ async fn test_actor_on_stop_success_during_kill() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Kill the actor - this should succeed
-    actor_ref.kill().expect("kill command should succeed");
+    actor_ref.kill();
 
     let result = handle.await.expect("Join handle should not fail");
     assert!(

@@ -57,7 +57,7 @@ async fn test_actor_control_from_actor_ref() {
     assert!(control.is_alive());
 
     // Stop via control
-    control.stop().await.expect("stop should succeed");
+    control.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -80,7 +80,7 @@ async fn test_actor_control_multiple_actors() {
 
     // Stop all actors via controls
     for control in &controls {
-        control.stop().await.expect("stop should succeed");
+        control.stop().await;
     }
 
     let result_a = handle_a.await.expect("actor A should complete");
@@ -98,7 +98,7 @@ async fn test_actor_control_stop() {
     let control: Box<dyn ActorControl> = (&actor_ref).into();
 
     // Stop via control
-    control.stop().await.expect("stop should succeed");
+    control.stop().await;
 
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
@@ -114,7 +114,7 @@ async fn test_actor_control_kill() {
     let control: Box<dyn ActorControl> = (&actor_ref).into();
 
     // Kill via control
-    control.kill().expect("kill should succeed");
+    control.kill();
 
     let result = handle.await.expect("actor should complete");
     assert!(result.was_killed());
@@ -141,7 +141,7 @@ async fn test_actor_control_clone() {
     assert!(control_clone1.is_alive());
     assert!(control_clone2.is_alive());
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -161,7 +161,7 @@ async fn test_actor_control_downgrade() {
     assert_eq!(control.identity(), weak_control.identity());
     assert!(weak_control.is_alive());
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -185,7 +185,7 @@ async fn test_actor_control_downgrade_upgrade_roundtrip() {
     assert_eq!(weak_control.identity(), control2.identity());
 
     // Can use the upgraded control to stop
-    control2.stop().await.expect("stop should succeed");
+    control2.stop().await;
     let result = handle.await.expect("actor should complete");
     assert!(result.stopped_normally());
 }
@@ -206,7 +206,7 @@ async fn test_weak_actor_control_upgrade() {
     let strong = weak_control.upgrade().expect("upgrade should succeed");
     assert_eq!(strong.identity(), actor_ref.identity());
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -219,7 +219,7 @@ async fn test_weak_actor_control_upgrade_after_stop() {
     let weak_control: Box<dyn WeakActorControl> = ActorRef::downgrade(&actor_ref).into();
 
     // Stop and drop the actor
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     drop(actor_ref);
 
     let _ = handle.await;
@@ -248,7 +248,7 @@ async fn test_weak_actor_control_clone() {
     assert!(weak_control.upgrade().is_some());
     assert!(weak_clone.upgrade().is_some());
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 
@@ -272,7 +272,7 @@ async fn test_actor_control_debug() {
     assert!(control_debug.contains("ActorControl"));
     assert!(weak_debug.contains("WeakActorControl"));
 
-    actor_ref.stop().await.expect("stop should succeed");
+    actor_ref.stop().await;
     let _ = handle.await;
 }
 

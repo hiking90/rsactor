@@ -5,18 +5,44 @@ use crate::Identity;
 use std::time::Duration;
 
 #[derive(Debug)]
+#[non_exhaustive]
 /// Represents errors that can occur in the rsactor framework.
 ///
 /// These errors may be encountered during various actor operations, such as sending messages
 /// with [`tell`](crate::actor_ref::ActorRef::tell) or [`ask`](crate::actor_ref::ActorRef::ask),
 /// or during actor lifecycle operations like [`spawn`](crate::spawn).
+///
+/// This enum is marked `#[non_exhaustive]` so new variants can be added in future versions
+/// without breaking existing exhaustive matches — callers should include a `_` arm when
+/// matching on `Error`.
 pub enum Error {
-    /// Error when sending a message to an actor
+    /// Error when sending a message to an actor's channel that has been closed
+    /// (the actor is no longer alive).
+    ///
+    /// For "channel full" failures see [`Error::ChannelFull`].
     Send {
         /// ID of the actor that failed to receive the message
         identity: Identity,
         /// Additional context about the error
         details: String,
+    },
+    /// Error when a bounded channel is currently at capacity.
+    ///
+    /// Unlike [`Error::Send`] (which means the actor is dead), this is a *transient*
+    /// failure — the actor is alive and the channel will drain as the runtime makes
+    /// progress. [`Error::is_retryable`] returns `true` for this variant.
+    ///
+    /// Currently emitted only by
+    /// [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle) when the bounded
+    /// subscribe buffer (capacity
+    /// [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`](crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY))
+    /// is saturated.
+    ChannelFull {
+        /// ID of the actor whose channel was full
+        identity: Identity,
+        /// Static label identifying which bounded channel was full
+        /// (e.g. `"idle_subscribe"`).
+        channel: &'static str,
     },
     /// Error when receiving a response from an actor
     Receive {
@@ -78,57 +104,42 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Send {
-                identity: actor_id,
-                details,
-            } => {
+            Error::Send { identity, details } => {
+                write!(f, "Failed to send message to actor {identity}: {details}")
+            }
+            Error::ChannelFull { identity, channel } => {
                 write!(
                     f,
-                    "Failed to send message to actor {}: {}",
-                    actor_id.name(),
-                    details
+                    "Bounded channel '{channel}' for actor {identity} is at capacity"
                 )
             }
-            Error::Receive {
-                identity: actor_id,
-                details,
-            } => {
+            Error::Receive { identity, details } => {
                 write!(
                     f,
-                    "Failed to receive reply from actor {}: {}",
-                    actor_id.name(),
-                    details
+                    "Failed to receive reply from actor {identity}: {details}"
                 )
             }
             Error::Timeout {
-                identity: actor_id,
+                identity,
                 timeout,
                 operation,
             } => {
                 write!(
                     f,
-                    "{} operation to actor {} timed out after {:?}",
-                    operation,
-                    actor_id.name(),
-                    timeout
+                    "{operation} operation to actor {identity} timed out after {timeout:?}"
                 )
             }
             Error::Downcast {
-                identity: actor_id,
+                identity,
                 expected_type,
             } => {
                 write!(
                     f,
-                    "Failed to downcast reply from actor {} to expected type '{}'",
-                    actor_id.name(),
-                    expected_type
+                    "Failed to downcast reply from actor {identity} to expected type '{expected_type}'"
                 )
             }
-            Error::Runtime {
-                identity: actor_id,
-                details,
-            } => {
-                write!(f, "Runtime error in actor {}: {}", actor_id.name(), details)
+            Error::Runtime { identity, details } => {
+                write!(f, "Runtime error in actor {identity}: {details}")
             }
             Error::MailboxCapacity { message } => {
                 write!(f, "Mailbox capacity error: {message}")
@@ -136,16 +147,13 @@ impl std::fmt::Display for Error {
             Error::Join { identity, source } => {
                 write!(
                     f,
-                    "Failed to join spawned task from actor {}: {}",
-                    identity.name(),
-                    source
+                    "Failed to join spawned task from actor {identity}: {source}"
                 )
             }
             Error::PriorityChannelNotEnabled { identity } => {
                 write!(
                     f,
-                    "Priority channel is not enabled for actor {}: enable it via SpawnOptions::with_priority()",
-                    identity.name()
+                    "Priority channel is not enabled for actor {identity}: enable it via SpawnOptions::with_priority()"
                 )
             }
         }
@@ -181,6 +189,7 @@ impl Error {
     /// | Error Type | Retryable | Reason |
     /// |------------|-----------|--------|
     /// | `Timeout` | ✓ Yes | Transient; may succeed with longer timeout |
+    /// | `ChannelFull` | ✓ Yes | Transient; bounded buffer drains as actor makes progress |
     /// | `Send` | ✗ No | Actor stopped; channel permanently closed |
     /// | `Receive` | ✗ No | Reply channel dropped; cannot recover |
     /// | `Downcast` | ✗ No | Type mismatch; programming error |
@@ -219,7 +228,7 @@ impl Error {
     /// ```
     #[must_use]
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Error::Timeout { .. })
+        matches!(self, Error::Timeout { .. } | Error::ChannelFull { .. })
     }
 
     /// Returns actionable debugging tips for this error.
@@ -243,6 +252,12 @@ impl Error {
                 "Verify the actor is still running with `actor_ref.is_alive()`",
                 "The actor's mailbox is closed - the actor has terminated",
                 "Consider using `ActorWeak` for long-lived references",
+            ],
+            Error::ChannelFull { .. } => &[
+                "Transient failure - retry after a short delay or batch your sends",
+                "Bounded channels drain as the actor processes work; the actor is alive",
+                "For subscribe_idle specifically, batch subscriptions across handler invocations \
+                 or raise IDLE_SUBSCRIBE_CHANNEL_CAPACITY if you regularly fan out > 32 streams",
             ],
             Error::Receive { .. } => &[
                 "The actor dropped the reply channel before responding",
@@ -275,7 +290,7 @@ impl Error {
             Error::Join { .. } => &[
                 "The spawned task panicked or was cancelled by the runtime",
                 "Run with RUST_BACKTRACE=1 or RUST_BACKTRACE=full for panic details",
-                "Use `ActorResult::is_join_failed()` to confirm this failure type",
+                "Match on `Error::Join { source, .. }` and use `source.is_panic()` / `source.is_cancelled()` to distinguish the cause",
                 "Check for unwrap(), expect(), or panic!() calls in actor code",
                 "Verify tokio runtime wasn't shut down while actor was running",
             ],
