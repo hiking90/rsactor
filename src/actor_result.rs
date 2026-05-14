@@ -19,7 +19,8 @@ pub enum FailurePhase {
     OnStop,
     /// Actor failed during [`on_idle`](crate::Actor::on_idle), and then
     /// [`on_stop`](crate::Actor::on_stop) also failed during cleanup.
-    /// The primary error is from `on_idle`; the `on_stop` error is logged.
+    /// The primary `on_idle` error is exposed via [`ActorResult::error`]; the
+    /// `on_stop` error is exposed via [`ActorResult::secondary_error`].
     OnIdleThenOnStop,
 }
 
@@ -144,8 +145,17 @@ pub enum ActorResult<T: Actor> {
         /// This will be `None` specifically when the failure occurred during the [`on_start`](Actor::on_start) phase,
         /// as the actor wasn't fully initialized.
         actor: Option<T>,
-        /// The error that caused the failure
+        /// The error that caused the failure (the primary cause).
+        ///
+        /// For [`FailurePhase::OnIdleThenOnStop`] this holds the original `on_idle` error;
+        /// the subsequent `on_stop` error is exposed via [`secondary_error`](Self::Failed#structfield.secondary_error).
         error: T::Error,
+        /// Secondary error, set only when a *cleanup* hook also failed after the primary failure.
+        ///
+        /// Currently set only for [`FailurePhase::OnIdleThenOnStop`], where it carries the
+        /// `on_stop` error that was emitted while cleaning up after a failed `on_idle`.
+        /// `None` for every other phase.
+        secondary_error: Option<T::Error>,
         /// The lifecycle phase during which the failure occurred
         phase: FailurePhase,
         /// Whether the actor was killed (`true`) or was attempting to stop gracefully (`false`)
@@ -242,7 +252,8 @@ impl<T: Actor> ActorResult<T> {
 
     /// Returns `true` if `on_stop` also failed after an `on_idle` error.
     ///
-    /// The primary error is from `on_idle`; the `on_stop` error is logged separately.
+    /// The primary `on_idle` error is exposed via [`error()`](Self::error); the
+    /// `on_stop` cleanup error is exposed via [`secondary_error()`](Self::secondary_error).
     pub fn is_cleanup_failed(&self) -> bool {
         matches!(
             self,
@@ -353,6 +364,33 @@ impl<T: Actor> ActorResult<T> {
         match self {
             ActorResult::Completed { .. } => None,
             ActorResult::Failed { error: cause, .. } => Some(cause),
+        }
+    }
+
+    /// Returns the secondary error if a cleanup hook also failed.
+    ///
+    /// Currently populated only when [`is_cleanup_failed()`](Self::is_cleanup_failed)
+    /// is `true` (phase [`FailurePhase::OnIdleThenOnStop`]). In that case, the value
+    /// is the error returned by `on_stop` during cleanup; the primary `on_idle` error
+    /// remains accessible via [`error()`](Self::error).
+    pub fn secondary_error(&self) -> Option<&T::Error> {
+        match self {
+            ActorResult::Failed {
+                secondary_error, ..
+            } => secondary_error.as_ref(),
+            ActorResult::Completed { .. } => None,
+        }
+    }
+
+    /// Consumes the result and returns the secondary error if a cleanup hook also failed.
+    ///
+    /// See [`secondary_error()`](Self::secondary_error) for semantics.
+    pub fn into_secondary_error(self) -> Option<T::Error> {
+        match self {
+            ActorResult::Failed {
+                secondary_error, ..
+            } => secondary_error,
+            ActorResult::Completed { .. } => None,
         }
     }
 

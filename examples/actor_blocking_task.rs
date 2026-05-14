@@ -286,6 +286,7 @@ async fn main() -> Result<()> {
             error,
             phase,
             killed,
+            ..
         } => {
             println!("Actor stop failed: {error}. Phase: {phase}, Killed: {killed}");
             if let Some(actor) = actor {

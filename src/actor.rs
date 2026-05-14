@@ -532,6 +532,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
             return ActorResult::Failed {
                 actor: None,
                 error: e,
+                secondary_error: None,
                 phase: FailurePhase::OnStart,
                 killed: false,
             };
@@ -568,11 +569,6 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     // priority order: termination signals → priority mailbox → new idle
     // subscriptions → regular mailbox → idle events.
     loop {
-        #[cfg(feature = "tracing")]
-        let on_idle_span = tracing::debug_span!("actor_on_idle");
-        #[cfg(not(feature = "tracing"))]
-        let on_idle_span = tracing::Span::none();
-
         tokio::select! {
             // Handle termination signals with highest priority using biased selection
             // This ensures that termination requests are processed immediately when available
@@ -608,6 +604,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                     return ActorResult::Failed {
                         actor: Some(actor),
                         error: e,
+                        secondary_error: None,
                         phase: FailurePhase::OnStop,
                         killed,
                     };
@@ -699,9 +696,12 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             guard = MessageProcessingGuard,
                         );
                     }
-                    Some(MailboxMessage::StopGracefully(_)) | None => {
+                    msg @ (Some(MailboxMessage::StopGracefully(_)) | None) => {
                         #[cfg(feature = "tracing")]
-                        debug!("Actor termination due to graceful stop");
+                        match &msg {
+                            Some(_) => debug!("Actor termination: explicit graceful stop"),
+                            None => debug!("Actor termination: all strong refs dropped"),
+                        }
 
                         // Drain any priority messages already enqueued before stopping.
                         // close() refuses new priority sends (they get Closed errors and
@@ -751,6 +751,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             return ActorResult::Failed {
                                 actor: Some(actor),
                                 error: e,
+                                secondary_error: None,
                                 phase: FailurePhase::OnStop,
                                 killed: false,
                             };
@@ -770,14 +771,18 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
             // Streams that complete (return None) are removed from the set
             // automatically by `SelectAll`.
             Some(event) = idle_streams.next(), if !idle_streams.is_empty() => {
+                #[cfg(feature = "tracing")]
+                let on_idle_span = tracing::debug_span!("actor_on_idle");
+                #[cfg(not(feature = "tracing"))]
+                let on_idle_span = tracing::Span::none();
+
                 let result = run_with_actor_scope!(
                     actor_id,
                     actor.on_idle(event, &actor_weak).instrument(on_idle_span)
                 );
 
                 if let Err(e) = result {
-                    let error_msg = format!("Actor {actor_id} on_idle error: {e:?}");
-                    error!("{error_msg}");
+                    error!("Actor {actor_id} on_idle error: {e:?}");
 
                     // Call on_stop for cleanup even after on_idle failure
                     #[cfg(feature = "tracing")]
@@ -785,21 +790,23 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                     #[cfg(not(feature = "tracing"))]
                     let on_stop_span = tracing::Span::none();
 
-                    let phase = if let Err(stop_err) = run_with_actor_scope!(
+                    let (phase, secondary_error) = match run_with_actor_scope!(
                         actor_id,
                         actor.on_stop(&actor_weak, false).instrument(on_stop_span)
                     ) {
-                        error!(
-                            "Actor {actor_id} on_stop failed during on_idle error cleanup: {stop_err:?}"
-                        );
-                        FailurePhase::OnIdleThenOnStop
-                    } else {
-                        FailurePhase::OnIdle
+                        Err(stop_err) => {
+                            error!(
+                                "Actor {actor_id} on_stop failed during on_idle error cleanup: {stop_err:?}"
+                            );
+                            (FailurePhase::OnIdleThenOnStop, Some(stop_err))
+                        }
+                        Ok(()) => (FailurePhase::OnIdle, None),
                     };
 
                     return ActorResult::Failed {
                         actor: Some(actor),
                         error: e,
+                        secondary_error,
                         phase,
                         killed,
                     };

@@ -223,6 +223,7 @@ async fn test_actor_result_failed_on_start() {
     let result_copy = ActorResult::Failed::<FailureTestActor> {
         actor: None,
         error: anyhow::anyhow!("Test failure in on_start"),
+        secondary_error: None,
         phase: FailurePhase::OnStart,
         killed: false,
     };
@@ -416,6 +417,7 @@ async fn test_actor_result_from_failed_with_actor() {
             value: 456,
         }),
         error: anyhow::anyhow!("test error"),
+        secondary_error: None,
         phase: FailurePhase::OnIdle,
         killed: false,
     };
@@ -440,6 +442,7 @@ async fn test_actor_result_from_failed_without_actor() {
     let result = ActorResult::Failed::<TestActor> {
         actor: None,
         error: anyhow::anyhow!("startup error"),
+        secondary_error: None,
         phase: FailurePhase::OnStart,
         killed: false,
     };
@@ -478,6 +481,7 @@ async fn test_actor_result_into_error_failed() {
     let result = ActorResult::Failed::<TestActor> {
         actor: None,
         error: anyhow::anyhow!("test into_error"),
+        secondary_error: None,
         phase: FailurePhase::OnStart,
         killed: false,
     };
@@ -511,6 +515,7 @@ async fn test_actor_result_debug_format() {
     let failed_result = ActorResult::Failed::<TestActor> {
         actor: None,
         error: anyhow::anyhow!("debug error"),
+        secondary_error: None,
         phase: FailurePhase::OnStart,
         killed: false,
     };
@@ -549,6 +554,7 @@ async fn test_all_boolean_combinations() {
     let result3 = ActorResult::Failed::<TestActor> {
         actor: None,
         error: anyhow::anyhow!("error3"),
+        secondary_error: None,
         phase: FailurePhase::OnStart,
         killed: false,
     };
@@ -561,6 +567,7 @@ async fn test_all_boolean_combinations() {
             value: 4,
         }),
         error: anyhow::anyhow!("error4"),
+        secondary_error: None,
         phase: FailurePhase::OnIdle,
         killed: false,
     };
@@ -573,6 +580,7 @@ async fn test_all_boolean_combinations() {
             value: 5,
         }),
         error: anyhow::anyhow!("error5"),
+        secondary_error: None,
         phase: FailurePhase::OnStop,
         killed: false,
     };
@@ -585,6 +593,7 @@ async fn test_all_boolean_combinations() {
             value: 6,
         }),
         error: anyhow::anyhow!("error6"),
+        secondary_error: None,
         phase: FailurePhase::OnStop,
         killed: true,
     };
