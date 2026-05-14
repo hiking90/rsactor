@@ -189,7 +189,7 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// Streams are owned by the runtime — their internal state (timer schedules,
     /// channel buffers, etc.) survives across runtime-loop iterations, so a
-    /// stream like [`tokio_stream::wrappers::IntervalStream`] fires reliably even
+    /// stream like [`IntervalStream`](https://docs.rs/tokio-stream) fires reliably even
     /// when the surrounding `select!` arm is cancelled by a higher-priority
     /// branch. This is the chief reason to prefer subscriptions over open-coded
     /// idle loops.
