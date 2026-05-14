@@ -217,7 +217,7 @@ async fn test_dead_letter_on_stopped_actor() {
     let initial = rsactor::dead_letter_count();
 
     let (actor_ref, handle) = spawn::<TestActor>(TestActor);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // This should trigger a dead letter
@@ -235,7 +235,7 @@ async fn test_dead_letter_count_increments() {
     let initial = rsactor::dead_letter_count();
 
     let (actor_ref, handle) = spawn::<TestActor>(TestActor);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // Multiple failed sends should increment counter
@@ -258,7 +258,7 @@ async fn test_dead_letter_after_full_stop() {
     let (actor_ref, handle) = spawn::<TestActor>(TestActor);
 
     // Stop and wait for handle to ensure actor is fully stopped
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // Now try to send - this should definitely fail
@@ -283,7 +283,7 @@ async fn test_dead_letter_multiple_actors_isolation() {
     let (actor2, handle2) = spawn::<TestActor>(TestActor);
 
     // Stop only actor1
-    actor1.stop().await.unwrap();
+    actor1.stop().await;
     handle1.await.unwrap();
 
     // Record count after actor1 stopped but before our sends
@@ -304,7 +304,7 @@ async fn test_dead_letter_multiple_actors_isolation() {
     );
 
     // Cleanup: stop actor2
-    actor2.stop().await.unwrap();
+    actor2.stop().await;
     handle2.await.unwrap();
 
     // Overall: we should have at least 1 more dead letter than when we started
@@ -355,7 +355,7 @@ async fn test_dead_letter_with_timeout() {
     }
 
     // Cleanup
-    actor_ref.kill().unwrap();
+    actor_ref.kill();
     let _ = handle.await;
 }
 
@@ -364,7 +364,7 @@ async fn test_dead_letter_blocking_tell() {
     let initial = rsactor::dead_letter_count();
 
     let (actor_ref, handle) = spawn::<TestActor>(TestActor);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // Clone for blocking context
@@ -415,7 +415,7 @@ async fn test_dead_letter_ask_with_timeout() {
     );
 
     // Cleanup
-    actor_ref.kill().unwrap();
+    actor_ref.kill();
     let _ = handle.await;
 }
 
@@ -437,7 +437,7 @@ async fn test_dead_letter_blocking_ask() {
     }
 
     let (actor_ref, handle) = spawn::<BlockingAskActor>(BlockingAskActor);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // Clone for blocking context
@@ -475,7 +475,7 @@ async fn test_dead_letter_ask_on_stopped_actor() {
     }
 
     let (actor_ref, handle) = spawn::<AskActor>(AskActor);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // ask() on stopped actor should trigger ActorStopped dead letter
@@ -505,7 +505,7 @@ async fn test_dead_letter_concurrent_asks_to_stopped_actor() {
     }
 
     let (actor_ref, handle) = spawn::<ConcurrentActor>(ConcurrentActor);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // Record count right before our concurrent sends
@@ -578,7 +578,7 @@ async fn test_retry_pattern_with_is_retryable() {
     let result = send_with_retry(&actor_ref, 3).await;
     assert!(result.is_ok());
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -593,7 +593,7 @@ async fn test_dead_letter_race_condition() {
     let (actor_ref, handle) = spawn::<TestActor>(TestActor);
 
     // Stop and immediately try to send (don't wait for handle)
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     let result = actor_ref.tell(Ping).await;
 
     // Wait for handle to complete
@@ -674,7 +674,7 @@ async fn test_dead_letter_timeout_while_stopping() {
 
     // Brief delay then stop actor
     tokio::time::sleep(Duration::from_millis(10)).await;
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 
     let result = timeout_handle.await.unwrap();
     let _ = handle.await;
@@ -888,16 +888,10 @@ async fn test_kill_when_terminate_channel_full() {
     // Send a message to keep the actor busy
     let _ = actor_ref.tell(SlowMessage).await;
 
-    // First kill should succeed
-    let result1 = actor_ref.kill();
-    assert!(result1.is_ok(), "First kill should succeed");
-
-    // Second kill should also succeed (hits Full branch - returns Ok)
-    let result2 = actor_ref.kill();
-    assert!(
-        result2.is_ok(),
-        "Second kill should succeed (terminate channel full case)"
-    );
+    // kill() is idempotent — both calls succeed even when the second one hits
+    // the Full branch (terminate channel has capacity 1 and is already occupied).
+    actor_ref.kill();
+    actor_ref.kill();
 
     // Clean up
     let _ = handle.await;
@@ -910,15 +904,11 @@ async fn test_kill_when_actor_already_stopped() {
     let (actor_ref, handle) = spawn::<TestActor>(TestActor);
 
     // Stop the actor gracefully and wait for it to finish
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
-    // Now kill should hit the Closed branch (channel is closed)
-    let result = actor_ref.kill();
-    assert!(
-        result.is_ok(),
-        "Kill on stopped actor should succeed (terminate channel closed case)"
-    );
+    // kill() on a stopped actor hits the Closed branch and remains idempotent.
+    actor_ref.kill();
 }
 
 #[tokio::test]
@@ -949,7 +939,7 @@ async fn test_default_on_run_behavior() {
     assert!(result, "Actor with default on_run should process messages");
 
     // Stop the actor
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -987,7 +977,7 @@ async fn test_deprecated_tell_blocking_method() {
 
     assert!(result.is_ok(), "Deprecated tell_blocking should work");
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -1027,7 +1017,7 @@ async fn test_deprecated_ask_blocking_method() {
     assert!(result.is_ok(), "Deprecated ask_blocking should work");
     assert_eq!(result.unwrap(), "test_value");
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -1100,7 +1090,7 @@ async fn test_weak_handler_clone() {
         "Cloned weak ask should upgrade"
     );
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -1151,7 +1141,7 @@ async fn test_tell_handler_blocking_tell() {
         "Message should have been received"
     );
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -1191,7 +1181,7 @@ async fn test_ask_handler_blocking_ask() {
     assert!(result.is_ok(), "blocking_ask via trait should succeed");
     assert_eq!(result.unwrap(), "blocking_ask_response");
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -1214,7 +1204,7 @@ async fn test_actor_control_from_conversions() {
     assert!(control.is_alive(), "Actor should be alive");
 
     // Stop via control
-    control.stop().await.unwrap();
+    control.stop().await;
     handle.await.unwrap();
 }
 
@@ -1242,7 +1232,7 @@ async fn test_weak_actor_control_from_reference() {
         "Weak control should upgrade"
     );
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -1275,7 +1265,7 @@ async fn test_ask_handler_from_actor_ref() {
     let result: i32 = ask_handler.ask(AskHandlerFromMessage).await.unwrap();
     assert_eq!(result, 42);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }
 
@@ -1315,6 +1305,6 @@ async fn test_weak_ask_handler_from_reference() {
         panic!("Weak handler should be upgradeable");
     }
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 }

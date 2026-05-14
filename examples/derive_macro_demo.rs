@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Final count: {final_count}");
 
     // Stop the actor
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
 
     Ok(())
 }

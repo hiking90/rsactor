@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
     println!("Calling kill() on the actor...");
 
     // Kill the actor (this should trigger the kill scenario)
-    actor_ref.kill()?;
+    actor_ref.kill();
 
     // Wait for the actor to complete
     println!("Waiting for actor to terminate...");

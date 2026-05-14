@@ -80,7 +80,7 @@ async fn test_tell_blocking_without_runtime() {
     println!("Final counter value: {}", final_counter);
     assert_eq!(final_counter, 42);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -115,7 +115,7 @@ async fn test_ask_blocking_without_runtime() {
         }
     }
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -184,7 +184,7 @@ async fn test_multiple_blocking_calls_without_runtime() {
         .expect("Failed to get counter");
     assert_eq!(final_counter, 15);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -231,7 +231,7 @@ async fn test_blocking_calls_without_timeout_and_without_runtime() {
         }
     }
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -270,7 +270,7 @@ async fn test_blocking_tell_with_timeout() {
     println!("Final counter value: {}", final_counter);
     assert_eq!(final_counter, 42);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -304,7 +304,7 @@ async fn test_blocking_ask_with_timeout() {
         }
     }
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -342,7 +342,7 @@ async fn test_blocking_with_timeout_inside_tokio_context() {
     let counter_value = join_handle.await.expect("Blocking task panicked");
     assert_eq!(counter_value, 10, "Counter should be 10 after increment");
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -351,7 +351,7 @@ async fn test_blocking_ask_timeout_on_stopped_actor() {
     let (actor_ref, handle) = spawn::<RuntimelessTestActor>(0);
 
     // Stop the actor first
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 
     // Test blocking_ask with timeout on stopped actor
@@ -373,7 +373,7 @@ async fn test_blocking_tell_timeout_on_stopped_actor() {
     let (actor_ref, handle) = spawn::<RuntimelessTestActor>(0);
 
     // Stop the actor first
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 
     // Test blocking_tell with timeout on stopped actor
@@ -417,7 +417,7 @@ async fn test_blocking_tell_from_async_multi_thread_context() {
         .expect("Failed to get counter");
     assert_eq!(counter, 10);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -436,7 +436,7 @@ async fn test_blocking_ask_from_async_multi_thread_context() {
         .expect("blocking_ask (timeout) from async ctx should succeed");
     assert_eq!(val, 42);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -473,7 +473,7 @@ async fn test_blocking_tell_with_timeout_on_current_thread_runtime() {
         .expect("Failed to get counter");
     assert_eq!(counter, 11);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }
 
@@ -491,6 +491,6 @@ async fn test_blocking_ask_with_timeout_on_current_thread_runtime() {
     .expect("blocking_ask with timeout on current_thread runtime should succeed");
     assert_eq!(val, 13);
 
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     handle.await.expect("Actor task failed");
 }

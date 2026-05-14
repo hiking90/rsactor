@@ -222,7 +222,7 @@ async fn main() -> Result<()> {
 
     // Stop the actor gracefully and wait for it to terminate
     info!("\n=== Stopping actor ===");
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     let result = join_handle.await?;
 
     match result {

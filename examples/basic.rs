@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
     // Signal the actor to stop gracefully.
     // The actor will process any remaining messages in its mailbox before stopping.
     println!("Sending StopGracefully message to actor.",);
-    actor_ref.stop().await?; // Corrected method name
+    actor_ref.stop().await; // Corrected method name
 
     // Wait for the actor's task to complete.
     // `join_handle.await` returns a Result containing a tuple:

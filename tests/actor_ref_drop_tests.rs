@@ -131,7 +131,7 @@ async fn test_actor_ref_drop_terminates_actor_after_processing_messages() {
     debug!("All messages sent, calling stop before dropping actor_ref");
 
     // Instead of just dropping, call stop explicitly to ensure graceful shutdown
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
 
     // Now drop the actor_ref
     drop(actor_ref);
@@ -210,7 +210,7 @@ async fn test_actor_ref_drop_with_slow_messages() {
     debug!("All slow messages sent, stopping and dropping actor_ref");
 
     // Stop the actor explicitly and then drop the reference
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     drop(actor_ref);
 
     // Wait for the actor to complete (should take at least 150ms due to processing delays)
@@ -344,7 +344,7 @@ async fn test_multiple_actor_refs_drop_behavior() {
     debug!("Stopping actor before dropping last clone");
 
     // Explicitly stop the actor before dropping the last reference
-    actor_ref_clone2.stop().await.expect("Failed to stop actor");
+    actor_ref_clone2.stop().await;
 
     debug!("Dropping last clone");
     drop(actor_ref_clone2);
@@ -432,7 +432,7 @@ async fn test_actor_ref_clone_drop_behavior() {
         .expect("Failed to send after clone drop");
 
     // Explicitly stop before dropping original
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     println!("Stopping actor before dropping original reference");
     drop(actor_ref);
 
@@ -491,7 +491,7 @@ async fn test_actor_ref_drop_vs_explicit_stop() {
         }
 
         // Explicitly stop the actor
-        actor_ref.stop().await.expect("Failed to stop actor");
+        actor_ref.stop().await;
 
         let result = handle.await.expect("Actor should complete");
         assert!(
@@ -621,7 +621,7 @@ async fn test_actor_weak_reference_basic_functionality() {
     );
 
     // Stop the actor using the upgraded reference
-    upgraded_ref.stop().await.expect("Failed to stop actor");
+    upgraded_ref.stop().await;
     drop(upgraded_ref);
 
     let result = handle.await.expect("Actor task should complete");
@@ -665,7 +665,7 @@ async fn test_actor_weak_reference_after_actor_drop() {
         .expect("Failed to send message");
 
     // Stop and drop the actor reference
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     drop(actor_ref);
 
     // Wait for the actor to complete
@@ -765,7 +765,7 @@ async fn test_actor_weak_reference_clone_behavior() {
         .expect("Failed to send from upgrade3");
 
     // Stop the actor
-    upgrade3_ref.stop().await.expect("Failed to stop actor");
+    upgrade3_ref.stop().await;
     drop(actor_ref);
     drop(upgrade3_ref);
 
@@ -828,7 +828,7 @@ async fn test_actor_weak_reference_with_kill() {
     assert!(weak_ref.is_alive(), "ActorWeak should be alive before kill");
 
     // Kill the actor
-    actor_ref.kill().expect("Failed to kill actor");
+    actor_ref.kill();
     drop(actor_ref);
 
     let result = handle.await.expect("Actor task should complete");
@@ -923,7 +923,7 @@ async fn test_actor_weak_reference_upgrade_race_condition() {
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
     // Stop the actor
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     drop(actor_ref);
 
     // Wait for the upgrade task to complete
@@ -1002,7 +1002,7 @@ async fn test_actor_weak_reference_identity_consistency() {
         .expect("Failed to send message");
 
     // Stop the actor
-    actor_ref.stop().await.expect("Failed to stop actor");
+    actor_ref.stop().await;
     drop(actor_ref);
     drop(upgraded);
     drop(upgraded_clone);

@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let count: i32 = simple_ref.ask(GetCount).await?;
     println!("Final count: {count}");
 
-    simple_ref.stop().await?;
+    simple_ref.stop().await;
 
     // Test generic actor with String
     println!("\n--- Testing Generic Actor<String> ---");
@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let string_value: Option<String> = string_ref.ask(GetValue).await?;
     println!("String value: {string_value:?}");
 
-    string_ref.stop().await?;
+    string_ref.stop().await;
 
     // Test generic actor with i32
     println!("\n--- Testing Generic Actor<i32> ---");
@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let int_value: Option<i32> = int_ref.ask(GetValue).await?;
     println!("Integer value: {int_value:?}");
 
-    int_ref.stop().await?;
+    int_ref.stop().await;
 
     println!("\n✅ Unified macro works for both generic and non-generic actors!");
 

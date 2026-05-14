@@ -107,7 +107,7 @@ async fn test_ask_join_successful_computation() -> Result<()> {
     let task_count = actor_ref.ask(GetTaskCount).await?;
     assert_eq!(task_count, 1);
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
     Ok(())
 }
@@ -159,7 +159,7 @@ async fn test_ask_join_multiple_concurrent_tasks() -> Result<()> {
     let task_count = actor_ref.ask(GetTaskCount).await?;
     assert_eq!(task_count, 3);
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
     Ok(())
 }
@@ -181,7 +181,7 @@ async fn test_ask_join_panicked_task() -> Result<()> {
         Err(e) => panic!("Expected Join error, got: {:?}", e),
     }
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
     Ok(())
 }
@@ -203,7 +203,7 @@ async fn test_ask_join_cancelled_task() -> Result<()> {
         Err(e) => panic!("Expected Join error, got: {:?}", e),
     }
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
     Ok(())
 }
@@ -237,7 +237,7 @@ async fn test_ask_join_vs_regular_ask() -> Result<()> {
     assert!(manual_result >= 40); // At least 40 (20*2 + 0)
     assert!(auto_result >= 40); // At least 40 (20*2 + counter)
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
     Ok(())
 }
@@ -248,7 +248,7 @@ async fn test_ask_join_with_actor_stopped() -> Result<()> {
     let (actor_ref, actor_handle) = spawn::<TaskSpawnerActor>(TaskSpawnerActor { task_counter });
 
     // Stop the actor first
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
 
     // Try to use ask_join on stopped actor
@@ -291,7 +291,7 @@ async fn test_ask_join_timeout_behavior() -> Result<()> {
     assert!(elapsed >= Duration::from_millis(190)); // Allow some tolerance
     assert_eq!(result, 2); // 1 * 2 + 0
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
     Ok(())
 }
@@ -319,7 +319,7 @@ async fn test_ask_join_error_source() -> Result<()> {
         _ => panic!("Expected Join error"),
     }
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     actor_handle.await?;
     Ok(())
 }

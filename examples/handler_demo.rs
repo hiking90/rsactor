@@ -305,8 +305,8 @@ async fn main() -> Result<()> {
     println!("\n--- Cleanup ---\n");
 
     // Stop all actors
-    counter_actor.stop().await?;
-    logger_actor.stop().await?;
+    counter_actor.stop().await;
+    logger_actor.stop().await;
 
     // Wait for completion
     let counter_result = counter_handle.await?;

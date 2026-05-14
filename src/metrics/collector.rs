@@ -27,8 +27,6 @@ pub(crate) struct MetricsCollector {
     /// Number of messages processed (regular mailbox only — priority messages are
     /// counted separately so callers can detect priority-channel abuse).
     message_count: AtomicU64,
-    /// Number of errors during message handling
-    error_count: AtomicU64,
     /// Cumulative processing time for regular messages, in nanoseconds (saturating)
     total_processing_nanos: AtomicU64,
     /// Maximum regular message processing time observed in nanoseconds
@@ -50,7 +48,6 @@ impl MetricsCollector {
     pub fn new() -> Self {
         Self {
             message_count: AtomicU64::new(0),
-            error_count: AtomicU64::new(0),
             total_processing_nanos: AtomicU64::new(0),
             max_processing_nanos: AtomicU64::new(0),
             priority_message_count: AtomicU64::new(0),
@@ -112,15 +109,6 @@ impl MetricsCollector {
         self.update_last_activity();
     }
 
-    /// Records an error during message handling.
-    ///
-    /// Reserved for future error tracking integration.
-    #[inline]
-    #[allow(dead_code)]
-    pub fn record_error(&self) {
-        self.error_count.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Updates the last activity timestamp to now.
     fn update_last_activity(&self) {
         let millis = SystemTime::now()
@@ -169,7 +157,6 @@ impl MetricsCollector {
             max_priority_processing_time: Duration::from_nanos(
                 self.max_priority_processing_nanos.load(Ordering::Relaxed),
             ),
-            error_count: self.error_count.load(Ordering::Relaxed),
             uptime: self.start_instant.elapsed(),
             last_activity: self.get_last_activity(),
         }
@@ -181,12 +168,6 @@ impl MetricsCollector {
     #[inline]
     pub fn message_count(&self) -> u64 {
         self.message_count.load(Ordering::Relaxed)
-    }
-
-    /// Returns the total number of errors recorded.
-    #[inline]
-    pub fn error_count(&self) -> u64 {
-        self.error_count.load(Ordering::Relaxed)
     }
 
     /// Returns the average processing time per message.
@@ -320,7 +301,6 @@ mod tests {
         let snapshot = collector.snapshot();
 
         assert_eq!(snapshot.message_count, 0);
-        assert_eq!(snapshot.error_count, 0);
         assert_eq!(snapshot.avg_processing_time, Duration::ZERO);
         assert_eq!(snapshot.max_processing_time, Duration::ZERO);
         assert!(snapshot.last_activity.is_none());
@@ -337,16 +317,6 @@ mod tests {
         assert_eq!(collector.avg_processing_time(), Duration::from_millis(150));
         assert_eq!(collector.max_processing_time(), Duration::from_millis(200));
         assert!(collector.last_activity().is_some());
-    }
-
-    #[test]
-    fn test_record_error() {
-        let collector = MetricsCollector::new();
-
-        collector.record_error();
-        collector.record_error();
-
-        assert_eq!(collector.error_count(), 2);
     }
 
     #[test]

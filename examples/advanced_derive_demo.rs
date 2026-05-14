@@ -176,9 +176,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Total tasks completed: {total_tasks}");
 
     // Cleanup
-    simple_ref.stop().await?;
-    counter_ref.stop().await?;
-    worker_ref.stop().await?;
+    simple_ref.stop().await;
+    counter_ref.stop().await;
+    worker_ref.stop().await;
 
     println!("\n✨ All actors stopped successfully!");
 

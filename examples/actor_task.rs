@@ -224,7 +224,7 @@ async fn main() -> Result<()> {
 
     // Stop the actor gracefully
     println!("Stopping actor...");
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
 
     // Wait for the actor to finish (this will also wait for the background task)
     let result = join_handle.await?;

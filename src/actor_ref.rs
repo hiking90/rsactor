@@ -211,11 +211,11 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Send`] when:
-    /// - The actor is no longer alive (channel closed); or
-    /// - The subscribe buffer is full. In that case, batch your subscriptions
+    /// - [`Error::ChannelFull`] when the bounded subscribe buffer is at capacity. This is
+    ///   transient ([`Error::is_retryable`] returns `true`) — batch your subscriptions
     ///   across separate handler invocations or raise
     ///   [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`](crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY).
+    /// - [`Error::Send`] when the actor is no longer alive (channel closed) — terminal.
     ///
     /// # Example
     ///
@@ -235,13 +235,9 @@ impl<T: Actor> ActorRef<T> {
         self.idle_subscribe_sender
             .try_send(boxed)
             .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => Error::Send {
+                mpsc::error::TrySendError::Full(_) => Error::ChannelFull {
                     identity: self.identity(),
-                    details: format!(
-                        "Idle subscribe channel full (capacity {}); batch subscriptions across \
-                         handler invocations or raise IDLE_SUBSCRIBE_CHANNEL_CAPACITY",
-                        crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY
-                    ),
+                    channel: "idle_subscribe",
                 },
                 mpsc::error::TrySendError::Closed(_) => Error::Send {
                     identity: self.identity(),
@@ -888,34 +884,31 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// The actor will stop processing messages and shut down as soon as possible.
     /// The actor's final result will indicate it was killed.
+    ///
+    /// This method is idempotent: a `Full` or `Closed` terminate channel is treated as
+    /// "termination already in flight" — the desired terminal state is met either way.
+    /// Both conditions are logged via `tracing::warn!` for diagnostics.
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(level = "info", name = "actor_kill", skip(self))
     )]
-    pub fn kill(&self) -> Result<()> {
+    pub fn kill(&self) {
         #[cfg(feature = "tracing")]
         info!(actor_id = %self.identity(), "Killing actor");
 
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
-                // Successfully sent the terminate message.
                 #[cfg(feature = "tracing")]
                 info!("Kill signal sent successfully");
-                Ok(())
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                // The channel is full. Since it has a capacity of 1,
-                // this means a Terminate message is already in the queue.
+                // The channel has capacity 1, so Full means a Terminate is already queued.
                 warn!("Failed to send Terminate to actor {}: terminate mailbox is full. Actor is likely already being terminated.", self.identity());
-                // Considered Ok as the desired state (stopping/killed) is effectively met.
-                Ok(())
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                // The channel is closed, which implies the actor is already stopped or has finished processing.
+                // The channel is closed; the actor is already stopped or has finished.
                 warn!("Failed to send Terminate to actor {}: terminate mailbox closed. Actor might already be stopped.", self.identity());
-                // Considered Ok as the desired state (stopped) is met.
-                Ok(())
             }
         }
     }
@@ -925,11 +918,15 @@ impl<T: Actor> ActorRef<T> {
     /// The actor will process all messages currently in its mailbox and then stop.
     /// New messages sent after this call might be ignored or fail.
     /// The actor's final result will indicate normal completion.
+    ///
+    /// This method is idempotent: a closed mailbox channel is treated as "stop already
+    /// in flight" — the desired terminal state is met either way. The condition is
+    /// logged via `tracing::warn!` for diagnostics.
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(level = "info", name = "actor_stop", skip(self))
     )]
-    pub async fn stop(&self) -> Result<()> {
+    pub async fn stop(&self) {
         match self
             .sender
             .send(MailboxMessage::StopGracefully(self.clone()))
@@ -938,14 +935,10 @@ impl<T: Actor> ActorRef<T> {
             Ok(_) => {
                 #[cfg(feature = "tracing")]
                 info!(actor_id = %self.identity(), "Actor stop signal sent successfully");
-                Ok(())
             }
             Err(_) => {
-                // This error means the actor's mailbox channel is closed,
-                // which implies the actor is already stopping or has stopped.
+                // Mailbox channel is closed; the actor is already stopping or has stopped.
                 warn!("Failed to send StopGracefully to actor {}: mailbox closed. Actor might already be stopped or stopping.", self.identity());
-                // Considered Ok as the desired state (stopped/stopping) is met.
-                Ok(())
             }
         }
     }
@@ -1563,13 +1556,6 @@ impl<T: Actor> ActorRef<T> {
         self.metrics.max_priority_processing_time()
     }
 
-    /// Returns the total number of errors during message handling.
-    #[cfg(feature = "metrics")]
-    #[inline]
-    pub fn error_count(&self) -> u64 {
-        self.metrics.error_count()
-    }
-
     /// Returns the time elapsed since the actor started.
     #[cfg(feature = "metrics")]
     #[inline]
@@ -1700,8 +1686,12 @@ impl<T: Actor> ActorWeak<T> {
     /// [`upgrade`](ActorWeak::upgrade) and check the returned `Option`.
     #[inline]
     pub fn is_alive(&self) -> bool {
-        // Both channels must have strong references for the actor to be alive
-        self.sender.strong_count() > 0 && self.terminate_sender.strong_count() > 0
+        // Every primary sender (mailbox, terminate, idle-subscribe) must still
+        // have a strong reference for the actor to be alive. Mirror the same
+        // set checked by `upgrade()` so the two calls cannot disagree.
+        self.sender.strong_count() > 0
+            && self.terminate_sender.strong_count() > 0
+            && self.idle_subscribe_sender.strong_count() > 0
     }
 }
 

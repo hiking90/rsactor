@@ -57,7 +57,7 @@ mod default_lifecycle_tests {
         assert_eq!(response, "pong");
 
         // Stop the actor gracefully - this triggers the default on_stop
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
         assert!(result.is_completed());
     }
@@ -74,7 +74,7 @@ mod default_lifecycle_tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Kill triggers on_stop with killed=true
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let result = handle.await.unwrap();
         assert!(result.is_completed());
         assert!(result.was_killed());
@@ -89,7 +89,7 @@ mod default_lifecycle_tests {
         });
 
         // Graceful stop triggers on_stop with killed=false
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
         assert!(result.is_completed());
         assert!(!result.was_killed());
@@ -128,7 +128,7 @@ mod actor_weak_tests {
         // Verify identity is accessible from weak ref
         assert_eq!(weak.identity(), actor_ref.identity());
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -139,7 +139,7 @@ mod actor_weak_tests {
 
         assert!(weak.is_alive());
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         // After stop, the weak reference should no longer be upgradeable
@@ -199,7 +199,7 @@ mod actor_ref_clone_tests {
         let id2: Identity = cloned_ref.ask(GetIdentity).await.unwrap();
         assert_eq!(id1, id2);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -210,7 +210,7 @@ mod actor_ref_clone_tests {
         // Actor should be alive initially
         assert!(actor_ref.is_alive());
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         // After stop and join, is_alive might still return true
@@ -253,7 +253,7 @@ mod weak_clone_tests {
 
         assert_eq!(strong1.identity(), strong2.identity());
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -286,7 +286,7 @@ mod timeout_tests {
         let (actor_ref, handle) = spawn::<SlowActor>(SlowActor);
 
         // Stop the actor immediately
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         // Try to send with timeout to stopped actor
@@ -491,7 +491,7 @@ mod on_stop_error_tests {
         assert_eq!(response, "pong");
 
         // Stop the actor - this will trigger on_stop which fails
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
 
         assert!(result.is_failed());
@@ -507,7 +507,7 @@ mod on_stop_error_tests {
         let (actor_ref, handle) = spawn::<FailingOnStopActor>(());
 
         // Kill the actor - this will trigger on_stop which fails
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let result = handle.await.unwrap();
 
         assert!(result.is_failed());
@@ -582,7 +582,7 @@ mod dead_letter_tests {
         init_test_logger();
         let (actor_ref, handle) = spawn::<DeadLetterActor>(DeadLetterActor);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         // Try to tell a stopped actor
@@ -595,7 +595,7 @@ mod dead_letter_tests {
         init_test_logger();
         let (actor_ref, handle) = spawn::<DeadLetterActor>(DeadLetterActor);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         // Try to ask a stopped actor
@@ -699,7 +699,7 @@ mod actor_result_from_tests {
     async fn test_actor_result_into_tuple_completed() {
         let (actor_ref, handle) = spawn::<FromTestActor>(FromTestActor { value: 42 });
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
 
         // Convert ActorResult to tuple
@@ -737,7 +737,7 @@ mod actor_result_from_tests {
 
         let (actor_ref, handle) = spawn::<FailOnStopActor>(100);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
 
         assert!(result.is_failed());
@@ -851,7 +851,7 @@ mod blocking_timeout_tests {
             "blocking_tell with timeout should succeed for fast message"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -872,7 +872,7 @@ mod blocking_timeout_tests {
         assert!(result.is_ok(), "blocking_ask with timeout should succeed");
         assert_eq!(result.unwrap(), "fast done");
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -900,7 +900,7 @@ mod blocking_timeout_tests {
         // The key is covering the timeout code path
         let _ = result; // just making sure it executed
 
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let _ = handle.await;
     }
 
@@ -923,7 +923,7 @@ mod blocking_timeout_tests {
             "blocking_ask should timeout on slow message"
         );
 
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let _ = handle.await;
     }
 
@@ -933,7 +933,7 @@ mod blocking_timeout_tests {
         let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor);
 
         // Stop the actor first
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         let actor_clone = actor_ref.clone();
@@ -957,7 +957,7 @@ mod blocking_timeout_tests {
         let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor);
 
         // Stop the actor first
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         let actor_clone = actor_ref.clone();
@@ -1018,7 +1018,7 @@ mod tracing_coverage_tests {
         let slow_response: String = actor_ref.ask(TracingSlowPing).await.unwrap();
         assert_eq!(slow_response, "slow pong");
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1036,7 +1036,7 @@ mod tracing_coverage_tests {
             .await
             .unwrap();
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1052,7 +1052,7 @@ mod tracing_coverage_tests {
             .unwrap();
         assert_eq!(response, "pong");
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1062,7 +1062,7 @@ mod tracing_coverage_tests {
         let (actor_ref, handle) = spawn::<TracingTestActor>(TracingTestActor);
 
         // Test kill() with tracing
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let result = handle.await.unwrap();
         assert!(result.was_killed());
     }
@@ -1073,7 +1073,7 @@ mod tracing_coverage_tests {
         let (actor_ref, handle) = spawn::<TracingTestActor>(TracingTestActor);
 
         // Test stop() with tracing
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
         assert!(!result.was_killed());
     }
@@ -1093,7 +1093,7 @@ mod actor_result_methods_tests {
             data: "test".to_string(),
         });
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
 
         // Use to_result() for conversion
@@ -1132,7 +1132,7 @@ mod actor_result_methods_tests {
             data: "into_actor_test".to_string(),
         });
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
 
         let maybe_actor = result.into_actor();
@@ -1168,7 +1168,7 @@ mod actor_result_methods_tests {
             data: "test".to_string(),
         });
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
 
         // Completed result should have no error
@@ -1213,7 +1213,7 @@ mod ask_join_tests {
         let result: i32 = actor_ref.ask_join(SpawnTask { value: 21 }).await.unwrap();
         assert_eq!(result, 42);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -1244,7 +1244,7 @@ mod blocking_error_paths_tests {
         let (actor_ref, handle) = spawn::<BlockingErrorActor>(BlockingErrorActor);
 
         // Stop actor first
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         let actor_clone = actor_ref.clone();
@@ -1267,7 +1267,7 @@ mod blocking_error_paths_tests {
         let (actor_ref, handle) = spawn::<BlockingErrorActor>(BlockingErrorActor);
 
         // Stop actor first
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         let actor_clone = actor_ref.clone();
@@ -1398,7 +1398,7 @@ mod actor_result_debug_tests {
     async fn test_actor_result_debug_completed() {
         let (actor_ref, handle) = spawn::<DebugTestActor>(DebugTestActor { value: 42 });
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
 
         // Test Debug implementation
@@ -1469,7 +1469,7 @@ mod deprecated_blocking_methods_tests {
 
         assert!(result.is_ok(), "deprecated tell_blocking should succeed");
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1491,7 +1491,7 @@ mod deprecated_blocking_methods_tests {
         assert!(result.is_ok(), "deprecated ask_blocking should succeed");
         assert_eq!(result.unwrap(), "deprecated_response");
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1501,7 +1501,7 @@ mod deprecated_blocking_methods_tests {
         let (actor_ref, handle) = spawn::<DeprecatedMethodsActor>(DeprecatedMethodsActor);
 
         // Stop the actor first
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         let actor_clone = actor_ref.clone();
@@ -1525,7 +1525,7 @@ mod deprecated_blocking_methods_tests {
         let (actor_ref, handle) = spawn::<DeprecatedMethodsActor>(DeprecatedMethodsActor);
 
         // Stop the actor first
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         let actor_clone = actor_ref.clone();
@@ -1615,7 +1615,7 @@ mod ask_join_error_tests {
             e => panic!("Expected Join error, got: {:?}", e),
         }
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1642,7 +1642,7 @@ mod ask_join_error_tests {
             e => panic!("Expected Join error, got: {:?}", e),
         }
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1655,7 +1655,7 @@ mod ask_join_error_tests {
         let result: i32 = actor_ref.ask_join(SpawnSuccessTask(21)).await.unwrap();
         assert_eq!(result, 42);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1665,7 +1665,7 @@ mod ask_join_error_tests {
         let (actor_ref, handle) = spawn::<AskJoinErrorActor>(AskJoinErrorActor);
 
         // Stop the actor first
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
 
         // ask_join to stopped actor should fail with Send error
@@ -1712,7 +1712,7 @@ mod actor_ref_debug_tests {
             "Debug should contain ActorRef"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -1730,7 +1730,7 @@ mod actor_ref_debug_tests {
             "Debug should contain ActorWeak"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -1762,11 +1762,10 @@ mod kill_edge_cases_tests {
         let (actor_ref, handle) = spawn::<KillEdgeCaseActor>(KillEdgeCaseActor);
 
         // Stop the actor
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
 
-        // Now try to kill the stopping actor - should succeed (idempotent)
-        let result = actor_ref.kill();
-        assert!(result.is_ok(), "kill to stopping actor should succeed");
+        // Now try to kill the stopping actor — idempotent, no-op.
+        actor_ref.kill();
 
         handle.await.unwrap();
     }
@@ -1776,11 +1775,10 @@ mod kill_edge_cases_tests {
         init_test_logger();
         let (actor_ref, handle) = spawn::<KillEdgeCaseActor>(KillEdgeCaseActor);
 
-        // Send multiple kill signals rapidly - should all succeed
-        // (channel capacity is 1, so subsequent kills hit the Full case)
+        // Send multiple kill signals rapidly — channel capacity is 1, so
+        // subsequent kills hit the Full case and are silently ignored.
         for _ in 0..10 {
-            let result = actor_ref.kill();
-            assert!(result.is_ok(), "rapid kill calls should succeed");
+            actor_ref.kill();
         }
 
         let result = handle.await.unwrap();
@@ -1792,13 +1790,12 @@ mod kill_edge_cases_tests {
         init_test_logger();
         let (actor_ref, handle) = spawn::<KillEdgeCaseActor>(KillEdgeCaseActor);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
         assert!(result.is_completed());
 
-        // Kill after actor is completely stopped - should succeed (channel closed case)
-        let kill_result = actor_ref.kill();
-        assert!(kill_result.is_ok(), "kill to stopped actor should succeed");
+        // Kill after actor is completely stopped — hits Closed branch, idempotent no-op.
+        actor_ref.kill();
     }
 }
 
@@ -1827,13 +1824,12 @@ mod stop_edge_cases_tests {
         init_test_logger();
         let (actor_ref, handle) = spawn::<StopEdgeCaseActor>(StopEdgeCaseActor);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
         assert!(result.is_completed());
 
-        // Stop after actor is completely stopped - should succeed (channel closed case)
-        let stop_result = actor_ref.stop().await;
-        assert!(stop_result.is_ok(), "stop to stopped actor should succeed");
+        // Stop after actor is completely stopped — hits Closed branch, idempotent no-op.
+        actor_ref.stop().await;
     }
 
     #[tokio::test]
@@ -1842,8 +1838,8 @@ mod stop_edge_cases_tests {
         let (actor_ref, handle) = spawn::<StopEdgeCaseActor>(StopEdgeCaseActor);
 
         // Send multiple stop signals
-        actor_ref.stop().await.unwrap();
-        actor_ref.stop().await.unwrap(); // Second stop should also succeed
+        actor_ref.stop().await;
+        actor_ref.stop().await; // Second stop should also succeed
 
         let result = handle.await.unwrap();
         assert!(result.is_completed());
@@ -1916,7 +1912,7 @@ mod on_run_disable_tests {
             "on_idle should not be called again after the stream completed"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -1992,7 +1988,7 @@ mod message_trait_tests {
         assert_eq!(received[0], "string:hello");
         assert_eq!(received[1], "int:21");
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -2028,7 +2024,7 @@ mod is_alive_edge_cases_tests {
         let _: bool = actor_ref.ask(Ping).await.unwrap();
         assert!(actor_ref.is_alive());
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -2038,7 +2034,7 @@ mod is_alive_edge_cases_tests {
         let (actor_ref, handle) = spawn::<IsAliveTestActor>(IsAliveTestActor);
 
         assert!(actor_ref.is_alive());
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
 
         // Wait for actor to complete
         handle.await.unwrap();
@@ -2064,7 +2060,7 @@ mod is_alive_edge_cases_tests {
         // Cloned ref should still be alive
         assert!(cloned_ref.is_alive());
 
-        cloned_ref.stop().await.unwrap();
+        cloned_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -2126,7 +2122,7 @@ mod actual_timeout_tests {
             e => panic!("Expected Timeout error, got: {:?}", e),
         }
 
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let _ = handle.await;
     }
 
@@ -2142,7 +2138,7 @@ mod actual_timeout_tests {
 
         assert!(result.is_ok());
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -2203,7 +2199,7 @@ mod lifecycle_phase_tests {
         let value = tracker.load(Ordering::SeqCst);
         assert!(value >= 11, "Expected at least 11, got {}", value);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = handle.await.unwrap();
         assert!(result.is_completed());
 
@@ -2283,7 +2279,7 @@ mod metrics_api_tests {
             "Should have processed at least 3 messages"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -2302,7 +2298,7 @@ mod metrics_api_tests {
         // Message count should be at least 1
         assert!(actor_ref.message_count() >= 1);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -2324,7 +2320,7 @@ mod metrics_api_tests {
             "Avg processing time should be non-zero"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -2345,24 +2341,7 @@ mod metrics_api_tests {
             "Max processing time should be at least 40ms"
         );
 
-        actor_ref.stop().await.unwrap();
-        handle.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_metrics_error_count() {
-        init_test_logger();
-        let (actor_ref, handle) = spawn::<MetricsTestActor>(());
-
-        // Error count should start at 0
-        assert_eq!(actor_ref.error_count(), 0);
-
-        // Even after sending messages, error_count stays 0 (no actual errors)
-        let _: i32 = actor_ref.ask(QuickMsg).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(actor_ref.error_count(), 0);
-
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -2381,7 +2360,7 @@ mod metrics_api_tests {
             "Uptime should be at least 40ms"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 
@@ -2404,7 +2383,7 @@ mod metrics_api_tests {
             "Last activity should be Some after processing message"
         );
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 }
@@ -2458,7 +2437,7 @@ mod tell_with_timeout_tests {
         // not when waiting for the handler to complete
 
         // Clean up
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let _ = handle.await;
     }
 }
@@ -2514,7 +2493,7 @@ mod blocking_timeout_expiry_tests {
         // This might succeed (queued) or timeout depending on timing
         // The important thing is that the timeout path is exercised
 
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let _ = handle.await;
     }
 
@@ -2543,7 +2522,7 @@ mod blocking_timeout_expiry_tests {
             Err(e) => panic!("Unexpected error: {:?}", e),
         }
 
-        actor_ref.kill().unwrap();
+        actor_ref.kill();
         let _ = handle.await;
     }
 }
@@ -2583,7 +2562,7 @@ mod actor_weak_upgrade_tests {
         let upgraded_ref = upgraded.unwrap();
         let _: String = upgraded_ref.ask(GetIdentity).await.unwrap();
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         handle.await.unwrap();
     }
 

@@ -178,8 +178,8 @@ async fn main() -> Result<()> {
     }
 
     // Gracefully stop the actors
-    requester_ref.stop().await?;
-    worker_ref.stop().await?;
+    requester_ref.stop().await;
+    worker_ref.stop().await;
 
     // Wait for actors to complete
     let _requester_result = requester_handle.await?;

@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Final counter value: {final_counter}\n");
 
     println!("10. Gracefully stopping actor...");
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     println!("Actor stopped successfully");
 
     #[cfg(feature = "tracing")]

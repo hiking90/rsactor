@@ -280,7 +280,7 @@ async fn main() -> Result<()> {
 
     // Gracefully stop the actor
     println!("\nStopping actor...");
-    worker_ref.stop().await?;
+    worker_ref.stop().await;
 
     // Wait for actor to complete
     let _result = worker_handle.await?;

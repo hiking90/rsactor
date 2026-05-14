@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(value, None);
 
         // Stop actor and wait
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
         assert!(result.is_completed());
         if let ActorResult::Completed { actor, killed: _ } = result {
@@ -139,7 +139,7 @@ mod tests {
         assert_eq!(value, None);
 
         // Stop actor and wait
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
         assert!(result.is_completed());
         if let ActorResult::Completed { actor, killed: _ } = result {
@@ -169,7 +169,7 @@ mod tests {
         let value: Option<MyTestData> = actor_ref.ask(GetValue).await.unwrap();
         assert_eq!(value, None);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
         assert!(result.is_completed());
         if let ActorResult::Completed { actor, killed: _ } = result {
@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(value, None);
 
         // Stop actor
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
         assert!(result.is_completed());
     }
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(w_as_string, "updated".to_string());
 
         // Stop actor
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
         assert!(result.is_completed());
     }
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(serialized.unwrap(), "{\"value\":\"test\"}".to_string());
 
         // Stop actor
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
         assert!(result.is_completed());
     }
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(serialized.unwrap(), "<data>example</data>".to_string());
 
         // Stop actor
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
         let result = join_handle.await.unwrap();
         assert!(result.is_completed());
     }
