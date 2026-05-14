@@ -148,7 +148,8 @@ pub enum ActorResult<T: Actor> {
         /// The error that caused the failure (the primary cause).
         ///
         /// For [`FailurePhase::OnIdleThenOnStop`] this holds the original `on_idle` error;
-        /// the subsequent `on_stop` error is exposed via [`secondary_error`](Self::Failed#structfield.secondary_error).
+        /// the subsequent `on_stop` error is exposed via the `secondary_error` field
+        /// (or the [`ActorResult::secondary_error`] accessor).
         error: T::Error,
         /// Secondary error, set only when a *cleanup* hook also failed after the primary failure.
         ///
