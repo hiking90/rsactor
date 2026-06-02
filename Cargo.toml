@@ -55,10 +55,15 @@ futures = "0.3"
 
 [dev-dependencies]
 anyhow.workspace = true
+criterion = { version = "0.5", features = ["async_tokio"] }
 futures.workspace = true
 rand.workspace = true
 tokio-stream.workspace = true
 tracing-subscriber.workspace = true
+
+[[bench]]
+name = "message_throughput"
+harness = false
 
 [[test]]
 name = "debugging_tools_tests"
