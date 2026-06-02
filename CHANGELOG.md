@@ -30,9 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Error::IdleChannelNotEnabled` — returned by `subscribe_idle` when the actor
   was spawned without `with_idle()`. This is a configuration error and is
   **not** recorded as a dead letter.
-- Criterion benchmark harness (`benches/message_throughput.rs`) covering the
-  message hot path: `ActorRef` clone, `select!`-branch count, `tell`/`ask`
-  throughput, fan-in, and an idle on/off A/B.
 
 ### Changed
 
