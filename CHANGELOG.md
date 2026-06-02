@@ -7,8 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ BREAKING CHANGES
+
+- **Idle-event channel is now opt-in.** `Actor::on_idle` /
+  `ActorRef::subscribe_idle` require the actor to be spawned with
+  `spawn_with_options(args, SpawnOptions::new().with_idle())`. The channel is
+  off by default so that actors which never use idle events no longer pay for
+  an always-active branch in the runtime's `select!` loop on every message.
+
+  Same-binary A/B (idle on vs off, all else equal): `tell` throughput +29%
+  (4.57 → 5.90 M msg/s), `tell` latency −27% (238 ns → 174 ns). `ask` is
+  unaffected (dominated by two context switches).
+
+  **Migration** — if you implement `on_idle` or call `subscribe_idle`:
+
+  ```rust
+  // Before
+  let (actor_ref, join) = spawn::<MyActor>(args);
+
+  // After
+  use rsactor::{spawn_with_options, SpawnOptions};
+  let (actor_ref, join) =
+      spawn_with_options::<MyActor>(args, SpawnOptions::new().with_idle());
+  ```
+
+  Without `with_idle()`, `subscribe_idle` returns
+  `Error::IdleChannelNotEnabled` and `on_idle` is never driven — the failure
+  surfaces immediately (e.g. via `?` in `on_start`) rather than silently.
+
+### Added
+
+- `SpawnOptions::with_idle()` — enables the idle-event channel for the spawned
+  actor (mirrors `with_priority()`).
+- `ActorRef::has_idle_channel()` — reports whether the idle channel is enabled.
+- `Error::IdleChannelNotEnabled` — returned by `subscribe_idle` when the actor
+  was spawned without `with_idle()`. This is a configuration error and is
+  **not** recorded as a dead letter.
+- Criterion benchmark harness (`benches/message_throughput.rs`) covering the
+  message hot path: `ActorRef` clone, `select!`-branch count, `tell`/`ask`
+  throughput, fan-in, and an idle on/off A/B.
+
 ### Changed
 
+- `ActorWeak::upgrade` / `ActorWeak::is_alive` now treat the idle-subscribe and
+  priority channels as **secondary**: only the mailbox and terminate channels
+  are required for an upgrade to succeed (previously idle-subscribe was also
+  required).
 - **Faster `blocking_*` APIs from `async fn` contexts.** When called on a
   multi-thread Tokio runtime (e.g. from an `async fn → sync fn → blocking_*`
   bridge or from `spawn_blocking`), `blocking_tell`, `blocking_ask`,
