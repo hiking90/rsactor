@@ -375,7 +375,7 @@ async fn test_actor_fail_on_start() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     let result = handle.await.expect("Join handle should not fail");
     assert!(
@@ -407,7 +407,7 @@ async fn test_actor_fail_on_run() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     let result = handle.await.expect("Join handle should not fail");
     assert!(
@@ -937,7 +937,7 @@ async fn test_actor_fail_on_stop_during_graceful_stop() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     // Wait for actor to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1001,7 +1001,7 @@ async fn test_actor_fail_on_stop_during_kill() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     // Wait for actor to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1065,7 +1065,7 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     let result = handle.await.expect("Join handle should not fail");
 
@@ -1130,7 +1130,7 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (_actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     let result = handle.await.expect("Join handle should not fail");
 
@@ -1194,7 +1194,7 @@ async fn test_actor_on_stop_success_during_graceful_stop() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     // Wait for actor to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1246,7 +1246,7 @@ async fn test_actor_on_stop_success_during_kill() {
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
     };
-    let (actor_ref, handle) = spawn::<LifecycleErrorActor>(args);
+    let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
     // Wait for actor to start
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1278,4 +1278,14 @@ async fn test_actor_on_stop_success_during_kill() {
     } else {
         panic!("Expected Completed result");
     }
+}
+/// Test helper: spawn with the idle-event channel enabled (off by default
+/// since the opt-in change). Mirrors `spawn` but calls `with_idle()`.
+fn spawn_idle<A: rsactor::Actor + 'static>(
+    args: A::Args,
+) -> (
+    rsactor::ActorRef<A>,
+    tokio::task::JoinHandle<rsactor::ActorResult<A>>,
+) {
+    rsactor::spawn_with_options(args, rsactor::SpawnOptions::new().with_idle())
 }

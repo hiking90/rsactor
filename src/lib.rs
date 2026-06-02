@@ -643,6 +643,15 @@ pub struct SpawnOptions {
     /// returns [`Error::PriorityChannelNotEnabled`]. Toggled via
     /// [`SpawnOptions::with_priority`].
     pub(crate) priority_enabled: bool,
+    /// Whether to enable the idle-event channel. When `false` (default) no idle-subscribe
+    /// channel is created: [`Actor::on_idle`](crate::Actor::on_idle) is never driven and any
+    /// call to [`subscribe_idle`](crate::ActorRef::subscribe_idle) returns
+    /// [`Error::IdleChannelNotEnabled`]. Toggled via [`SpawnOptions::with_idle`].
+    ///
+    /// Disabling it by default removes one always-active branch from the actor's runtime
+    /// `select!` loop, which the majority of actors (those that never use `on_idle`) would
+    /// otherwise pay on every message.
+    pub(crate) idle_enabled: bool,
 }
 
 impl SpawnOptions {
@@ -656,6 +665,7 @@ impl SpawnOptions {
         Self {
             mailbox_capacity: capacity,
             priority_enabled: false,
+            idle_enabled: false,
         }
     }
 
@@ -684,6 +694,22 @@ impl SpawnOptions {
     /// block a sender indefinitely.
     pub fn with_priority(mut self) -> Self {
         self.priority_enabled = true;
+        self
+    }
+
+    /// Enables the idle-event channel for the spawned actor.
+    ///
+    /// When enabled, the actor gains the [`subscribe_idle`](crate::ActorRef::subscribe_idle)
+    /// channel and its runtime drives [`Actor::on_idle`](crate::Actor::on_idle) for every
+    /// event yielded by a subscribed stream. When **disabled** (the default), no such channel
+    /// is created: `subscribe_idle` returns [`Error::IdleChannelNotEnabled`] and `on_idle` is
+    /// never called.
+    ///
+    /// Idle support is off by default because it costs an always-active branch in the
+    /// runtime's `select!` loop — a per-message overhead that only actors using `on_idle`
+    /// should pay. Enable it when (and only when) the actor subscribes idle streams.
+    pub fn with_idle(mut self) -> Self {
+        self.idle_enabled = true;
         self
     }
 }
@@ -742,10 +768,16 @@ pub fn spawn_with_options<T: Actor + 'static>(
 
     let (mailbox_tx, mailbox_rx) = mpsc::channel(opts.mailbox_capacity);
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
-    let (idle_subscribe_tx, idle_subscribe_rx) = mpsc::channel(IDLE_SUBSCRIBE_CHANNEL_CAPACITY);
 
     let (priority_tx, priority_rx) = if opts.priority_enabled {
         let (tx, rx) = mpsc::channel(PRIORITY_CHANNEL_CAPACITY);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
+    let (idle_subscribe_tx, idle_subscribe_rx) = if opts.idle_enabled {
+        let (tx, rx) = mpsc::channel(IDLE_SUBSCRIBE_CHANNEL_CAPACITY);
         (Some(tx), Some(rx))
     } else {
         (None, None)

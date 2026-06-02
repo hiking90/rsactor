@@ -102,7 +102,10 @@ async fn main() -> Result<()> {
     // and a JoinHandle to await the actor's completion. The initial counter
     // value is passed via `Args`; the actor's idle streams are subscribed
     // inside `on_start` so they outlive `select!` cancellation.
-    let (actor_ref, join_handle) = rsactor::spawn::<MyActor>(100);
+    // `with_idle()` enables the idle-event channel so the streams subscribed in
+    // `on_start` actually drive `on_idle`. It is off by default.
+    let (actor_ref, join_handle) =
+        rsactor::spawn_with_options::<MyActor>(100, rsactor::SpawnOptions::new().with_idle());
 
     tokio::time::sleep(Duration::from_millis(700)).await;
 

@@ -174,8 +174,12 @@ async fn main() -> Result<()> {
 
     info!("Starting actor-task communication example");
 
-    // Create and spawn our actor
-    let (actor_ref, join_handle) = rsactor::spawn::<DataProcessorActor>(());
+    // Create and spawn our actor. `with_idle()` enables the idle-event channel
+    // used by the streams subscribed in `on_start` (off by default).
+    let (actor_ref, join_handle) = rsactor::spawn_with_options::<DataProcessorActor>(
+        (),
+        rsactor::SpawnOptions::new().with_idle(),
+    );
 
     // Wait a bit to get some initial data
     tokio::time::sleep(Duration::from_secs(2)).await;

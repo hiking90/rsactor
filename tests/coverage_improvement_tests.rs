@@ -351,7 +351,7 @@ mod on_run_error_tests {
     async fn test_on_run_error_terminates_actor() {
         init_test_logger();
         // Actor will succeed 2 times then fail
-        let (actor_ref, handle) = spawn::<FailingOnRunActor>(2);
+        let (actor_ref, handle) = spawn_idle::<FailingOnRunActor>(2);
 
         // Wait for the actor to fail
         let result = handle.await.unwrap();
@@ -417,7 +417,7 @@ mod on_run_error_tests {
     async fn test_on_run_error_with_on_stop_also_failing() {
         init_test_logger();
         // Actor will succeed 1 time then fail in on_run, and on_stop will also fail
-        let (actor_ref, handle) = spawn::<FailingOnRunAndOnStopActor>(1);
+        let (actor_ref, handle) = spawn_idle::<FailingOnRunAndOnStopActor>(1);
 
         // Wait for the actor to fail
         let result = handle.await.unwrap();
@@ -1895,7 +1895,7 @@ mod on_run_disable_tests {
     #[tokio::test]
     async fn test_finite_idle_stream_dispatches_once() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<OnRunDisableActor>(());
+        let (actor_ref, handle) = spawn_idle::<OnRunDisableActor>(());
 
         // Wait for the one-shot stream to fire.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2190,7 +2190,7 @@ mod lifecycle_phase_tests {
         init_test_logger();
         let tracker = std::sync::Arc::new(AtomicU32::new(0));
 
-        let (actor_ref, handle) = spawn::<LifecyclePhaseActor>(tracker.clone());
+        let (actor_ref, handle) = spawn_idle::<LifecyclePhaseActor>(tracker.clone());
 
         // Wait for on_idle to execute
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2609,4 +2609,14 @@ mod actor_weak_upgrade_tests {
         // After actor termination, the receiver side is closed
         assert!(!weak.is_alive());
     }
+}
+/// Test helper: spawn with the idle-event channel enabled (off by default
+/// since the opt-in change). Mirrors `spawn` but calls `with_idle()`.
+fn spawn_idle<A: rsactor::Actor + 'static>(
+    args: A::Args,
+) -> (
+    rsactor::ActorRef<A>,
+    tokio::task::JoinHandle<rsactor::ActorResult<A>>,
+) {
+    rsactor::spawn_with_options(args, rsactor::SpawnOptions::new().with_idle())
 }

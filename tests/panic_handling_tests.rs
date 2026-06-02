@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     async fn test_normal_actor_operation() -> Result<()> {
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
 
         // Test normal message handling
         let result = actor_ref.ask(SafeMessage(5)).await?;
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     async fn test_panic_in_message_handler() -> Result<()> {
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
 
         // Send a message that will cause panic
         let result = actor_ref.ask(PanicMessage).await;
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     async fn test_panic_in_on_run() -> Result<()> {
         // Set panic threshold to 3
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(Some(3));
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(Some(3));
 
         // Send messages to increase counter
         let result = actor_ref.ask(SafeMessage(1)).await?;
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     async fn test_error_handling_vs_panic() -> Result<()> {
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
 
         // Test error message (should return error, not panic)
         let result = actor_ref.ask(ErrorMessage).await?;
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     async fn test_actor_state_persistence_across_messages() -> Result<()> {
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
 
         // Send multiple messages and verify state persistence
         assert_eq!(actor_ref.ask(SafeMessage(2)).await?, 2);
@@ -243,9 +243,9 @@ mod tests {
     #[test]
     async fn test_multiple_actors_isolation() -> Result<()> {
         // Spawn multiple actors
-        let (actor_ref1, join_handle1) = spawn::<PanicTestActor>(None);
-        let (actor_ref2, join_handle2) = spawn::<PanicTestActor>(None);
-        let (actor_ref3, join_handle3) = spawn::<PanicTestActor>(None);
+        let (actor_ref1, join_handle1) = spawn_idle::<PanicTestActor>(None);
+        let (actor_ref2, join_handle2) = spawn_idle::<PanicTestActor>(None);
+        let (actor_ref3, join_handle3) = spawn_idle::<PanicTestActor>(None);
 
         // Set different states
         assert_eq!(actor_ref1.ask(SafeMessage(10)).await?, 10);
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     async fn test_actor_timeout_during_panic() -> Result<()> {
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
 
         // Test that ask operations timeout appropriately when actor panics
         let panic_future = actor_ref.ask(PanicMessage);
@@ -325,7 +325,7 @@ mod supervision_tests {
             let mut total_restarts = 0;
 
             loop {
-                let (actor_ref, join_handle) = spawn::<PanicTestActor>(Some(2)); // Panic at counter 2
+                let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(Some(2)); // Panic at counter 2
 
                 // Send messages until panic
                 #[allow(clippy::redundant_pattern_matching)]
@@ -366,7 +366,7 @@ mod supervision_tests {
     #[test]
     async fn test_supervision_with_successful_completion() -> Result<()> {
         // Test supervisor when actor completes successfully (no panic threshold)
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
 
         // Send some messages
         assert_eq!(actor_ref.ask(SafeMessage(1)).await?, 1);
@@ -586,7 +586,7 @@ mod stress_tests {
 
         // Spawn multiple actors that will panic
         for _ in 0..10 {
-            let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+            let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
 
             // Start a task that will cause the actor to panic
             let task_handle = tokio::spawn(async move {
@@ -609,7 +609,7 @@ mod stress_tests {
 
     #[test]
     async fn test_rapid_message_sending_before_panic() -> Result<()> {
-        let (actor_ref, join_handle) = spawn::<PanicTestActor>(Some(100)); // High threshold
+        let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(Some(100)); // High threshold
 
         // Send many messages rapidly
         let mut tasks = Vec::new();
@@ -658,7 +658,7 @@ mod stress_tests {
 
         // Create multiple actors and cause them to panic
         for _ in 0..5 {
-            let (actor_ref, join_handle) = spawn::<PanicTestActor>(None);
+            let (actor_ref, join_handle) = spawn_idle::<PanicTestActor>(None);
             actor_refs.push(actor_ref);
             join_handles.push(join_handle);
         }
@@ -846,4 +846,14 @@ mod integration_tests {
 
         Ok(())
     }
+}
+/// Test helper: spawn with the idle-event channel enabled (off by default
+/// since the opt-in change). Mirrors `spawn` but calls `with_idle()`.
+fn spawn_idle<A: rsactor::Actor + 'static>(
+    args: A::Args,
+) -> (
+    rsactor::ActorRef<A>,
+    tokio::task::JoinHandle<rsactor::ActorResult<A>>,
+) {
+    rsactor::spawn_with_options(args, rsactor::SpawnOptions::new().with_idle())
 }

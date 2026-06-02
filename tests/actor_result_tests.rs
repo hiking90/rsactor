@@ -190,7 +190,7 @@ async fn test_actor_result_failed_on_start() {
         value: 999,
         fail_on_start: true,
     };
-    let (_actor_ref, handle) = spawn::<FailureTestActor>(args);
+    let (_actor_ref, handle) = spawn_idle::<FailureTestActor>(args);
 
     let result = handle.await.expect("Handle should not fail");
 
@@ -248,7 +248,7 @@ async fn test_actor_result_failed_on_run() {
         value: 777,
         fail_on_start: false,
     };
-    let (_actor_ref, handle) = spawn::<FailureTestActor>(args);
+    let (_actor_ref, handle) = spawn_idle::<FailureTestActor>(args);
 
     let result = handle.await.expect("Handle should not fail");
 
@@ -289,7 +289,7 @@ async fn test_actor_result_failed_on_stop_graceful() {
         value: 555,
         fail_on_start: false,
     };
-    let (actor_ref, handle) = spawn::<FailureTestActor>(args);
+    let (actor_ref, handle) = spawn_idle::<FailureTestActor>(args);
 
     // Wait for actor to start and then stop it gracefully
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -331,7 +331,7 @@ async fn test_actor_result_failed_on_stop_killed() {
         value: 333,
         fail_on_start: false,
     };
-    let (actor_ref, handle) = spawn::<FailureTestActor>(args);
+    let (actor_ref, handle) = spawn_idle::<FailureTestActor>(args);
 
     // Wait for actor to start and then kill it
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -688,4 +688,14 @@ async fn test_error_runtime_display_format() {
         display_str.contains("Test runtime error details"),
         "Display should contain error details"
     );
+}
+/// Test helper: spawn with the idle-event channel enabled (off by default
+/// since the opt-in change). Mirrors `spawn` but calls `with_idle()`.
+fn spawn_idle<A: rsactor::Actor + 'static>(
+    args: A::Args,
+) -> (
+    rsactor::ActorRef<A>,
+    tokio::task::JoinHandle<rsactor::ActorResult<A>>,
+) {
+    rsactor::spawn_with_options(args, rsactor::SpawnOptions::new().with_idle())
 }
