@@ -700,7 +700,7 @@ impl SpawnOptions {
     /// Enables the idle-event channel for the spawned actor.
     ///
     /// When enabled, the actor gains the [`subscribe_idle`](crate::ActorRef::subscribe_idle)
-    /// channel and its runtime drives [`Actor::on_idle`](crate::Actor::on_idle) for every
+    /// channel and its runtime drives [`Actor::on_idle`] for every
     /// event yielded by a subscribed stream. When **disabled** (the default), no such channel
     /// is created: `subscribe_idle` returns [`Error::IdleChannelNotEnabled`] and `on_idle` is
     /// never called.
