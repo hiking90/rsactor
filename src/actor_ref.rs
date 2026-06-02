@@ -129,10 +129,11 @@ pub struct ActorRef<T: Actor> {
     pub(crate) priority_sender: Option<MailboxSender<T>>,
     /// Channel for sending control signals (e.g., terminate) to the actor
     pub(crate) terminate_sender: mpsc::Sender<ControlSignal>,
-    /// Channel for registering new idle-event streams with the actor's runtime.
+    /// Optional channel for registering new idle-event streams with the actor's runtime.
     /// Each subscribed stream is merged into the runtime's `SelectAll` and its
     /// events drive [`Actor::on_idle`](crate::Actor::on_idle).
-    pub(crate) idle_subscribe_sender: mpsc::Sender<IdleEventStream<T>>,
+    /// `None` when the actor was spawned without `SpawnOptions::with_idle()`.
+    pub(crate) idle_subscribe_sender: Option<mpsc::Sender<IdleEventStream<T>>>,
     /// Per-actor metrics collector (when metrics feature is enabled)
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Arc<MetricsCollector>,
@@ -145,7 +146,7 @@ impl<T: Actor> ActorRef<T> {
         sender: MailboxSender<T>,
         priority_sender: Option<MailboxSender<T>>,
         terminate_sender: mpsc::Sender<ControlSignal>,
-        idle_subscribe_sender: mpsc::Sender<IdleEventStream<T>>,
+        idle_subscribe_sender: Option<mpsc::Sender<IdleEventStream<T>>>,
         #[cfg(feature = "metrics")] metrics: Arc<MetricsCollector>,
     ) -> Self {
         ActorRef {
@@ -173,6 +174,17 @@ impl<T: Actor> ActorRef<T> {
     #[inline]
     pub fn has_priority_channel(&self) -> bool {
         self.priority_sender.is_some()
+    }
+
+    /// Returns `true` if this actor was spawned with the idle-event channel enabled
+    /// via [`SpawnOptions::with_idle`](crate::SpawnOptions::with_idle).
+    ///
+    /// When this returns `false`, [`Actor::on_idle`](crate::Actor::on_idle) is never
+    /// driven and calls to [`subscribe_idle`](Self::subscribe_idle) return
+    /// [`Error::IdleChannelNotEnabled`](crate::Error::IdleChannelNotEnabled).
+    #[inline]
+    pub fn has_idle_channel(&self) -> bool {
+        self.idle_subscribe_sender.is_some()
     }
 
     /// Test-only: drops this `ActorRef`'s strong priority sender without affecting
@@ -211,7 +223,7 @@ impl<T: Actor> ActorRef<T> {
             sender: this.sender.downgrade(),
             priority_sender: this.priority_sender.as_ref().map(|s| s.downgrade()),
             terminate_sender: this.terminate_sender.downgrade(),
-            idle_subscribe_sender: this.idle_subscribe_sender.downgrade(),
+            idle_subscribe_sender: this.idle_subscribe_sender.as_ref().map(|s| s.downgrade()),
             #[cfg(feature = "metrics")]
             metrics: this.metrics.clone(),
         }
@@ -245,6 +257,10 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Errors
     ///
+    /// - [`Error::IdleChannelNotEnabled`] when the actor was spawned without
+    ///   [`SpawnOptions::with_idle`](crate::SpawnOptions::with_idle). The idle channel is
+    ///   **off by default**; enable it explicitly to use `on_idle`. This is a configuration
+    ///   error and is terminal.
     /// - [`Error::ChannelFull`] when the bounded subscribe buffer is at capacity. This is
     ///   transient ([`Error::is_retryable`] returns `true`) — batch your subscriptions
     ///   across separate handler invocations or raise
@@ -265,19 +281,25 @@ impl<T: Actor> ActorRef<T> {
     where
         S: Stream<Item = T::IdleEvent> + Send + 'static,
     {
+        let Some(idle_subscribe_sender) = self.idle_subscribe_sender.as_ref() else {
+            #[cfg(feature = "tracing")]
+            warn!("subscribe_idle called on actor without an idle channel");
+            return Err(Error::IdleChannelNotEnabled {
+                identity: self.identity(),
+            });
+        };
+
         let boxed: IdleEventStream<T> = stream.boxed();
-        self.idle_subscribe_sender
-            .try_send(boxed)
-            .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => Error::ChannelFull {
-                    identity: self.identity(),
-                    channel: "idle_subscribe",
-                },
-                mpsc::error::TrySendError::Closed(_) => Error::Send {
-                    identity: self.identity(),
-                    details: "Idle subscribe channel closed (actor is no longer alive)".to_string(),
-                },
-            })
+        idle_subscribe_sender.try_send(boxed).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => Error::ChannelFull {
+                identity: self.identity(),
+                channel: "idle_subscribe",
+            },
+            mpsc::error::TrySendError::Closed(_) => Error::Send {
+                identity: self.identity(),
+                details: "Idle subscribe channel closed (actor is no longer alive)".to_string(),
+            },
+        })
     }
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget).
@@ -1609,8 +1631,9 @@ pub struct ActorWeak<T: Actor> {
     priority_sender: Option<tokio::sync::mpsc::WeakSender<MailboxMessage<T>>>,
     /// Weak reference to the actor's terminate signal sender
     terminate_sender: tokio::sync::mpsc::WeakSender<ControlSignal>,
-    /// Weak reference to the actor's idle-subscribe channel sender
-    idle_subscribe_sender: tokio::sync::mpsc::WeakSender<IdleEventStream<T>>,
+    /// Weak reference to the actor's optional idle-subscribe channel sender
+    /// (None if the idle channel was not enabled via `SpawnOptions::with_idle()`).
+    idle_subscribe_sender: Option<tokio::sync::mpsc::WeakSender<IdleEventStream<T>>>,
     /// Strong reference to metrics (survives actor drop for post-mortem analysis)
     #[cfg(feature = "metrics")]
     metrics: Arc<MetricsCollector>,
@@ -1622,25 +1645,29 @@ impl<T: Actor> ActorWeak<T> {
     /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
     /// has been dropped.
     ///
-    /// The priority channel is treated as a secondary channel: if the original actor was
-    /// spawned with priority enabled but every strong priority sender has been dropped,
-    /// `upgrade()` still succeeds. The resulting [`ActorRef`] has
-    /// [`has_priority_channel()`](ActorRef::has_priority_channel) returning `false`, and
-    /// priority calls will fail with
-    /// [`Error::PriorityChannelNotEnabled`](crate::Error::PriorityChannelNotEnabled).
+    /// The priority and idle-subscribe channels are treated as *secondary* channels: if the
+    /// original actor was spawned with one of them enabled but every strong sender for it has
+    /// been dropped, `upgrade()` still succeeds. The resulting [`ActorRef`] reports the channel
+    /// as absent ([`has_priority_channel()`](ActorRef::has_priority_channel) /
+    /// [`has_idle_channel()`](ActorRef::has_idle_channel) returning `false`), and calls on it
+    /// fail with [`Error::PriorityChannelNotEnabled`](crate::Error::PriorityChannelNotEnabled)
+    /// / [`Error::IdleChannelNotEnabled`](crate::Error::IdleChannelNotEnabled).
     ///
-    /// The mailbox, terminate, and idle-subscribe channels are all *primary* channels and
-    /// must all upgrade for `upgrade()` to succeed. In practice their strong-sender counts
-    /// move in lockstep — every [`ActorRef`] clone owns one of each — so they live and die
-    /// together; the joint check is defensive rather than restrictive.
+    /// The mailbox and terminate channels are the *primary* channels and must both upgrade for
+    /// `upgrade()` to succeed. In practice their strong-sender counts move in lockstep — every
+    /// [`ActorRef`] clone owns one of each — so they live and die together; the joint check is
+    /// defensive rather than restrictive.
     #[inline]
     pub fn upgrade(&self) -> Option<ActorRef<T>> {
-        // Try to upgrade the three primary channel senders (mailbox, terminate,
-        // idle-subscribe). The priority channel, when present, is best-effort.
+        // Try to upgrade the two primary channel senders (mailbox, terminate).
+        // The priority and idle-subscribe channels, when present, are best-effort.
         let sender = self.sender.upgrade()?;
         let terminate_sender = self.terminate_sender.upgrade()?;
         let priority_sender = self.priority_sender.as_ref().and_then(|s| s.upgrade());
-        let idle_subscribe_sender = self.idle_subscribe_sender.upgrade()?;
+        let idle_subscribe_sender = self
+            .idle_subscribe_sender
+            .as_ref()
+            .and_then(|s| s.upgrade());
 
         Some(ActorRef {
             id: self.id,
@@ -1670,12 +1697,11 @@ impl<T: Actor> ActorWeak<T> {
     /// [`upgrade`](ActorWeak::upgrade) and check the returned `Option`.
     #[inline]
     pub fn is_alive(&self) -> bool {
-        // Every primary sender (mailbox, terminate, idle-subscribe) must still
-        // have a strong reference for the actor to be alive. Mirror the same
-        // set checked by `upgrade()` so the two calls cannot disagree.
-        self.sender.strong_count() > 0
-            && self.terminate_sender.strong_count() > 0
-            && self.idle_subscribe_sender.strong_count() > 0
+        // Every primary sender (mailbox, terminate) must still have a strong
+        // reference for the actor to be alive. Mirror the same set checked by
+        // `upgrade()` so the two calls cannot disagree. The priority and
+        // idle-subscribe channels are secondary and intentionally not consulted.
+        self.sender.strong_count() > 0 && self.terminate_sender.strong_count() > 0
     }
 }
 

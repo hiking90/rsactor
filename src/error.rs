@@ -96,6 +96,17 @@ pub enum Error {
         /// ID of the actor that does not have a priority channel.
         identity: Identity,
     },
+    /// Error when an idle-channel operation (e.g. [`subscribe_idle`](crate::ActorRef::subscribe_idle))
+    /// is attempted on an actor that did not enable the idle channel via
+    /// [`SpawnOptions::with_idle`](crate::SpawnOptions::with_idle).
+    ///
+    /// This is a configuration error (not a delivery failure) and is therefore
+    /// not recorded as a dead letter. Callers can guard against this with
+    /// [`ActorRef::has_idle_channel`](crate::ActorRef::has_idle_channel).
+    IdleChannelNotEnabled {
+        /// ID of the actor that does not have an idle channel.
+        identity: Identity,
+    },
 }
 
 /// Implementation of the Display trait for Error enum.
@@ -154,6 +165,12 @@ impl std::fmt::Display for Error {
                 write!(
                     f,
                     "Priority channel is not enabled for actor {identity}: enable it via SpawnOptions::with_priority()"
+                )
+            }
+            Error::IdleChannelNotEnabled { identity } => {
+                write!(
+                    f,
+                    "Idle channel is not enabled for actor {identity}: enable it via SpawnOptions::with_idle()"
                 )
             }
         }
@@ -298,6 +315,11 @@ impl Error {
                 "Spawn the actor with SpawnOptions::new().with_priority() via spawn_with_options()",
                 "Use ActorRef::has_priority_channel() to check before sending priority messages",
                 "If priority is not required, use the regular tell()/ask() methods instead",
+            ],
+            Error::IdleChannelNotEnabled { .. } => &[
+                "Spawn the actor with SpawnOptions::new().with_idle() via spawn_with_options()",
+                "Use ActorRef::has_idle_channel() to check before calling subscribe_idle()",
+                "on_idle is only driven when the idle channel is enabled",
             ],
         }
     }

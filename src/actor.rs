@@ -294,6 +294,16 @@ pub trait Actor: Sized + Send + 'static {
     /// }
     /// ```
     ///
+    /// # Opt-in
+    ///
+    /// `on_idle` is **only driven when the actor is spawned with the idle channel enabled**
+    /// via [`SpawnOptions::with_idle`](crate::SpawnOptions::with_idle). The channel is off by
+    /// default so that actors which never use idle events do not pay for an extra always-active
+    /// branch in the runtime's `select!` loop. Without it,
+    /// [`subscribe_idle`](crate::ActorRef::subscribe_idle) returns
+    /// [`Error::IdleChannelNotEnabled`](crate::Error::IdleChannelNotEnabled) and this method is
+    /// never called.
+    ///
     /// # Default implementation
     ///
     /// The default returns `Ok(())` immediately. Actors that never subscribe an idle stream
@@ -505,13 +515,14 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     mut receiver: mpsc::Receiver<MailboxMessage<T>>,
     mut priority_receiver: Option<mpsc::Receiver<MailboxMessage<T>>>,
     mut terminate_receiver: mpsc::Receiver<ControlSignal>,
-    idle_subscribe_receiver: mpsc::Receiver<IdleEventStream<T>>,
+    mut idle_subscribe_receiver: Option<mpsc::Receiver<IdleEventStream<T>>>,
 ) -> ActorResult<T> {
-    // Track the subscribe channel as Option to mirror the priority-channel
-    // close-detection pattern: when all strong senders drop and `recv()`
-    // returns None, replace with `None` so the select arm becomes pending and
-    // does not busy-loop. We still allow normal shutdown via the mailbox arm.
-    let mut idle_subscribe_receiver = Some(idle_subscribe_receiver);
+    // The subscribe channel is `None` when the actor was spawned without
+    // `SpawnOptions::with_idle()` — its select arm then resolves to `pending()`
+    // and costs nothing. When present, it mirrors the priority-channel
+    // close-detection pattern: once all strong senders drop and `recv()`
+    // returns None, it is replaced with `None` so the arm becomes pending and
+    // does not busy-loop. Normal shutdown still propagates via the mailbox arm.
     let actor_id = actor_ref.identity();
 
     #[cfg(feature = "tracing")]
