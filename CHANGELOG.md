@@ -19,21 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (4.57 → 5.90 M msg/s), `tell` latency −27% (238 ns → 174 ns). `ask` is
   unaffected (dominated by two context switches).
 
-  **Migration** — if you implement `on_idle` or call `subscribe_idle`:
-
-  ```rust
-  // Before
-  let (actor_ref, join) = spawn::<MyActor>(args);
-
-  // After
-  use rsactor::{spawn_with_options, SpawnOptions};
-  let (actor_ref, join) =
-      spawn_with_options::<MyActor>(args, SpawnOptions::new().with_idle());
-  ```
-
-  Without `with_idle()`, `subscribe_idle` returns
-  `Error::IdleChannelNotEnabled` and `on_idle` is never driven — the failure
-  surfaces immediately (e.g. via `?` in `on_start`) rather than silently.
+  See [Migrating from 0.15.x to 0.16.0](#migrating-from-015x-to-0160) for what
+  to change.
 
 ### Added
 
@@ -71,6 +58,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"tell"` when the slow path delegated through the async `tell`). The
   timeout case and the no-timeout case were already labeled
   `"blocking_tell"`; this aligns the remaining edge case.
+
+### Migrating from 0.15.x to 0.16.0
+
+Things to check when upgrading:
+
+- **Do you implement `Actor::on_idle` or call `ActorRef::subscribe_idle`?**
+  - **No** → nothing to do. The idle channel is off by default and the rest of
+    the API is source-compatible.
+  - **Yes** → enable the idle channel at spawn time:
+
+    ```rust
+    // Before (0.15.x): idle was always available
+    let (actor_ref, join) = spawn::<MyActor>(args);
+
+    // After (0.16.0): opt in explicitly
+    use rsactor::{spawn_with_options, SpawnOptions};
+    let (actor_ref, join) =
+        spawn_with_options::<MyActor>(args, SpawnOptions::new().with_idle());
+    ```
+
+    `spawn_with_mailbox_capacity(args, n)` becomes
+    `spawn_with_options(args, SpawnOptions::new().mailbox_capacity(n).with_idle())`.
+
+- **How failures surface:** without `with_idle()`, `subscribe_idle` returns
+  `Error::IdleChannelNotEnabled` (a configuration error, not a dead letter) and
+  `on_idle` is never driven. If you `?` the `subscribe_idle` result in
+  `on_start`, the actor fails to start with a clear error rather than silently
+  no-op'ing. Guard proactively with `ActorRef::has_idle_channel()` if needed.
+
+- **`ActorWeak` upgrade semantics:** the idle-subscribe and priority channels
+  are now *secondary* — `ActorWeak::upgrade` / `is_alive` succeed based on the
+  mailbox + terminate channels alone. This only matters if you relied on a
+  dropped idle-subscribe sender causing `upgrade()` to fail (it no longer does;
+  in practice all `ActorRef` clones carried one of each, so counts moved in
+  lockstep anyway).
 
 ## [0.15.0] - 2026-05-03
 
