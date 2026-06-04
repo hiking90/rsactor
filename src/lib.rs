@@ -306,26 +306,27 @@ pub use rsactor_derive::{message_handlers, Actor};
 
 /// Internal function used by derive macros to log handler errors.
 ///
-/// This surfaces user-handler `Result::Err` values through the most appropriate channel:
-/// when the `tracing` feature is enabled, it emits a structured `tracing::error!` event;
-/// otherwise it falls back to `eprintln!` so users who have not wired up a subscriber
-/// still see handler errors on stderr instead of silently dropping them.
+/// Surfaces a user handler's `Result::Err` value through `tracing::error!`. The
+/// `tracing` crate is always a dependency — the `tracing` *feature* only gates
+/// `#[tracing::instrument]` spans, not logging — so this routes through the user's
+/// configured subscriber unconditionally, exactly like dead-letter logging. Keying
+/// the channel on the `tracing` feature instead would be wrong: the feature is
+/// unrelated to whether a subscriber exists, so it could send handler errors to
+/// `eprintln!` even when the user has a subscriber wired up, or silently drop them
+/// when they don't.
+///
+/// A handler returning `Err` is a genuine actor-side fault (unlike a dropped reply,
+/// which is the caller's decision), so `error!` is the appropriate level.
 #[doc(hidden)]
 pub fn __log_handler_error(
     actor: &dyn std::fmt::Display,
     message_type: &str,
     error: &dyn std::fmt::Display,
 ) {
-    #[cfg(feature = "tracing")]
     tracing::error!(
         actor = %actor,
         message_type = %message_type,
         "handler returned error: {}", error
-    );
-    #[cfg(not(feature = "tracing"))]
-    eprintln!(
-        "[ERROR] handler returned error: {} (actor: {}, message_type: {})",
-        error, actor, message_type
     );
 }
 
@@ -486,22 +487,29 @@ where
         async move {
             let result = Message::handle(actor, *self, &actor_ref).await;
             if let Some(channel) = reply_channel {
-                match channel.send(Box::new(result)) {
-                    Ok(_) => {
-                        #[cfg(feature = "tracing")]
-                        tracing::debug!(
-                            actor = %actor_ref.identity(),
-                            "Reply sent successfully"
-                        );
-                    }
-                    Err(_) => {
-                        tracing::error!(
-                            actor = %actor_ref.identity(),
-                            message_type = %std::any::type_name::<T>(),
-                            "Failed to send reply - receiver dropped"
-                        );
-                    }
+                // `oneshot::Sender::send` fails only when the receiver has been
+                // dropped, i.e. the caller stopped waiting for the reply before
+                // the handler finished (`ask_with_timeout` elapsed, the caller's
+                // future was cancelled, a hedged request lost the race, ...). That
+                // is a normal, caller-driven outcome — not an actor fault — and the
+                // caller side already records a dead letter. So both arms log at
+                // `debug`, never `error`, to keep routine timeouts/cancellations
+                // out of error-level monitoring.
+                let send_result = channel.send(Box::new(result));
+                #[cfg(feature = "tracing")]
+                match send_result {
+                    Ok(_) => tracing::debug!(
+                        actor = %actor_ref.identity(),
+                        "Reply sent successfully"
+                    ),
+                    Err(_) => tracing::debug!(
+                        actor = %actor_ref.identity(),
+                        message_type = %std::any::type_name::<T>(),
+                        "Reply not delivered - receiver no longer waiting"
+                    ),
                 }
+                #[cfg(not(feature = "tracing"))]
+                let _ = send_result;
             } else {
                 <A as Message<T>>::on_tell_result(&result, &actor_ref);
             }
