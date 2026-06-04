@@ -707,9 +707,9 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             guard = MessageProcessingGuard,
                         );
                     }
-                    msg @ (Some(MailboxMessage::StopGracefully(_)) | None) => {
+                    _msg @ (Some(MailboxMessage::StopGracefully(_)) | None) => {
                         #[cfg(feature = "tracing")]
-                        match &msg {
+                        match &_msg {
                             Some(_) => debug!("Actor termination: explicit graceful stop"),
                             None => debug!("Actor termination: all strong refs dropped"),
                         }
