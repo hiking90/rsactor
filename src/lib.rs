@@ -587,7 +587,7 @@ pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 /// 32 leaves comfortable headroom for fan-out patterns (e.g. one subscription
 /// per item in a small config list) without resorting to an unbounded channel.
 ///
-/// `subscribe_idle` uses `try_send` and returns [`Error::Send`] when the
+/// `subscribe_idle` uses `try_send` and returns [`Error::ChannelFull`] when the
 /// buffer is full, so the failure mode is a loud, actionable error rather
 /// than a silent hang — callers can batch or raise this constant if it is
 /// ever hit in practice.
