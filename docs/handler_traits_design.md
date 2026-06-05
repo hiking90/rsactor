@@ -154,7 +154,7 @@ if let Some(strong) = weak_handlers[0].upgrade() {
 }
 
 // After actor stops, upgrade returns None
-actor_a.stop().await?;
+actor_a.stop().await;
 assert!(weak_handlers[0].upgrade().is_none());
 ```
 
@@ -202,7 +202,7 @@ let controls: Vec<Box<dyn ActorControl>> = vec![
 // Check status and stop all
 for control in &controls {
     println!("Actor {} alive: {}", control.identity(), control.is_alive());
-    control.stop().await?;
+    control.stop().await;
 }
 ```
 

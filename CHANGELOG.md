@@ -7,10 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Target release: **0.16.0**. This release reworks the actor idle / periodic-work
+model, makes the lifecycle control APIs (`stop` / `kill`) infallible, and
+hardens error reporting. Most call sites are mechanical to update — the
+compiler points at each one. See
+[Migrating from 0.15.x to 0.16.0](#migrating-from-015x-to-0160).
+
 ### ⚠️ BREAKING CHANGES
 
-- **Idle-event channel is now opt-in.** `Actor::on_idle` /
-  `ActorRef::subscribe_idle` require the actor to be spawned with
+- **`Actor::on_run` is removed and replaced by a stream-based `Actor::on_idle`.**
+  The old `on_run` future was rebuilt inside the runtime's `select!` on every
+  iteration, so any timer or await state created inside it (e.g.
+  `tokio::time::sleep`) was dropped whenever a competing branch (message
+  arrival, priority signal) won — a 1-second sleep racing sub-second message
+  traffic would never fire. The new model is a subscription: register `Stream`s
+  of events via `ActorRef::subscribe_idle` and react to each yielded event in
+  `on_idle(&mut self, event, actor_weak)`. Stream state (interval schedules,
+  channel buffers) lives in the runtime and survives `select!` cancellation, so
+  periodic work fires reliably even under message pressure, and subscriptions
+  can be added dynamically from message handlers — not only `on_start`.
+  - New **required** associated type `Actor::IdleEvent: Send + 'static`.
+    `#[derive(Actor)]` auto-fills it as `()`; manual `Actor` impls must add it.
+  - `FailurePhase::OnRun` → `OnIdle`, `FailurePhase::OnRunThenOnStop` →
+    `OnIdleThenOnStop`.
+
+- **The idle-event channel is now opt-in.** `on_idle` / `subscribe_idle`
+  require the actor to be spawned with
   `spawn_with_options(args, SpawnOptions::new().with_idle())`. The channel is
   off by default so that actors which never use idle events no longer pay for
   an always-active branch in the runtime's `select!` loop on every message.
@@ -19,24 +41,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (4.57 → 5.90 M msg/s), `tell` latency −27% (238 ns → 174 ns). `ask` is
   unaffected (dominated by two context switches).
 
-  See [Migrating from 0.15.x to 0.16.0](#migrating-from-015x-to-0160) for what
-  to change.
+- **`ActorRef::stop()` and `ActorRef::kill()` no longer return `Result<()>`.**
+  Both are idempotent, so the "always `Ok`" return type was misleading.
+  `stop()` now returns `()` (still `async`) and `kill()` returns `()`. The same
+  applies to `ActorControl::stop` (now `BoxFuture<'_, ()>`) and
+  `ActorControl::kill` (now `()`). Drop any `?`, `.unwrap()`, `.expect(...)`,
+  or `let _ =` at call sites.
+
+- **`Error` is now `#[non_exhaustive]`** and gains an
+  `Error::ChannelFull { identity, channel }` variant. `subscribe_idle` emits it
+  on bounded-buffer saturation (previously an `Error::Send` distinguishable only
+  by substring). `Error::is_retryable()` now returns `true` for `ChannelFull` in
+  addition to `Timeout`. Exhaustive `match` on `Error` must add a wildcard arm.
+
+- **`ActorResult::Failed` gains a `secondary_error: Option<T::Error>` field.**
+  It is populated for `FailurePhase::OnIdleThenOnStop` with the `on_stop`
+  cleanup error, closing a gap where a dual failure (an `on_idle` error followed
+  by an `on_stop` error) could not be recovered programmatically. New accessors
+  `ActorResult::secondary_error()` and `into_secondary_error()`. Exhaustive
+  `ActorResult::Failed { .. }` patterns must add the new field or `..`.
+
+- **`error_count` is removed** from `MetricsCollector` (`error_count`,
+  `record_error`), `MetricsSnapshot` (`error_count`), and `ActorRef`
+  (`error_count()`) — no writer for it ever existed in the framework code.
 
 ### Added
 
+- `Actor::on_idle(&mut self, event, actor_weak)` and the required associated
+  type `Actor::IdleEvent` — react to events yielded by subscribed idle streams.
+- `ActorRef::subscribe_idle(stream)` — register a `Stream` of `IdleEvent`s for
+  the actor's idle loop. Synchronous and `try_send`-based so subscribing from
+  `on_start` cannot deadlock the runtime; can also be called from message
+  handlers to attach sources dynamically.
 - `SpawnOptions::with_idle()` — enables the idle-event channel for the spawned
   actor (mirrors `with_priority()`).
 - `ActorRef::has_idle_channel()` — reports whether the idle channel is enabled.
 - `Error::IdleChannelNotEnabled` — returned by `subscribe_idle` when the actor
-  was spawned without `with_idle()`. This is a configuration error and is
-  **not** recorded as a dead letter.
+  was spawned without `with_idle()`. A configuration error; **not** recorded as
+  a dead letter.
+- `Error::ChannelFull { identity, channel }` — bounded-buffer saturation
+  (currently emitted by `subscribe_idle`). Retryable.
+- `ActorResult::secondary_error()` / `ActorResult::into_secondary_error()` —
+  recover the `on_stop` cleanup error after an `OnIdleThenOnStop` failure.
+- `Identity` now derives `Hash`, so it can be used directly as a `HashMap` key.
 
 ### Changed
 
-- `ActorWeak::upgrade` / `ActorWeak::is_alive` now treat the idle-subscribe and
-  priority channels as **secondary**: only the mailbox and terminate channels
-  are required for an upgrade to succeed (previously idle-subscribe was also
-  required).
 - **Faster `blocking_*` APIs from `async fn` contexts.** When called on a
   multi-thread Tokio runtime (e.g. from an `async fn → sync fn → blocking_*`
   bridge or from `spawn_blocking`), `blocking_tell`, `blocking_ask`,
@@ -55,34 +105,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"tell"` when the slow path delegated through the async `tell`). The
   timeout case and the no-timeout case were already labeled
   `"blocking_tell"`; this aligns the remaining edge case.
+- `ActorWeak::upgrade` / `ActorWeak::is_alive` now treat the idle-subscribe and
+  priority channels as **secondary**: only the mailbox and terminate channels
+  are required for an upgrade to succeed (previously idle-subscribe was also
+  required).
+
+### Removed
+
+- `Actor::on_run` — replaced by `Actor::on_idle` (see breaking changes).
+- `MetricsCollector::error_count` / `MetricsCollector::record_error`,
+  `MetricsSnapshot::error_count`, and `ActorRef::error_count()`.
+
+### Fixed
+
+- A dropped `ask` reply (the caller timed out, was cancelled, or a hedged
+  request lost the race) was logged unconditionally at `error!`, even though it
+  is a normal caller-driven outcome already recorded as a dead letter on the
+  caller side. Downgraded to `debug!` so routine timeouts and cancellations no
+  longer flood error-level monitoring.
+- Handler errors were routed to `eprintln!` or `tracing::error!` depending on
+  the `tracing` *feature*, which only gates instrumentation spans and is
+  unrelated to whether a subscriber exists — so errors could hit stderr even
+  with a subscriber configured, or be dropped silently without one. They now
+  always route through `tracing::error!`, consistent with dead-letter logging.
 
 ### Migrating from 0.15.x to 0.16.0
 
-Things to check when upgrading:
+Most of these are mechanical; the compiler flags each affected call site.
 
-- **Do you implement `Actor::on_idle` or call `ActorRef::subscribe_idle`?**
-  - **No** → nothing to do. The idle channel is off by default and the rest of
-    the API is source-compatible.
-  - **Yes** → enable the idle channel at spawn time:
+- **`on_run` → `on_idle` (the main change).** Move periodic logic out of
+  `on_run` into a `Stream` subscribed from `on_start`, and react to its events
+  in `on_idle`:
 
-    ```rust
-    // Before (0.15.x): idle was always available
-    let (actor_ref, join) = spawn::<MyActor>(args);
+  ```rust
+  // Before (0.15.x): periodic work driven by on_run
+  impl Actor for MyActor {
+      type Args = ();
+      type Error = anyhow::Error;
 
-    // After (0.16.0): opt in explicitly
-    use rsactor::{spawn_with_options, SpawnOptions};
-    let (actor_ref, join) =
-        spawn_with_options::<MyActor>(args, SpawnOptions::new().with_idle());
-    ```
+      async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+          Ok(MyActor { interval: tokio::time::interval(Duration::from_secs(1)) })
+      }
 
-    `spawn_with_mailbox_capacity(args, n)` becomes
-    `spawn_with_options(args, SpawnOptions::new().mailbox_capacity(n).with_idle())`.
+      // Returned `bool` controlled whether on_run was called again.
+      async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
+          self.interval.tick().await;
+          self.do_periodic_work();
+          Ok(true)
+      }
+  }
 
-- **How failures surface:** without `with_idle()`, `subscribe_idle` returns
-  `Error::IdleChannelNotEnabled` (a configuration error, not a dead letter) and
-  `on_idle` is never driven. If you `?` the `subscribe_idle` result in
-  `on_start`, the actor fails to start with a clear error rather than silently
-  no-op'ing. Guard proactively with `ActorRef::has_idle_channel()` if needed.
+  // After (0.16.0): subscribe a stream, react in on_idle
+  use tokio_stream::{wrappers::IntervalStream, StreamExt};
+
+  struct Tick; // your IdleEvent type
+
+  impl Actor for MyActor {
+      type Args = ();
+      type Error = anyhow::Error;
+      type IdleEvent = Tick; // NEW: required associated type
+
+      async fn on_start(_: (), actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+          actor_ref.subscribe_idle(
+              IntervalStream::new(tokio::time::interval(Duration::from_secs(1)))
+                  .map(|_| Tick),
+          )?;
+          Ok(MyActor { /* ... */ })
+      }
+
+      async fn on_idle(&mut self, _: Tick, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
+          self.do_periodic_work();
+          Ok(())
+      }
+  }
+  ```
+
+  Actors that don't do periodic work need no `on_idle`; just set
+  `type IdleEvent = ();` (or use `#[derive(Actor)]`, which fills it in).
+
+- **Enable the idle channel at spawn time** if you use `on_idle` /
+  `subscribe_idle`:
+
+  ```rust
+  // Before (0.15.x): idle was always available
+  let (actor_ref, join) = spawn::<MyActor>(args);
+
+  // After (0.16.0): opt in explicitly
+  use rsactor::{spawn_with_options, SpawnOptions};
+  let (actor_ref, join) =
+      spawn_with_options::<MyActor>(args, SpawnOptions::new().with_idle());
+  ```
+
+  `spawn_with_mailbox_capacity(args, n)` becomes
+  `spawn_with_options(args, SpawnOptions::new().mailbox_capacity(n).with_idle())`.
+
+  Without `with_idle()`, `subscribe_idle` returns `Error::IdleChannelNotEnabled`
+  (a configuration error, not a dead letter) and `on_idle` is never driven.
+  Propagating that error with `?` in `on_start` makes the actor fail to start
+  with a clear message instead of silently no-op'ing; guard proactively with
+  `ActorRef::has_idle_channel()` if needed.
+
+- **`stop()` / `kill()` are now infallible.** Remove `?` / `.unwrap()` /
+  `.expect(...)` / `let _ =`:
+
+  ```rust
+  // Before
+  actor_ref.stop().await?;
+  actor_ref.kill()?;
+
+  // After
+  actor_ref.stop().await;
+  actor_ref.kill();
+  ```
+
+- **`Error` is `#[non_exhaustive]`.** Add a wildcard arm to any exhaustive
+  `match` on `Error`, and note `is_retryable()` now also covers `ChannelFull`.
+
+- **`ActorResult::Failed` has a new field.** Exhaustive patterns must account
+  for `secondary_error`:
+
+  ```rust
+  // Before
+  ActorResult::Failed { error, phase } => { /* ... */ }
+
+  // After — add `..`, or bind the new field
+  ActorResult::Failed { error, phase, .. } => { /* ... */ }
+  ```
+
+- **`FailurePhase` variants renamed:** `OnRun` → `OnIdle`,
+  `OnRunThenOnStop` → `OnIdleThenOnStop`.
+
+- **`error_count` removed.** It never had a writer, so it always read `0`;
+  remove any reads of `MetricsSnapshot::error_count` /
+  `ActorRef::error_count()`.
 
 - **`ActorWeak` upgrade semantics:** the idle-subscribe and priority channels
   are now *secondary* — `ActorWeak::upgrade` / `is_alive` succeed based on the

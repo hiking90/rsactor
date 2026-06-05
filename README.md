@@ -32,10 +32,10 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 ### Actor Lifecycle
 Three well-defined hooks for managing actor behavior:
 - `on_start`: Initializes the actor's state (required)
-- `on_run`: Runs concurrently with message processing, returns `bool` to control repeated invocation (optional)
+- `on_idle`: Reacts to events yielded by `Stream`s registered with `subscribe_idle`, running concurrently with message processing. **Opt-in** via `SpawnOptions::with_idle()` (optional; replaced `on_run` in 0.16.0)
 - `on_stop`: Cleanup before termination, with `killed` flag for graceful vs immediate (optional)
 
-Supports **graceful termination** (`stop()`) and **immediate termination** (`kill()`), with `ActorResult` enum representing lifecycle outcomes.
+Supports **graceful termination** (`stop()`) and **immediate termination** (`kill()`) — both infallible since 0.16.0 — with the `ActorResult` enum representing lifecycle outcomes.
 
 ### Type Safety
 - **Compile-Time Safety**: `ActorRef<T>` ensures message handling consistency and prevents type-related runtime errors
@@ -66,10 +66,10 @@ Unlike broader frameworks like Actix, rsActor specializes exclusively in **local
 
 ```toml
 [dependencies]
-rsactor = "0.15" # Check crates.io for the latest version
+rsactor = "0.16" # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.15", features = ["tracing"] }
+# rsactor = { version = "0.16", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let count = actor_ref.ask(GetCount).await?;
     println!("Count: {}", count); // Prints: Count: 1
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await; // infallible since 0.16.0
     Ok(())
 }
 ```
@@ -151,9 +151,10 @@ struct CounterActor {
 impl Actor for CounterActor {
     type Args = u32; // Define an args type for actor creation
     type Error = anyhow::Error;
+    type IdleEvent = (); // No idle events; `()` when on_idle is unused (since 0.16.0)
 
     // on_start is required and must be implemented.
-    // on_run and on_stop are optional and have default implementations.
+    // on_idle and on_stop are optional and have default implementations.
     async fn on_start(initial_count: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         info!("CounterActor (id: {}) started. Initial count: {}", actor_ref.identity(), initial_count);
         Ok(CounterActor {
@@ -187,7 +188,7 @@ async fn main() -> Result<()> {
     let new_count: u32 = actor_ref.ask(Increment(5)).await?;
     info!("Incremented count: {}", new_count);
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await; // infallible since 0.16.0
     info!("Stop signal sent to CounterActor (ID: {})", actor_ref.identity());
 
     let actor_result = join_handle.await?;
@@ -241,7 +242,7 @@ To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.15", features = ["tracing"] }
+rsactor = { version = "0.16", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -281,7 +282,7 @@ Actor B handler: actor_ref_a.ask(msg).await  ← waiting for A's reply
 
 ```toml
 [dependencies]
-rsactor = { version = "0.15", features = ["deadlock-detection"] }
+rsactor = { version = "0.16", features = ["deadlock-detection"] }
 ```
 
 Detected scenarios include self-ask, 2-actor cycles (A → B → A), and indirect chains (A → B → C → A). When a cycle is found, the framework panics with a descriptive message showing the full cycle path, because deadlocks are design errors that should be fixed during development.

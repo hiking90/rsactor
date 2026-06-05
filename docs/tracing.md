@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let count = actor_ref.ask(Increment).await?;
     println!("Count: {}", count);
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     Ok(())
 }
 ```

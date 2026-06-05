@@ -26,7 +26,7 @@ A3:
 *   **Features:** Compared to Kameo, `rsActor` provides:
     - Concrete `ActorRef<T>` with compile-time type safety
     - Optional tracing support for production observability
-    - Straightforward lifecycle management with `on_start`, `on_run`, and `on_stop` hooks
+    - Straightforward lifecycle management with `on_start`, optional `on_idle`, and `on_stop` hooks
     - Both `#[message_handlers]` macro and manual `Message<T>` trait implementation
 *   **Error Handling:** Uses `ActorResult` enum to indicate startup or runtime failures with detailed error information and failure phases.
 
@@ -50,7 +50,7 @@ A4: To define an actor, you can choose between two approaches:
     *   Defining an associated type `Args` (the type of arguments your `on_start` method will take).
     *   Defining an associated type `Error` (the error type your actor's lifecycle methods can return).
     *   Implementing an `on_start` method which initializes your actor from the arguments.
-    *   Implementing `on_run` and `on_stop` methods, which are optional and have default implementations.
+    *   Implementing `on_idle` and `on_stop` methods, which are optional and have default implementations.
 4.  Define the message types your actor will handle.
 5.  For each message type, implement the `Message<MessageType>` trait for your actor struct.
 6.  Use the `#[message_handlers]` macro to implement message handling, or the deprecated `impl_message_handler!` macro.
@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Current count: {}", current_count);
 
     // Gracefully stop the actor
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     Ok(())
 }
 ```
@@ -222,7 +222,7 @@ A8: To stop an actor, you can use:
 
 1.  **Graceful Stop**:
     ```rust
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     ```
     This sends a stop signal to the actor and waits for it to shut down cleanly. The actor will continue processing its current message, then call `on_stop` before terminating.
 
@@ -346,7 +346,7 @@ A11: The lifecycle of an actor in `rsActor` follows these stages:
 
 2.  **Running**:
     *   The actor processes messages from its mailbox.
-    *   The `on_run` idle handler is called when the message queue is empty.
+    *   The `on_idle` handler is called for each event yielded by a `Stream` registered via `ActorRef::subscribe_idle`, but only while the mailbox is empty. Messages always have priority over idle events.
     *   This continues until the actor is stopped or encounters an error.
 
 3.  **Termination**:
@@ -356,11 +356,11 @@ A11: The lifecycle of an actor in `rsActor` follows these stages:
 The actor's lifecycle methods are:
 
 *   `on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>`: Called when the actor is starting. Creates and returns the actor instance.
-*   `on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error>`: Called when the message queue is empty (idle handler).
-    *   If `on_run` returns `Ok(true)`, the actor continues calling `on_run` when idle.
-    *   If `on_run` returns `Ok(false)`, idle processing is disabled; the actor only processes messages.
-    *   If `on_run` returns `Err(e)`, the actor terminates due to a runtime error, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnRun`.
-*   `on_stop(&mut self, actor_weak: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error>`: Called when the actor is stopping (including after `on_run` errors). The `killed` parameter is `true` if the actor was killed, and `false` if it was stopped gracefully.
+*   `on_idle(&mut self, event: Self::IdleEvent, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error>`: Called for each event yielded by a `Stream` registered via `ActorRef::subscribe_idle`, but only while the mailbox is empty.
+    *   Requires the associated type `Actor::IdleEvent` (set to `()` when there is no idle work; `#[derive(Actor)]` fills this in automatically).
+    *   Requires the idle channel to be enabled at spawn time via `SpawnOptions::new().with_idle()`. Without it, `subscribe_idle` returns `Error::IdleChannelNotEnabled` and `on_idle` is never called. Check at runtime with `actor_ref.has_idle_channel()`.
+    *   If `on_idle` returns `Err(e)`, the actor terminates due to a runtime error, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnIdle`.
+*   `on_stop(&mut self, actor_weak: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error>`: Called when the actor is stopping (including after `on_idle` errors). The `killed` parameter is `true` if the actor was killed, and `false` if it was stopped gracefully.
 
 **Q12: What is the `ActorResult` enum?**
 
@@ -373,16 +373,16 @@ A12: The `ActorResult` enum represents the outcome of an actor's lifecycle when 
 
 2.  **`ActorResult::Failed`**:
     *   Indicates that the actor failed during its lifecycle.
-    *   Contains the optional actor state (`actor: Option<A>`), the error that caused the failure (`error: E`), the phase in which the failure occurred (`phase: FailurePhase`), and a boolean `killed` indicating whether the actor was killed.
-    *   The `FailurePhase` can be `OnStart`, `OnRun`, or `OnStop`.
+    *   Contains the optional actor state (`actor: Option<A>`), the error that caused the failure (`error: E`), an optional secondary error (`secondary_error: Option<E>`, the `on_stop` cleanup error when the phase is `OnIdleThenOnStop`), the phase in which the failure occurred (`phase: FailurePhase`), and a boolean `killed` indicating whether the actor was killed.
+    *   The `FailurePhase` can be `OnStart`, `OnIdle`, `OnStop`, or `OnIdleThenOnStop`.
 
 **Q13: How do I handle errors in actors?**
 
 A13: Error handling in `rsActor` happens at several levels:
 
-*   **Lifecycle - `on_start`:** If `on_start` returns `Err(e)`, the actor never starts, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`. Since the actor wasn't created, the `actor` field is `None`.
-*   **Lifecycle - `on_run`:** If `on_run` returns `Err(e)`, the actor will terminate after calling `on_stop` for cleanup, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: Some(actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`. The `actor` field contains the actor's state.
-*   **Panics:** If a message handler or `on_run` panics, the Tokio task hosting the actor will terminate. Awaiting the `JoinHandle` will then result in an `Err` (typically a `tokio::task::JoinError` indicating a panic). It's generally recommended to handle errors gracefully within your actor logic and return `Result` types from `on_start` and `on_run`, and use `Result` as reply types for messages where appropriate, rather than relying on panics.
+*   **Lifecycle - `on_start`:** If `on_start` returns `Err(e)`, the actor never starts, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: None, error: e, secondary_error: None, phase: FailurePhase::OnStart, killed: false }`. Since the actor wasn't created, the `actor` field is `None`.
+*   **Lifecycle - `on_idle`:** If `on_idle` returns `Err(e)`, the actor will terminate after calling `on_stop` for cleanup, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: Some(actor_state), error: e, secondary_error: None, phase: FailurePhase::OnIdle, killed: false }`. The `actor` field contains the actor's state.
+*   **Panics:** If a message handler or `on_idle` panics, the Tokio task hosting the actor will terminate. Awaiting the `JoinHandle` will then result in an `Err` (typically a `tokio::task::JoinError` indicating a panic). It's generally recommended to handle errors gracefully within your actor logic and return `Result` types from `on_start` and `on_idle`, and use `Result` as reply types for messages where appropriate, rather than relying on panics.
 *   **Message Handling:** For message handling, the `Message<T>::handle` method can return any type as its `Reply`, including a `Result` type. If your message handler might fail, it's a good practice to use a `Result` type as the `Reply` type.
 *   **Sending Messages:** The methods for sending messages (`ask`, `tell`, etc.) return `Result<R, rsactor::Error>`, where `R` is the reply type of the message. These methods can fail if the actor has stopped, the mailbox is full, or a timeout occurs.
 
@@ -512,7 +512,7 @@ A15: Testing actors can be done in several ways:
         let count = actor_ref.ask(GetCount).await.unwrap();
         assert_eq!(count, 5);
 
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
     }
     ```
 
@@ -530,7 +530,7 @@ A15: Testing actors can be done in several ways:
         assert_eq!(count, 10);
 
         // Stop actor gracefully - on_stop is called
-        actor_ref.stop().await.unwrap();
+        actor_ref.stop().await;
 
         // Await handle to get ActorResult
         let result = handle.await.unwrap();
@@ -918,109 +918,126 @@ With the generic syntax, you specify the generic constraints in square brackets,
 
 **Note:** The `#[message_handlers]` macro approach is recommended over `impl_message_handler!` as it provides better ergonomics and reduces boilerplate.
 
-**Q22: How can I effectively use the `on_run` method in my actors?**
+**Q22: How can I effectively use the `on_idle` method in my actors?**
 
-A22: The `on_run` method is an idle handler in the `rsActor` framework, called when the actor's message queue is empty. It returns `Result<bool, Error>` to control idle processing:
-*   `Ok(true)` - Continue calling `on_run` when idle
-*   `Ok(false)` - Disable idle processing; actor only processes messages
-*   `Err(e)` - Terminate with an error
+A22: The `on_idle` method is an idle handler in the `rsActor` framework. Instead of being polled in a loop, it is driven by `Stream`s you register with `ActorRef::subscribe_idle`. The runtime drives those streams and calls `on_idle` once for each event they yield, but only while the mailbox is empty — messages always have priority over idle events, ensuring the actor stays responsive. The handler returns `Result<(), Error>`; returning `Err(e)` terminates the actor with `phase: FailurePhase::OnIdle`.
+
+To use `on_idle` you must:
+*   Declare the associated type `Actor::IdleEvent`, the type of event the streams yield. Set it to `()` when there is no idle work; `#[derive(Actor)]` fills it in as `()` automatically.
+*   Enable the idle channel at spawn time, since it is **opt-in**: spawn with `spawn_with_options(args, SpawnOptions::new().with_idle())`. Without `with_idle()`, `subscribe_idle` returns `Error::IdleChannelNotEnabled` and `on_idle` is never called. Check at runtime with `actor_ref.has_idle_channel()`.
+*   Register one or more streams with `actor_ref.subscribe_idle(stream)`, typically in `on_start` (it is also valid from message handlers). Map each stream's items to your `IdleEvent` type.
 
 Here's how to use it effectively:
 
-*   **Idle Processing:** The `on_run` method is called when there are no messages to process. Messages always have priority over idle processing, ensuring the actor stays responsive.
-
-*   **Periodic Tasks:** You can implement periodic tasks by using `tokio::time` utilities within the `on_run`. For example:
+*   **Periodic Tasks:** Subscribe interval streams that yield tick events. Each tick is delivered to `on_idle` only while the mailbox is empty:
 
     ```rust
+    use futures::stream::StreamExt;
+    use tokio_stream::wrappers::IntervalStream;
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, Copy)]
+    enum Tick {
+        Fast,
+        Slow,
+    }
+
     struct MyActor {
         // ... other fields ...
-        fast_interval: tokio::time::Interval,
-        slow_interval: tokio::time::Interval,
     }
 
-    // Initialize intervals in on_start
-    async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(MyActor {
-            // ... initialize other fields ...
-            fast_interval: tokio::time::interval(std::time::Duration::from_millis(500)),
-            slow_interval: tokio::time::interval(std::time::Duration::from_secs(5)),
-        })
-    }
+    impl Actor for MyActor {
+        type Args = ();
+        type Error = anyhow::Error;
+        type IdleEvent = Tick;
 
-    // Idle handler - called when message queue is empty
-    async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        tokio::select! {
-            _ = self.fast_interval.tick() => {
-                // Handle high-frequency tasks (every 500ms)
-                self.process_high_frequency_work();
-            }
-            _ = self.slow_interval.tick() => {
-                // Handle low-frequency tasks (every 5s)
-                self.process_low_frequency_work();
-            }
+        // Subscribe periodic streams in on_start
+        async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            actor_ref.subscribe_idle(
+                IntervalStream::new(tokio::time::interval(Duration::from_millis(500)))
+                    .map(|_| Tick::Fast),
+            )?;
+            actor_ref.subscribe_idle(
+                IntervalStream::new(tokio::time::interval(Duration::from_secs(5)))
+                    .map(|_| Tick::Slow),
+            )?;
+            Ok(MyActor { /* ... initialize fields ... */ })
         }
-        Ok(true) // Continue idle processing
+
+        // Idle handler - called for each yielded event while the mailbox is empty
+        async fn on_idle(&mut self, event: Tick, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+            match event {
+                Tick::Fast => self.process_high_frequency_work(), // every 500ms
+                Tick::Slow => self.process_low_frequency_work(),  // every 5s
+            }
+            Ok(())
+        }
     }
     ```
 
-*   **Consuming Events:** The `on_run` method is ideal for processing events from channels or streams:
+*   **Consuming Events:** Subscribe a stream wrapping a channel or other event source and handle each item in `on_idle`. Do not loop inside a single `on_idle` call — return after handling one event and the runtime will call you again for the next:
 
     ```rust
+    use futures::stream::StreamExt;
+    use tokio_stream::wrappers::ReceiverStream;
+
     struct EventProcessorActor {
-        events_rx: mpsc::Receiver<Event>,
+        // ... other fields ...
     }
 
     impl Actor for EventProcessorActor {
-        // ...
+        type Args = mpsc::Receiver<Event>;
+        type Error = anyhow::Error;
+        type IdleEvent = Event;
 
-        async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-            tokio::select! {
-                Some(event) = self.events_rx.recv() => {
-                    self.process_event(event)?;
-                    Ok(true) // Continue processing
-                }
-                else => {
-                    // Channel closed, stop idle processing
-                    Ok(false)
-                }
-            }
+        async fn on_start(events_rx: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            actor_ref.subscribe_idle(ReceiverStream::new(events_rx))?;
+            Ok(EventProcessorActor { /* ... */ })
+        }
+
+        async fn on_idle(&mut self, event: Event, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+            self.process_event(event)?;
+            Ok(())
         }
     }
     ```
 
-*   **Background Processing:** Use `on_run` for background processing tasks:
+*   **Background Processing:** Map a stream to a unit event and drain a work queue one item per call. Returning `Ok(())` lets the runtime deliver the next event:
 
     ```rust
-    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        // Process one batch of work items
+    async fn on_idle(&mut self, _event: (), _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        // Process one batch of work items per call
         if let Some(work_item) = self.queue.pop() {
             self.process_work_item(work_item)?;
-            Ok(true) // Continue processing
-        } else {
-            // No work to do, disable idle processing until new work arrives via messages
-            Ok(false)
         }
+        Ok(())
     }
     ```
 
-*   **Combine multiple sources with `tokio::select!`:** You can wait on multiple event sources concurrently:
+*   **Combine multiple sources:** Subscribe several streams, each mapped to a variant of a shared `IdleEvent` enum. The runtime merges them and dispatches each yielded event to `on_idle`:
 
     ```rust
-    async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        tokio::select! {
-            Some(msg) = self.command_rx.recv() => {
-                self.handle_command(msg)?;
-                Ok(true) // Continue
-            }
-            _ = self.health_check_interval.tick() => {
-                self.perform_health_check()?;
-                Ok(true) // Continue
-            }
-            else => {
-                // All channels are closed, disable idle processing
-                Ok(false)
-            }
+    #[derive(Debug)]
+    enum IdleEvent {
+        Command(Command),
+        HealthCheck,
+    }
+
+    async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        actor_ref.subscribe_idle(command_stream.map(IdleEvent::Command))?;
+        actor_ref.subscribe_idle(
+            IntervalStream::new(tokio::time::interval(Duration::from_secs(10)))
+                .map(|_| IdleEvent::HealthCheck),
+        )?;
+        Ok(Self { /* ... */ })
+    }
+
+    async fn on_idle(&mut self, event: IdleEvent, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        match event {
+            IdleEvent::Command(cmd) => self.handle_command(cmd)?,
+            IdleEvent::HealthCheck => self.perform_health_check()?,
         }
+        Ok(())
     }
     ```
 
@@ -1146,7 +1163,7 @@ A24: rsActor provides a comprehensive type safety system for actor messaging thr
 
      // Stop all actors gracefully
      for control in &controls {
-         control.stop().await?;
+         control.stop().await;
      }
 
      // Or store handlers for specific message types

@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let count = actor_ref.ask(GetCount).await?;
     println!("Count: {}", count); // Prints: Count: 1
 
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     Ok(())
 }
 ```
@@ -68,8 +68,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 For actors that need complex initialization logic:
 
 ```rust
-use rsactor::{Actor, ActorRef, ActorWeak, message_handlers, spawn};
+use rsactor::{Actor, ActorRef, ActorWeak, SpawnOptions, message_handlers, spawn_with_options};
 use anyhow::Result;
+use futures::stream::StreamExt;
+use std::time::Duration;
+use tokio_stream::wrappers::IntervalStream;
+
+// Idle event delivered to on_idle on every tick
+#[derive(Debug, Clone, Copy)]
+struct Heartbeat;
 
 // Define actor struct
 struct CounterActor {
@@ -81,6 +88,8 @@ struct CounterActor {
 impl Actor for CounterActor {
     type Args = (u32, String); // Tuple of initial count and name
     type Error = anyhow::Error;
+    // IdleEvent is the type yielded by streams registered via subscribe_idle
+    type IdleEvent = Heartbeat;
 
     // on_start is required - this is where the actor instance is created
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
@@ -88,18 +97,23 @@ impl Actor for CounterActor {
         println!("CounterActor '{}' (ID: {}) starting with count: {}",
                  name, actor_ref.identity(), initial_count);
 
+        // Register a stream of idle events; the runtime drives it and calls
+        // on_idle for each yielded `Heartbeat`. Requires `with_idle()` at spawn.
+        actor_ref.subscribe_idle(
+            IntervalStream::new(tokio::time::interval(Duration::from_secs(1)))
+                .map(|_| Heartbeat),
+        )?;
+
         Ok(CounterActor {
             count: initial_count,
             name,
         })
     }
 
-    // on_run is optional - idle handler called when message queue is empty
-    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        // Called when there are no messages to process
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    // on_idle is optional - called for each event yielded by a subscribed idle stream
+    async fn on_idle(&mut self, _event: Heartbeat, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
         println!("Actor '{}' heartbeat - current count: {}", self.name, self.count);
-        Ok(true) // Return true to continue idle processing, false to disable it
+        Ok(())
     }
 
     // on_stop is optional - called when the actor is terminating
@@ -133,8 +147,10 @@ impl CounterActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Spawn actor with initialization arguments
-    let (actor_ref, join_handle) = spawn::<CounterActor>((10, "MyCounter".to_string()));
+    // Spawn actor with initialization arguments. `with_idle()` enables the idle
+    // channel so subscribe_idle streams are driven and on_idle fires.
+    let (actor_ref, join_handle) =
+        spawn_with_options::<CounterActor>((10, "MyCounter".to_string()), SpawnOptions::new().with_idle());
 
     // Allow actor to run and emit heartbeats
     tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
@@ -147,7 +163,7 @@ async fn main() -> Result<()> {
     println!("Current count: {}", current_count);
 
     // Gracefully stop the actor
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
 
     // Wait for actor to complete and check the result
     match join_handle.await? {
@@ -169,7 +185,7 @@ async fn main() -> Result<()> {
 ### Actor Lifecycle
 
 1. **`on_start`** (required): Creates the actor instance from initialization arguments
-2. **`on_run`** (optional): Idle handler called when message queue is empty, returns `bool` to control continuation
+2. **`on_idle`** (optional): Idle handler driven by `Stream`s registered via `ActorRef::subscribe_idle`; called once per yielded event and returns `Result<(), Error>`. Opt-in by spawning with `SpawnOptions::new().with_idle()`
 3. **`on_stop`** (optional): Cleanup logic when the actor terminates
 
 ### Message Passing

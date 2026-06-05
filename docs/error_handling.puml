@@ -6,7 +6,7 @@ participant "ActorRef<T>" as ActorRef
 participant "JoinHandle" as JoinHandle
 participant "Actor" as Actor
 participant "on_start()" as OnStart
-participant "on_run()" as OnRun
+participant "on_idle()" as OnIdle
 participant "on_stop()" as OnStop
 
 == Scenario 1: Initialization Failure ==
@@ -33,16 +33,16 @@ activate JoinHandle
 JoinHandle --> Client: ActorResult::Failed { phase: OnStart, actor: None, ... }
 deactivate JoinHandle
 
-== Scenario 2: Runtime Failure in on_run ==
-note over Actor: Actor is running normally (on_run is idle handler)
-Actor -> OnRun: on_run() called when message queue empty
-activate OnRun
-OnRun -> OnRun: Runtime error occurs (e.g., resource exhaustion)
-OnRun --> Actor: Err(RuntimeError)
-deactivate OnRun
+== Scenario 2: Runtime Failure in on_idle ==
+note over Actor: Actor is running normally (on_idle is idle handler)
+Actor -> OnIdle: on_idle(event) called when message queue empty (subscribed stream yields)
+activate OnIdle
+OnIdle -> OnIdle: Runtime error occurs (e.g., resource exhaustion)
+OnIdle --> Actor: Err(RuntimeError)
+deactivate OnIdle
 
 note over Actor, OnStop
-  When on_run returns an error:
+  When on_idle returns an error:
   - on_stop IS called for cleanup
   - on_stop errors are logged but don't change the result
   - The actor terminates with ActorResult::Failed
@@ -53,12 +53,12 @@ activate OnStop
 OnStop --> Actor: Returns (logged if error)
 deactivate OnStop
 
-Actor --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed }
+Actor --> JoinHandle: ActorResult::Failed { phase: OnIdle, actor: Some(actor), error, killed, .. }
 
 note right of JoinHandle
   Runtime Failure:
   - Actor instance available for inspection
-  - phase is FailurePhase::OnRun
+  - phase is FailurePhase::OnIdle
   - on_stop WAS called for cleanup
   - killed reflects termination state at error time
 end note
@@ -101,7 +101,7 @@ loop Error Recovery Pattern
         alt FailurePhase::OnStart
             Client -> Client: Fix initialization parameters
             Client -> ActorRef: spawn(corrected_args) [retry with fixes]
-        else FailurePhase::OnRun
+        else FailurePhase::OnIdle
             Client -> Client: Handle runtime state if available
             note right of Client
               Runtime failures provide actor state:
@@ -168,15 +168,16 @@ note over Client, OnStop
      - Use ? operator for early returns
      - Provide meaningful error messages
 
-  2. Runtime (on_run - idle handler):
+  2. Runtime (on_idle - idle handler):
+     - Driven by subscribe_idle() streams; opt-in via with_idle()
      - Called when message queue is empty
-     - Return Ok(true) to continue, Ok(false) to disable
+     - Return Ok(()) when handled; keep running
      - Handle recoverable errors gracefully
      - Use timeouts for external operations
-     - on_stop IS called for cleanup if on_run fails
+     - on_stop IS called for cleanup if on_idle fails
 
   3. Cleanup (on_stop):
-     - Called for stop/kill, ActorRef drop, or on_run error
+     - Called for stop/kill, ActorRef drop, or on_idle error
      - Use Drop trait for additional guaranteed cleanup
      - Differentiate between graceful and forced termination
 

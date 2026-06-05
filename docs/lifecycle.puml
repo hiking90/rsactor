@@ -6,7 +6,7 @@ participant "ActorRef<T>" as ActorRef
 participant "JoinHandle" as JoinHandle
 participant "run_actor_lifecycle()" as Lifecycle
 participant "Actor::on_start()" as OnStart
-participant "Actor::on_run()" as OnRun
+participant "Actor::on_idle()" as OnIdle
 participant "Actor::on_stop()" as OnStop
 
 == Initialization Phase ==
@@ -47,27 +47,23 @@ loop Main Actor Loop
     else Message Received
         Lifecycle -> Lifecycle: Process incoming message
         note right of Lifecycle: Handle message via MessageHandler trait
-    else on_run Execution (Idle Handler)
-        Lifecycle -> OnRun: Call actor.on_run(&actor_weak)
-        activate OnRun
+    else on_idle Execution (Idle Handler)
+        Lifecycle -> OnIdle: Call actor.on_idle(event, &actor_weak)
+        activate OnIdle
 
-        alt on_run Continue
-            OnRun --> Lifecycle: Ok(true)
-            deactivate OnRun
-            note right of Lifecycle: Continue calling on_run when idle
-        else on_run Disable
-            OnRun --> Lifecycle: Ok(false)
-            deactivate OnRun
-            note right of Lifecycle: Disable idle processing, only handle messages
-        else on_run Failure
-            OnRun --> Lifecycle: Err(error)
-            deactivate OnRun
+        alt on_idle Handled
+            OnIdle --> Lifecycle: Ok(())
+            deactivate OnIdle
+            note right of Lifecycle: Idle event handled; keep running
+        else on_idle Failure
+            OnIdle --> Lifecycle: Err(error)
+            deactivate OnIdle
             note right of Lifecycle
               Actor terminates due to runtime error.
               on_stop IS called for cleanup.
             end note
             Lifecycle -> OnStop: Call on_stop(&actor_weak, killed)
-            Lifecycle --> JoinHandle: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed }
+            Lifecycle --> JoinHandle: ActorResult::Failed { phase: OnIdle, actor: Some(actor), error, killed, .. }
         end
     end
 end
@@ -77,7 +73,7 @@ note over Lifecycle, OnStop
   on_stop is called for:
   - explicit stop/kill requests
   - when all ActorRef instances are dropped
-  - when on_run returns an error (for cleanup)
+  - when on_idle returns an error (for cleanup)
 end note
 
 activate OnStop
@@ -126,13 +122,13 @@ note over OnStart
   ✅ Receives ActorRef for self-reference
 end note
 
-note over OnRun
-  on_run() - Idle Handler:
-  ✅ Optional (default returns Ok(false))
+note over OnIdle
+  on_idle() - Idle Handler:
+  ✅ Optional; opt-in via SpawnOptions::with_idle()
+  ✅ Driven by subscribe_idle() streams
   ✅ Called when message queue is empty
-  ✅ Messages have priority over on_run
-  ✅ Ok(true) continues idle processing
-  ✅ Ok(false) disables idle processing
+  ✅ Messages have priority over on_idle
+  ✅ Ok(()) handled; keep running
   ✅ Err() terminates actor (on_stop called)
   ✅ Receives ActorWeak to avoid cycles
 end note

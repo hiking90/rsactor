@@ -89,50 +89,62 @@ While the actor model is well-known for its applicability in distributed systems
 
 Libraries like `rsactor` (see `https://github.com/hiking90/rsactor`) provide simple and efficient in-process actor model implementations for Rust. They simplify the definition of actors, their state, message types, and message handling logic, allowing developers to focus on the application's business logic rather than the boilerplate of actor machinery. For example, you might define an actor that manages a specific resource or performs a particular computation, and other parts of your application would interact with it solely by sending it messages and, where appropriate, receiving responses via messages.
 
-Here's a conceptual example using `rsactor`, demonstrating an actor with an `on_run` idle handler processing multiple tick sources:
+Here's a conceptual example using `rsactor`, demonstrating an actor with an `on_idle` handler that reacts to multiple tick sources subscribed via `subscribe_idle`:
 
 ```rust
-use rsactor::{Actor, ActorRef, ActorWeak, message_handlers, spawn};
+use rsactor::{Actor, ActorRef, ActorWeak, message_handlers, spawn_with_options, SpawnOptions};
 use anyhow::Result;
+use futures::stream::StreamExt;
 use tokio::time::{interval, Duration};
+use tokio_stream::wrappers::IntervalStream;
+
+// Idle event type yielded by the subscribed streams.
+#[derive(Debug, Clone, Copy)]
+enum Tick {
+    FastTick, // emitted every 300ms
+    SlowTick, // emitted every 1 second
+}
 
 // Define actor struct
 struct CounterActor {
-    count: u32,                        // Stores the counter value
-    tick_300ms: tokio::time::Interval, // 300ms interval timer
-    tick_1s: tokio::time::Interval,    // 1 second interval timer
+    count: u32, // Stores the counter value
 }
 
 // Implement Actor trait for complex initialization
 impl Actor for CounterActor {
     type Args = (); // No arguments needed for this actor
     type Error = anyhow::Error; // Define the error type for actor operations
+    type IdleEvent = Tick; // Events delivered to on_idle
 
-    // Initialize the actor with intervals
-    async fn on_start(_args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(CounterActor {
-            count: 0,
-            tick_300ms: interval(Duration::from_millis(300)),
-            tick_1s: interval(Duration::from_secs(1)),
-        })
+    // Initialize the actor and subscribe its idle streams.
+    async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        // Register two periodic streams; the runtime drives them and calls
+        // on_idle for each yielded event while the mailbox is empty.
+        actor_ref.subscribe_idle(
+            IntervalStream::new(interval(Duration::from_millis(300))).map(|_| Tick::FastTick),
+        )?;
+        actor_ref.subscribe_idle(
+            IntervalStream::new(interval(Duration::from_secs(1))).map(|_| Tick::SlowTick),
+        )?;
+
+        Ok(CounterActor { count: 0 })
     }
 
-    // Idle handler called when the message queue is empty.
-    // This demonstrates handling two independent, periodic events using tokio::select!.
-    async fn on_run(&mut self, _actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        // Use the tokio::select! macro to handle the first completed asynchronous operation among several.
-        tokio::select! {
-            // Executes when the 300ms interval timer ticks.
-            _ = self.tick_300ms.tick() => {
+    // Idle handler called for each event from a subscribed stream, but only
+    // while the message queue is empty.
+    // This demonstrates handling two independent, periodic event sources.
+    async fn on_idle(&mut self, event: Tick, _actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        match event {
+            // Triggered by the 300ms stream.
+            Tick::FastTick => {
                 self.count += 1; // Increment the counter value by 1.
             }
-            // Executes when the 1s interval timer ticks. (Currently no specific action)
-            _ = self.tick_1s.tick() => {
+            // Triggered by the 1s stream. (Currently no specific action)
+            Tick::SlowTick => {
                 // Could implement different behavior here
             }
         }
-        // Return Ok(true) to continue idle processing, Ok(false) to disable it
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -157,10 +169,12 @@ impl CounterActor {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Spawn the CounterActor and get an ActorRef and JoinHandle.
-    let (actor_ref, join_handle) = spawn::<CounterActor>(());
+    // Spawn the CounterActor with the idle channel enabled (off by default)
+    // and get an ActorRef and JoinHandle.
+    let (actor_ref, join_handle) =
+        spawn_with_options::<CounterActor>((), SpawnOptions::new().with_idle());
 
-    // Allow some time for the actor's on_run to emit a few ticks.
+    // Allow some time for the actor's on_idle handler to process a few ticks.
     tokio::time::sleep(Duration::from_millis(1200)).await; // Wait for ~4 of 300ms ticks and ~1 of 1s ticks
 
     // Send an IncrementMsg to the actor to increment the counter by 5 and await the reply.
@@ -179,7 +193,7 @@ async fn main() -> Result<()> {
     println!("Final count: {}", final_count);
 
     // Gracefully stop the actor.
-    actor_ref.stop().await?; // Gracefully stop the actor
+    actor_ref.stop().await; // Gracefully stop the actor
 
     // Await the actor's termination using the join_handle and print the result.
     let actor_result = join_handle.await?;
@@ -194,7 +208,7 @@ async fn main() -> Result<()> {
                 killed
             );
         }
-        rsactor::ActorResult::Failed { actor, error, phase, killed } => {
+        rsactor::ActorResult::Failed { actor, error, phase, killed, .. } => {
             if let Some(actor_state) = actor {
                 println!(
                     "Main: CounterActor (ID: {}) task failed during phase {:?}. Final state count: {}. Error: {:?}. Killed: {}",
@@ -219,25 +233,26 @@ async fn main() -> Result<()> {
 }
 ```
 In this example:
-- `CounterActor` maintains a `count` and two interval timers as struct fields.
+- `CounterActor` maintains a `count` as its only struct field.
 - The `Actor` trait is implemented:
-    - `on_start` initializes the actor with its state and interval timers.
-    - `on_run` is the idle handler, called when the message queue is empty. It uses `tokio::select!` to wait on two `tokio::time::interval` ticks (300ms and 1 second).
-        - The 300ms tick increments the actor's internal `count`.
-        - The 1s tick performs no specific action in this example.
-        - Return `Ok(true)` to continue idle processing, `Ok(false)` to disable it.
+    - The associated `type IdleEvent = Tick` declares the event type delivered to the idle handler.
+    - `on_start` initializes the actor's state and subscribes two periodic streams via `actor_ref.subscribe_idle(...)`, each mapping its ticks to a `Tick` variant (300ms to `FastTick`, 1 second to `SlowTick`).
+    - `on_idle` is the idle handler, called once per event yielded by a subscribed stream, but only while the message queue is empty. It uses a `match` on the `Tick` event to dispatch the two sources.
+        - The `FastTick` event increments the actor's internal `count`.
+        - The `SlowTick` event performs no specific action in this example.
+        - It returns `Ok(())` on success; returning an `Err` would terminate the actor.
 - Message types `IncrementMsg(u32)` and `GetCountMsg` are defined to interact with the counter.
 - The `#[message_handlers]` macro with `#[handler]` attributes automatically generates `Message` trait implementations and `MessageHandler` trait implementation for these messages.
 - The `main` function:
-    - Spawns the `CounterActor`.
-    - Waits briefly to allow the `on_run` idle handler to execute a few times.
+    - Spawns the `CounterActor` with `spawn_with_options`, enabling the idle channel via `SpawnOptions::new().with_idle()` (it is off by default, and `subscribe_idle`/`on_idle` only function when it is enabled).
+    - Waits briefly to allow the `on_idle` handler to process a few ticks.
     - Sends `IncrementMsg` and `GetCountMsg` to interact with the actor, logging replies.
     - Waits again for more ticks.
     - Sends `GetCountMsg` again to observe changes from both messages and internal ticks.
     - Gracefully stops the actor using `actor_ref.stop()`.
     - Awaits the actor's `join_handle` to ensure clean termination and logs the outcome.
 
-This revised example aligns with the `rsactor` patterns shown in its `README.md` and `lib.rs` documentation, particularly showcasing how the `on_run` method serves as an idle handler that processes background tasks when the message queue is empty, a key feature of the in-process actor model.
+This revised example aligns with the `rsactor` patterns shown in its `README.md` and `lib.rs` documentation, particularly showcasing how the `on_idle` handler, fed by streams registered through `subscribe_idle`, processes background tasks when the message queue is empty, a key feature of the in-process actor model.
 
 ## The Premier Choice for Mutex-Light Concurrency in Rust
 

@@ -32,7 +32,7 @@ Actor A handler: actor_ref_a.ask(msg).await  ← waiting for own reply
                                                 but own loop is paused = deadlock
 ```
 
-This problem applies to all lifecycle hooks (`on_start`, message handlers, `on_run`, `on_stop`) — any `ask` call from within an actor context can participate in a cycle.
+This problem applies to all lifecycle hooks (`on_start`, message handlers, `on_idle`, `on_stop`) — any `ask` call from within an actor context can participate in a cycle.
 
 ## How It Works
 

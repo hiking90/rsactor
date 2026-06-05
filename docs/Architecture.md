@@ -33,10 +33,10 @@ This section describes the sequence of events when a user defines an actor and s
     b.  If `on_start()` returns `Ok(actor_instance)`, this instance is stored. The runtime then enters the main processing loop using `tokio::select!` to handle:
         - Messages from the mailbox (highest priority after termination)
         - Termination signals (with bias priority)
-        - The actor's `on_run()` idle handler (lowest priority, only when message queue is empty)
-    c.  The actor's `on_run()` method serves as an idle handler, called when the message queue is empty. It returns `Ok(true)` to continue idle processing, `Ok(false)` to disable it, or `Err(e)` to terminate with an error.
-    d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` function will return `ActorResult::Failed { actor: None, error: e, phase: FailurePhase::OnStart, killed: false }`.
-    e.  When the actor terminates (due to `on_run()` errors, explicit stop/kill, or all references being dropped), the actor's `on_stop()` method is called for cleanup before the `JoinHandle` resolves to an appropriate `ActorResult`.
+        - Idle events from subscribed streams (lowest priority, only present when the idle channel is enabled and only polled when the message queue is empty)
+    c.  The idle channel is opt-in: enable it with `SpawnOptions::with_idle()` and spawn via `spawn_with_options`. When enabled, the actor registers `Stream`s of events (typically in `on_start`) via `ActorRef::subscribe_idle(stream)`. The runtime owns these streams and, whenever the mailbox is empty, calls `on_idle(&mut self, event, actor_weak)` for each yielded event. `on_idle` returns `Result<(), Error>`: `Ok(())` continues, while `Err(e)` terminates the actor. The subscribed stream itself controls cadence and termination — keeping its timer/await state alive in the runtime rather than rebuilding it each loop iteration. Without `with_idle()`, the idle arm is absent, `subscribe_idle` returns `Error::IdleChannelNotEnabled`, and `on_idle` never fires.
+    d.  If `on_start()` fails (returns `Err(e)`), the actor fails to start. The `run_actor_lifecycle` function will return `ActorResult::Failed { actor: None, error: e, secondary_error: None, phase: FailurePhase::OnStart, killed: false }`.
+    e.  When the actor terminates (due to `on_idle()` errors, explicit stop/kill, or all references being dropped), the actor's `on_stop()` method is called for cleanup before the `JoinHandle` resolves to an appropriate `ActorResult`.
 
 ## 2. Message Passing (tell/ask)
 
@@ -84,7 +84,7 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
 *   **`ControlSignal::Terminate`:** A control signal for immediate termination, sent via a dedicated, prioritized channel.
 *   **Mailbox Channel & Terminate Channel:** Used to deliver these signals.
 *   **Message Loop:** Handles these signals in its `tokio::select!` loop with biased priority for termination.
-*   **`ActorResult<A>`:** An enum (`Completed`, `Failed`) indicating the outcome of the actor's lifecycle. The `Completed` variant includes the final actor state and a `killed` flag. The `Failed` variant includes error details, failure phase, and optional actor state.
+*   **`ActorResult<A>`:** An enum (`Completed`, `Failed`) indicating the outcome of the actor's lifecycle. The `Completed` variant includes the final actor state and a `killed` flag. The `Failed` variant includes error details, an optional `secondary_error` (the `on_stop` cleanup error when the phase is `OnIdleThenOnStop`), failure phase, and optional actor state.
 *   **`JoinHandle<ActorResult<A>>`:** Resolves when the actor's task completes, providing the `ActorResult`.
 
 **Diagram:**
@@ -109,8 +109,8 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
         ii. It calls `on_stop(&actor_weak, true)` with `killed: true`.
     e.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: true }`.
 
-3.  **`on_run` returning `Err(_)`:**
-    a.  If `on_run` returns `Err(e)`, it signals a runtime failure. The message loop calls `on_stop(&actor_weak, false)` and the `JoinHandle` resolves with `ActorResult::Failed { actor: Some(final_actor_state), error: e, phase: FailurePhase::OnRun, killed: false }`.
+3.  **`on_idle` returning `Err(_)`:**
+    a.  If `on_idle` returns `Err(e)`, it signals a runtime failure. The message loop calls `on_stop(&actor_weak, false)` and the `JoinHandle` resolves with `ActorResult::Failed { actor: Some(final_actor_state), error: e, secondary_error: None, phase: FailurePhase::OnIdle, killed: false }`. If `on_stop` itself also fails during this cleanup, the phase becomes `FailurePhase::OnIdleThenOnStop` and the `on_stop` error is carried in `secondary_error`.
 
 4.  **All `ActorRef`s dropped:**
     a.  If all `ActorRef` instances for an actor are dropped, its mailbox channel will close.
@@ -159,7 +159,7 @@ This section provides a comprehensive view of the actor lifecycle from creation 
 The actor lifecycle consists of three main phases:
 
 1. **Initialization Phase**: The actor is created via `on_start()`. If this fails, no actor instance exists.
-2. **Processing Phase**: The actor processes messages and executes `on_run()` as an idle handler when the message queue is empty.
+2. **Processing Phase**: The actor processes messages and, when the idle channel is enabled via `SpawnOptions::with_idle()`, drives `on_idle()` from subscribed idle streams whenever the message queue is empty.
 3. **Termination Phase**: The actor is cleaned up via `on_stop()` before the task completes.
 
 Each phase can result in different `ActorResult` outcomes, providing detailed information about the actor's final state.
@@ -176,7 +176,7 @@ This section details how different types of errors are handled throughout the ac
 rsActor provides comprehensive error handling across all lifecycle phases:
 
 1. **Initialization Errors**: Failed `on_start()` results in no actor instance being created.
-2. **Runtime Errors**: Failed `on_run()` terminates the actor but preserves the final state.
+2. **Runtime Errors**: Failed `on_idle()` terminates the actor but preserves the final state.
 3. **Cleanup Errors**: Failed `on_stop()` is reported but doesn't prevent termination.
 4. **Message Handler Errors**: Should be handled within handlers using error reply types.
 

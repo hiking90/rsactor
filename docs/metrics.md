@@ -52,7 +52,6 @@ async fn main() {
     println!("Messages processed: {}", metrics.message_count);
     println!("Avg processing time: {:?}", metrics.avg_processing_time);
     println!("Max processing time: {:?}", metrics.max_processing_time);
-    println!("Error count: {}", metrics.error_count);
     println!("Uptime: {:?}", metrics.uptime);
     println!("Last activity: {:?}", metrics.last_activity);
 }
@@ -67,9 +66,7 @@ You can also query individual metrics instead of the full snapshot.
 let message_count = actor_ref.message_count();
 let avg_time = actor_ref.avg_processing_time();
 let max_time = actor_ref.max_processing_time();
-let error_count = actor_ref.error_count();
 let uptime = actor_ref.uptime();
-let last_activity = actor_ref.last_activity();
 ```
 
 ## API Reference
@@ -83,7 +80,9 @@ let last_activity = actor_ref.last_activity();
 | `message_count` | `u64` | Total number of messages processed |
 | `avg_processing_time` | `Duration` | Average processing time per message |
 | `max_processing_time` | `Duration` | Maximum processing time observed |
-| `error_count` | `u64` | Number of errors during message handling |
+| `priority_message_count` | `u64` | Total number of priority-channel messages processed |
+| `avg_priority_processing_time` | `Duration` | Average processing time per priority message |
+| `max_priority_processing_time` | `Duration` | Maximum priority-message processing time observed |
 | `uptime` | `Duration` | Time elapsed since actor started |
 | `last_activity` | `Option<SystemTime>` | Timestamp of last message processing completion |
 
@@ -95,23 +94,16 @@ let last_activity = actor_ref.last_activity();
 | `message_count()` | `u64` | Number of messages processed |
 | `avg_processing_time()` | `Duration` | Average processing time |
 | `max_processing_time()` | `Duration` | Maximum processing time |
-| `error_count()` | `u64` | Error count |
+| `priority_message_count()` | `u64` | Number of priority-channel messages processed |
+| `avg_priority_processing_time()` | `Duration` | Average priority-message processing time |
+| `max_priority_processing_time()` | `Duration` | Maximum priority-message processing time |
 | `uptime()` | `Duration` | Actor uptime |
-| `last_activity()` | `Option<SystemTime>` | Last activity timestamp |
 
 ## Usage Examples
 
-### Calculating Error Rate
+### Tracking Delivery and Handling Failures
 
-```rust
-let metrics = actor_ref.metrics();
-let error_rate = if metrics.message_count > 0 {
-    (metrics.error_count as f64 / metrics.message_count as f64) * 100.0
-} else {
-    0.0
-};
-println!("Error rate: {:.2}%", error_rate);
-```
+Metrics do not count delivery or handling failures. Such failures are surfaced as **dead letters** instead: structured `tracing` warnings, plus `dead_letter_count()` / `reset_dead_letter_count()` under the `test-utils` feature. See [`debugging_guide.md`](debugging_guide.md) for details.
 
 ### Performance Monitoring
 
@@ -146,11 +138,10 @@ async fn monitor_actor(actor_ref: ActorRef<MyActor>) {
 
         let m = actor_ref.metrics();
         println!(
-            "[Monitor] messages={} avg={:?} max={:?} errors={} uptime={:?}",
+            "[Monitor] messages={} avg={:?} max={:?} uptime={:?}",
             m.message_count,
             m.avg_processing_time,
             m.max_processing_time,
-            m.error_count,
             m.uptime
         );
     }
@@ -168,7 +159,7 @@ let (actor_ref, handle) = spawn::<MyActor>(());
 actor_ref.tell(Work).await?;
 
 // Stop the actor
-actor_ref.stop().await?;
+actor_ref.stop().await;
 let _ = handle.await;
 
 // Metrics are still accessible after stop
@@ -241,14 +232,10 @@ actor_processing_time_avg{{actor="{}"}} {}
 # HELP actor_processing_time_max Max processing time in seconds
 # TYPE actor_processing_time_max gauge
 actor_processing_time_max{{actor="{}"}} {}
-# HELP actor_error_count Total errors
-# TYPE actor_error_count counter
-actor_error_count{{actor="{}"}} {}
 "#,
         actor_name, m.message_count,
         actor_name, m.avg_processing_time.as_secs_f64(),
-        actor_name, m.max_processing_time.as_secs_f64(),
-        actor_name, m.error_count
+        actor_name, m.max_processing_time.as_secs_f64()
     )
 }
 ```
