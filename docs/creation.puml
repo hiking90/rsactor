@@ -10,7 +10,7 @@ participant "mpsc::channel (terminate)" as TerminateChannel
 participant "tokio::spawn" as tokio_spawn
 participant "run_actor_lifecycle()" as run_lifecycle
 participant "Actor::on_start(Args)" as on_start_method
-participant "Actor::on_run()" as on_run_method
+participant "Actor::on_idle()" as on_idle_method
 
 User -> UserActor: Defines struct & impl Actor (with Args)
 User -> UserActor: Uses #[message_handlers] macro for message handling
@@ -40,17 +40,16 @@ alt on_start Success
     Main loop handles (biased priority):
     1. Termination signals (highest)
     2. Mailbox messages
-    3. on_run() idle handler (when queue empty)
+    3. on_idle() handler (idle events from subscribed streams, when queue empty; opt-in via with_idle())
   end note
 
-  run_lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await (when idle)
-  activate on_run_method
-  on_run_method --> run_lifecycle: Returns Result<bool, Error>
-  deactivate on_run_method
+  run_lifecycle -> on_idle_method: Calls actor.on_idle(event, &actor_weak).await (when idle)
+  activate on_idle_method
+  on_idle_method --> run_lifecycle: Returns Result<(), Error>
+  deactivate on_idle_method
 
   note right of run_lifecycle
-    Ok(true): continue calling on_run when idle
-    Ok(false): disable idle processing
+    Ok(()): handled; keep processing
     Err: terminate with ActorResult::Failed
   end note
 

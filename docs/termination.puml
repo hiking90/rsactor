@@ -6,13 +6,13 @@ participant "ActorRef<T>" as ActorRef_obj
 participant "MailboxChannel (mpsc)" as MailboxChannel
 participant "TerminateChannel (mpsc)" as TerminateChannel
 participant "run_actor_lifecycle()" as Lifecycle
-participant "Actor::on_run()" as on_run_method
+participant "Actor::on_idle()" as on_idle_method
 participant "Actor::on_stop()" as on_stop_method
 participant "JoinHandle" as JoinHandle_obj
 
 box "Actor Task" #LightCoral
     participant Lifecycle
-    participant on_run_method
+    participant on_idle_method
     participant on_stop_method
 end box
 
@@ -20,11 +20,11 @@ end box
 Lifecycle -> Lifecycle: Main tokio::select! loop (biased)
 activate Lifecycle
 loop Idle Processing (when message queue empty)
-  Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await
-  activate on_run_method
-  on_run_method --> Lifecycle: Returns Ok(true), Ok(false), or Err(error)
-  deactivate on_run_method
-  note right of Lifecycle: Ok(true): continue idle processing\nOk(false): disable idle processing\nErr(): terminate with failure
+  Lifecycle -> on_idle_method: Calls actor.on_idle(event, &actor_weak).await
+  activate on_idle_method
+  on_idle_method --> Lifecycle: Returns Ok(()) or Err(error)
+  deactivate on_idle_method
+  note right of Lifecycle: Ok(()): handled; keep running\nErr(): terminate with failure
 end
 
 == Stop Operation (Graceful) ==
@@ -72,24 +72,24 @@ else on_stop Failure
 end
 deactivate Lifecycle
 
-== Termination via on_run Error ==
+== Termination via on_idle Error ==
 note over Lifecycle, on_stop_method
-  When on_run returns an error, on_stop IS called for cleanup.
+  When on_idle returns an error, on_stop IS called for cleanup.
   The actor then terminates with ActorResult::Failed.
 end note
 
-Lifecycle -> on_run_method: Calls actor.on_run(&actor_weak).await
+Lifecycle -> on_idle_method: Calls actor.on_idle(event, &actor_weak).await
 activate Lifecycle
-activate on_run_method
-on_run_method --> Lifecycle: Returns Err(error)
-deactivate on_run_method
+activate on_idle_method
+on_idle_method --> Lifecycle: Returns Err(error)
+deactivate on_idle_method
 
 Lifecycle -> on_stop_method: Calls on_stop(&actor_weak, killed) for cleanup
 activate on_stop_method
 on_stop_method --> Lifecycle: Returns (result logged if error)
 deactivate on_stop_method
 
-Lifecycle --> JoinHandle_obj: ActorResult::Failed { phase: OnRun, actor: Some(actor), error, killed }
+Lifecycle --> JoinHandle_obj: ActorResult::Failed { phase: OnIdle, actor: Some(actor), error, killed, .. }
 deactivate Lifecycle
 
 == All ActorRef Instances Dropped ==

@@ -100,30 +100,51 @@ impl Actor for FileProcessor {
 }
 ```
 
-### 3. Use `on_run` for Idle Processing
+### 3. Use `on_idle` for Idle Processing
 
-The `on_run` method is an idle handler called when the message queue is empty. Use it for background tasks:
+The `on_idle` method is an idle handler driven by `Stream`s registered via `ActorRef::subscribe_idle` (typically in `on_start`). The runtime drives the streams and calls `on_idle` once per yielded event, concurrently with message processing. The idle channel is opt-in: spawn with `SpawnOptions::new().with_idle()`. Use it for background tasks such as periodic cleanup or health checks:
 
 ```rust
-async fn on_run(&mut self, actor_weak: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-    tokio::select! {
-        // Handle periodic cleanup
-        _ = self.cleanup_interval.tick() => {
-            self.cleanup_expired_entries().await?;
-        }
+// An event type that distinguishes the different idle triggers.
+#[derive(Debug, Clone, Copy)]
+enum Tick {
+    Cleanup,
+    HealthCheck,
+}
 
-        // Handle health checks
-        _ = self.health_check_interval.tick() => {
-            if !self.is_healthy().await? {
-                // Consider stopping the actor or alerting
-                let actor_ref = actor_weak.upgrade()
-                    .ok_or_else(|| anyhow::anyhow!("Actor reference no longer valid"))?;
-                actor_ref.stop().await?;
-                return Ok(false); // Stop idle processing
+impl Actor for MyActor {
+    type IdleEvent = Tick;
+    // ... other associated types ...
+
+    async fn on_start(_args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        // Register one stream per periodic concern; they are merged into on_idle.
+        actor_ref.subscribe_idle(
+            IntervalStream::new(tokio::time::interval(Duration::from_secs(60)))
+                .map(|_| Tick::Cleanup),
+        )?;
+        actor_ref.subscribe_idle(
+            IntervalStream::new(tokio::time::interval(Duration::from_secs(10)))
+                .map(|_| Tick::HealthCheck),
+        )?;
+        Ok(Self { /* ... */ })
+    }
+
+    async fn on_idle(&mut self, event: Tick, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        match event {
+            Tick::Cleanup => {
+                self.cleanup_expired_entries().await?;
+            }
+            Tick::HealthCheck => {
+                if !self.is_healthy().await? {
+                    // Consider stopping the actor or alerting
+                    let actor_ref = actor_weak.upgrade()
+                        .ok_or_else(|| anyhow::anyhow!("Actor reference no longer valid"))?;
+                    actor_ref.stop().await;
+                }
             }
         }
+        Ok(())
     }
-    Ok(true) // Continue idle processing
 }
 ```
 
@@ -159,20 +180,20 @@ let (actor_ref, join_handle) = spawn::<MyActor>(args);
 
 // ... use actor ...
 
-actor_ref.stop().await?;
+actor_ref.stop().await;
 
 match join_handle.await? {
     ActorResult::Completed { actor, killed } => {
         println!("Actor completed successfully");
         // Access final actor state if needed
     }
-    ActorResult::Failed { error, phase, actor, killed } => {
+    ActorResult::Failed { error, phase, actor, killed, .. } => {
         match phase {
             FailurePhase::OnStart => {
                 eprintln!("Actor failed to start: {}", error);
                 // No actor state available
             }
-            FailurePhase::OnRun => {
+            FailurePhase::OnIdle => {
                 eprintln!("Actor failed during runtime: {}", error);
                 // Actor state available for inspection/recovery
                 if let Some(actor_state) = actor {
@@ -264,7 +285,7 @@ async fn test_counter_actor() {
     let count = actor_ref.ask(GetCount).await.unwrap();
     assert_eq!(count, 6);
 
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
 }
 ```
 
@@ -415,7 +436,7 @@ let (actor_ref, join_handle) = spawn::<MyActor>(args);
 // ... use actor ...
 
 // Always handle termination
-actor_ref.stop().await?;
+actor_ref.stop().await;
 let result = join_handle.await?;
 match result {
     ActorResult::Completed { .. } => println!("Actor completed successfully"),

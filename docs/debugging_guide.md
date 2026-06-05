@@ -144,7 +144,7 @@ async fn test_dead_letter_tracking() {
     let initial = dead_letter_count();
 
     let (actor_ref, handle) = spawn::<MyActor>(MyActor);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // This will generate a dead letter
@@ -335,7 +335,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Stop the actor
-    actor_ref.stop().await?;
+    actor_ref.stop().await;
     handle.await?;
 
     // This will generate a dead letter (logged automatically)
