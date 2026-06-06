@@ -17,8 +17,8 @@
 //!   - [`tell_with_timeout`](actor_ref::ActorRef::tell_with_timeout): Send a message without waiting for a reply, with a specified timeout.
 //!   - [`ask`](actor_ref::ActorRef::ask): Send a message and await a reply.
 //!   - [`ask_with_timeout`](actor_ref::ActorRef::ask_with_timeout): Send a message and await a reply, with a specified timeout.
-//!   - [`tell_blocking`](actor_ref::ActorRef::tell_blocking): Blocking version of `tell` for use in [`tokio::task::spawn_blocking`] tasks.
-//!   - [`ask_blocking`](actor_ref::ActorRef::ask_blocking): Blocking version of `ask` for use in [`tokio::task::spawn_blocking`] tasks.
+//!   - [`blocking_tell`](actor_ref::ActorRef::blocking_tell): Blocking version of `tell` for use in [`tokio::task::spawn_blocking`] tasks or non-async threads.
+//!   - [`blocking_ask`](actor_ref::ActorRef::blocking_ask): Blocking version of `ask` for use in [`tokio::task::spawn_blocking`] tasks or non-async threads.
 //! - **Priority Channel** (opt-in via [`SpawnOptions::with_priority`]):
 //!   A dedicated mpsc channel of fixed capacity 1 that the runtime polls with
 //!   higher priority than the regular mailbox but lower priority than the
@@ -300,6 +300,14 @@ pub use handler::{AskHandler, TellHandler, WeakAskHandler, WeakTellHandler};
 mod actor_control;
 pub use actor_control::{ActorControl, WeakActorControl};
 
+// Runtime deadlock detection lives in its own module, gated entirely by the
+// feature. `CURRENT_ACTOR` and `register_ask_edge` are re-exported at the crate
+// root so existing `crate::`-qualified references keep working unchanged.
+#[cfg(feature = "deadlock-detection")]
+mod deadlock;
+#[cfg(feature = "deadlock-detection")]
+pub(crate) use deadlock::{register_ask_edge, CURRENT_ACTOR};
+
 use futures::FutureExt;
 // Re-export derive macros for convenient access
 pub use rsactor_derive::{message_handlers, Actor};
@@ -332,11 +340,6 @@ pub fn __log_handler_error(
 
 use std::{future::Future, sync::atomic::AtomicU64, sync::OnceLock};
 
-#[cfg(feature = "deadlock-detection")]
-use std::collections::HashMap;
-#[cfg(feature = "deadlock-detection")]
-use std::sync::Mutex;
-
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -363,84 +366,6 @@ impl std::fmt::Display for Identity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}(#{})", self.type_name, self.id)
     }
-}
-
-// --- Deadlock Detection ---
-
-#[cfg(feature = "deadlock-detection")]
-tokio::task_local! {
-    pub(crate) static CURRENT_ACTOR: Identity;
-}
-
-/// Global wait-for graph.
-/// Key: waiting actor's ID, Value: target actor's Identity.
-#[cfg(feature = "deadlock-detection")]
-static WAIT_FOR: OnceLock<Mutex<HashMap<u64, Identity>>> = OnceLock::new();
-
-#[cfg(feature = "deadlock-detection")]
-pub(crate) fn wait_for_graph() -> &'static Mutex<HashMap<u64, Identity>> {
-    WAIT_FOR.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-#[cfg(feature = "deadlock-detection")]
-pub(crate) struct WaitForGuard(pub(crate) u64);
-
-#[cfg(feature = "deadlock-detection")]
-impl Drop for WaitForGuard {
-    fn drop(&mut self) {
-        if let Ok(mut graph) = wait_for_graph().lock() {
-            graph.remove(&self.0);
-        }
-    }
-}
-
-/// Check if there is a path from `from` to `to` in the wait-for graph.
-/// Self-ask (caller == callee) is checked by the caller before invoking this function,
-/// so this only handles cycles of 2+ hops.
-#[cfg(feature = "deadlock-detection")]
-pub(crate) fn has_path(graph: &HashMap<u64, Identity>, from: u64, to: u64) -> bool {
-    let mut current = from;
-    let max_steps = graph.len();
-    for _ in 0..max_steps {
-        match graph.get(&current) {
-            Some(identity) => {
-                if identity.id == to {
-                    return true;
-                }
-                current = identity.id;
-            }
-            None => return false,
-        }
-    }
-    false
-}
-
-/// Format the cycle path for panic messages.
-#[cfg(feature = "deadlock-detection")]
-pub(crate) fn format_cycle_path(
-    graph: &HashMap<u64, Identity>,
-    caller: Identity,
-    callee: Identity,
-) -> String {
-    if caller.id == callee.id {
-        return format!("{caller} -> {caller}");
-    }
-    let mut path = vec![caller.to_string(), callee.to_string()];
-    let mut current = callee.id;
-    let max_steps = graph.len();
-    for _ in 0..max_steps {
-        match graph.get(&current) {
-            Some(identity) => {
-                path.push(identity.to_string());
-                if identity.id == caller.id {
-                    break;
-                }
-                current = identity.id;
-            }
-            None => break,
-        }
-    }
-    path.join(" -> ")
 }
 
 /// Type-erased payload handler trait for dynamic message dispatch.
@@ -601,14 +526,14 @@ pub const IDLE_SUBSCRIBE_CHANNEL_CAPACITY: usize = 32;
 pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
     if size == 0 {
         return Err(Error::MailboxCapacity {
-            message: "Global default mailbox capacity must be greater than 0".to_string(),
+            message: "Global default mailbox capacity must be greater than 0",
         });
     }
 
     CONFIGURED_DEFAULT_MAILBOX_CAPACITY
         .set(size)
         .map_err(|_| Error::MailboxCapacity {
-            message: "Global default mailbox capacity has already been set".to_string(),
+            message: "Global default mailbox capacity has already been set",
         })
 }
 

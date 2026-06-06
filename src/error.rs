@@ -4,7 +4,7 @@
 use crate::Identity;
 use std::time::Duration;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 /// Represents errors that can occur in the rsactor framework.
 ///
@@ -58,14 +58,14 @@ pub enum Error {
         /// The duration after which the request timed out
         timeout: Duration,
         /// Type of operation that timed out (e.g., "send", "ask")
-        operation: String,
+        operation: &'static str,
     },
     /// Error when downcasting a reply to the expected type
     Downcast {
         /// ID of the actor that sent the incompatible reply
         identity: Identity,
         /// The expected type name that the downcast failed to match
-        expected_type: String,
+        expected_type: &'static str,
     },
     /// Error when a runtime operation fails
     Runtime {
@@ -76,15 +76,22 @@ pub enum Error {
     },
     /// Error related to mailbox capacity configuration
     MailboxCapacity {
-        /// Detailed error message describing the mailbox capacity issue
-        message: String,
+        /// Static label describing the mailbox capacity issue.
+        ///
+        /// Every emitter uses a fixed message, so this is `&'static str` rather
+        /// than `String` (no allocation on this cold configuration path).
+        message: &'static str,
     },
     /// Error when awaiting a JoinHandle fails
     Join {
         /// ID of the actor that spawned the task
         identity: Identity,
-        /// The original JoinError from tokio
-        source: tokio::task::JoinError,
+        /// The original JoinError from tokio.
+        ///
+        /// Wrapped in an [`Arc`](std::sync::Arc) because `JoinError` is not
+        /// `Clone`; this lets [`Error`] as a whole derive `Clone`. Deref still
+        /// gives access to `is_panic()` / `is_cancelled()`.
+        source: std::sync::Arc<tokio::task::JoinError>,
     },
     /// Error when a priority channel operation is attempted on an actor that
     /// did not enable the priority channel via [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority).
@@ -183,7 +190,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Join { source, .. } => Some(source),
+            Error::Join { source, .. } => Some(source.as_ref()),
             _ => None,
         }
     }

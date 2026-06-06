@@ -19,7 +19,7 @@ fn test_is_retryable_for_all_variants() {
     let timeout_err = Error::Timeout {
         identity,
         timeout: Duration::from_secs(1),
-        operation: "ask".into(),
+        operation: "ask",
     };
     assert!(timeout_err.is_retryable());
 
@@ -38,7 +38,7 @@ fn test_is_retryable_for_all_variants() {
 
     let downcast_err = Error::Downcast {
         identity,
-        expected_type: "String".into(),
+        expected_type: "String",
     };
     assert!(!downcast_err.is_retryable());
 
@@ -49,7 +49,7 @@ fn test_is_retryable_for_all_variants() {
     assert!(!runtime_err.is_retryable());
 
     let mailbox_err = Error::MailboxCapacity {
-        message: "invalid capacity".into(),
+        message: "invalid capacity",
     };
     assert!(!mailbox_err.is_retryable());
 }
@@ -71,19 +71,17 @@ fn test_all_errors_have_debugging_tips() {
         Error::Timeout {
             identity,
             timeout: Duration::from_secs(1),
-            operation: "ask".into(),
+            operation: "ask",
         },
         Error::Downcast {
             identity,
-            expected_type: "String".into(),
+            expected_type: "String",
         },
         Error::Runtime {
             identity,
             details: "test".into(),
         },
-        Error::MailboxCapacity {
-            message: "test".into(),
-        },
+        Error::MailboxCapacity { message: "test" },
     ];
 
     for err in &errors {
@@ -122,7 +120,7 @@ fn test_downcast_error_debugging_tips() {
     let identity = Identity::new(1, "TestActor");
     let err = Error::Downcast {
         identity,
-        expected_type: "String".into(),
+        expected_type: "String",
     };
 
     let tips = err.debugging_tips();
@@ -140,7 +138,7 @@ fn test_downcast_error_debugging_tips() {
 fn test_mailbox_capacity_error_tips() {
     // Test: MailboxCapacity error has useful debugging tips
     let err = Error::MailboxCapacity {
-        message: "capacity must be greater than 0".into(),
+        message: "capacity must be greater than 0",
     };
 
     let tips = err.debugging_tips();
@@ -177,18 +175,18 @@ fn test_error_display_all_variants() {
         Error::Timeout {
             identity,
             timeout: Duration::from_secs(5),
-            operation: "ask".into(),
+            operation: "ask",
         },
         Error::Downcast {
             identity,
-            expected_type: "String".into(),
+            expected_type: "String",
         },
         Error::Runtime {
             identity,
             details: "panic in handler".into(),
         },
         Error::MailboxCapacity {
-            message: "capacity must be > 0".into(),
+            message: "capacity must be > 0",
         },
     ];
 
@@ -761,7 +759,7 @@ async fn test_error_join_display() {
 
     let error = Error::Join {
         identity,
-        source: join_error,
+        source: std::sync::Arc::new(join_error),
     };
 
     let display = format!("{}", error);
@@ -791,19 +789,17 @@ fn test_error_source_returns_none_for_non_join() {
         Error::Timeout {
             identity,
             timeout: Duration::from_secs(1),
-            operation: "ask".into(),
+            operation: "ask",
         },
         Error::Downcast {
             identity,
-            expected_type: "String".into(),
+            expected_type: "String",
         },
         Error::Runtime {
             identity,
             details: "test".into(),
         },
-        Error::MailboxCapacity {
-            message: "test".into(),
-        },
+        Error::MailboxCapacity { message: "test" },
     ];
 
     for err in &errors {
@@ -827,7 +823,7 @@ async fn test_error_join_debugging_tips() {
 
     let error = Error::Join {
         identity,
-        source: join_error,
+        source: std::sync::Arc::new(join_error),
     };
 
     let tips = error.debugging_tips();
@@ -856,7 +852,7 @@ async fn test_error_join_is_not_retryable() {
 
     let error = Error::Join {
         identity,
-        source: join_error,
+        source: std::sync::Arc::new(join_error),
     };
 
     assert!(!error.is_retryable(), "Join error should not be retryable");
@@ -939,84 +935,6 @@ async fn test_default_on_run_behavior() {
     assert!(result, "Actor with default on_run should process messages");
 
     // Stop the actor
-    actor_ref.stop().await;
-    handle.await.unwrap();
-}
-
-#[tokio::test]
-async fn test_deprecated_tell_blocking_method() {
-    // Test: deprecated tell_blocking method should still work
-    // This covers the deprecated method lines
-
-    #[derive(Actor)]
-    struct DeprecatedTestActor {
-        count: u32,
-    }
-
-    struct DeprecatedMessage;
-
-    #[rsactor::message_handlers]
-    impl DeprecatedTestActor {
-        #[handler]
-        async fn handle(&mut self, _: DeprecatedMessage, _: &ActorRef<Self>) {
-            self.count += 1;
-        }
-    }
-
-    let (actor_ref, handle) = spawn::<DeprecatedTestActor>(DeprecatedTestActor { count: 0 });
-
-    let actor_ref_clone = actor_ref.clone();
-
-    // Use deprecated tell_blocking (with #[allow(deprecated)] to suppress warning)
-    #[allow(deprecated)]
-    let result = tokio::task::spawn_blocking(move || {
-        actor_ref_clone.tell_blocking(DeprecatedMessage, Some(Duration::from_secs(1)))
-    })
-    .await
-    .unwrap();
-
-    assert!(result.is_ok(), "Deprecated tell_blocking should work");
-
-    actor_ref.stop().await;
-    handle.await.unwrap();
-}
-
-#[tokio::test]
-async fn test_deprecated_ask_blocking_method() {
-    // Test: deprecated ask_blocking method should still work
-
-    #[derive(Actor)]
-    struct DeprecatedAskActor {
-        value: String,
-    }
-
-    struct GetValue;
-
-    #[rsactor::message_handlers]
-    impl DeprecatedAskActor {
-        #[handler]
-        async fn handle(&mut self, _: GetValue, _: &ActorRef<Self>) -> String {
-            self.value.clone()
-        }
-    }
-
-    let (actor_ref, handle) = spawn::<DeprecatedAskActor>(DeprecatedAskActor {
-        value: "test_value".to_string(),
-    });
-
-    let actor_ref_clone = actor_ref.clone();
-
-    // Use deprecated ask_blocking
-    #[allow(deprecated)]
-    let result: Result<String, _> = tokio::task::spawn_blocking(move || {
-        actor_ref_clone.ask_blocking(GetValue, Some(Duration::from_secs(1)))
-    })
-    .await
-    .unwrap();
-
-    assert!(result.is_ok(), "Deprecated ask_blocking should work");
-    assert_eq!(result.unwrap(), "test_value");
-
     actor_ref.stop().await;
     handle.await.unwrap();
 }

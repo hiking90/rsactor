@@ -23,7 +23,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 | `ask` / `ask_with_timeout`       | Send a message and asynchronously await a reply              |
 | `tell` / `tell_with_timeout`     | Send a message without waiting for a reply (fire-and-forget) |
 | `tell_priority` / `ask_priority` | Send through the **opt-in** priority channel (mandatory `Duration`); bypasses the regular mailbox |
-| `blocking_ask` / `blocking_tell` | Blocking versions for `tokio::task::spawn_blocking` contexts (aliases: `ask_blocking` / `tell_blocking`) |
+| `blocking_ask` / `blocking_tell` | Blocking versions for `tokio::task::spawn_blocking` contexts or non-async threads |
 | `blocking_tell_priority` / `blocking_ask_priority` | Blocking variants of the priority APIs |
 
 - **Macro-Assisted Handlers**: `#[message_handlers]` attribute macro with `#[handler]` method attributes for automatic message handling

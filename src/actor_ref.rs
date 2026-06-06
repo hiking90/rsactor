@@ -94,8 +94,6 @@ use std::sync::Arc;
 /// - **Blocking Methods**:
 ///   - [`blocking_ask`](ActorRef::blocking_ask): Send a message and block until a typed reply is received (no runtime context required).
 ///   - [`blocking_tell`](ActorRef::blocking_tell): Send a message and block until it is sent (no runtime context required).
-///   - [`ask_blocking`](ActorRef::ask_blocking): *(Deprecated)* Send a message and block until a typed reply is received.
-///   - [`tell_blocking`](ActorRef::tell_blocking): *(Deprecated)* Send a message and block until it is sent.
 ///
 ///   The new `blocking_*` methods use Tokio's underlying `blocking_send` and `blocking_recv` and can be used from any thread.
 ///
@@ -392,7 +390,7 @@ impl<T: Actor> ActorRef<T> {
                 Error::Timeout {
                     identity: self.identity(),
                     timeout,
-                    operation: "tell".to_string(),
+                    operation: "tell",
                 }
             })?;
 
@@ -428,29 +426,11 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
+        // Deadlock detection: register this `ask` as a wait-for edge and hold
+        // the guard until the reply is received (or this future is dropped).
+        // Panics if it would close an ask cycle.
         #[cfg(feature = "deadlock-detection")]
-        let _guard = {
-            let caller = crate::CURRENT_ACTOR.try_with(|id| *id).ok();
-            if let Some(caller) = caller {
-                let callee = self.identity();
-                let mut graph = crate::wait_for_graph()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if caller.id == callee.id || crate::has_path(&graph, callee.id, caller.id) {
-                    let cycle = crate::format_cycle_path(&graph, caller, callee);
-                    drop(graph);
-                    panic!(
-                        "Deadlock detected: ask cycle {cycle}\n\
-                         This is a design error. Use `tell` to break the cycle, \
-                         or restructure actor dependencies."
-                    );
-                }
-                graph.insert(caller.id, callee);
-                Some(crate::WaitForGuard(caller.id))
-            } else {
-                None
-            }
-        };
+        let _guard = crate::register_ask_edge(self.identity(), "ask");
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let envelope = MailboxMessage::Envelope {
@@ -495,7 +475,7 @@ impl<T: Actor> ActorRef<T> {
                         );
                         Err(Error::Downcast {
                             identity: self.identity(),
-                            expected_type: std::any::type_name::<T::Reply>().to_string(),
+                            expected_type: std::any::type_name::<T::Reply>(),
                         })
                     }
                 }
@@ -557,7 +537,7 @@ impl<T: Actor> ActorRef<T> {
                 Error::Timeout {
                     identity: self.identity(),
                     timeout,
-                    operation: "ask".to_string(),
+                    operation: "ask",
                 }
             })?;
 
@@ -648,7 +628,7 @@ impl<T: Actor> ActorRef<T> {
                 Err(Error::Timeout {
                     identity: self.identity(),
                     timeout,
-                    operation: "tell_priority".to_string(),
+                    operation: "tell_priority",
                 })
             }
         };
@@ -705,6 +685,14 @@ impl<T: Actor> ActorRef<T> {
             });
         };
 
+        // Deadlock detection: a priority ask still parks the calling actor's
+        // message loop while it awaits the reply, so a cycle through the priority
+        // channel stalls just like a regular `ask` (here bounded by `timeout`).
+        // Register the edge before sending and hold the guard across the wait so
+        // the cycle is detected immediately instead of only timing out.
+        #[cfg(feature = "deadlock-detection")]
+        let _guard = crate::register_ask_edge(self.identity(), "ask_priority");
+
         let result = tokio::time::timeout(timeout, async {
             let (reply_tx, reply_rx) = oneshot::channel();
             let envelope = MailboxMessage::Envelope {
@@ -730,7 +718,7 @@ impl<T: Actor> ActorRef<T> {
                     Ok(reply) => Ok(*reply),
                     Err(_) => Err(Error::Downcast {
                         identity: self.identity(),
-                        expected_type: std::any::type_name::<T::Reply>().to_string(),
+                        expected_type: std::any::type_name::<T::Reply>(),
                     }),
                 },
                 Err(_) => {
@@ -759,7 +747,7 @@ impl<T: Actor> ActorRef<T> {
                 Err(Error::Timeout {
                     identity: self.identity(),
                     timeout,
-                    operation: "ask_priority".to_string(),
+                    operation: "ask_priority",
                 })
             }
         }
@@ -856,7 +844,7 @@ impl<T: Actor> ActorRef<T> {
                         Err(Error::Timeout {
                             identity,
                             timeout,
-                            operation: "tell_priority".to_string(),
+                            operation: "tell_priority",
                         })
                     }
                 }
@@ -1153,7 +1141,7 @@ impl<T: Actor> ActorRef<T> {
                         Err(Error::Timeout {
                             identity,
                             timeout,
-                            operation: "blocking_tell".to_string(),
+                            operation: "blocking_tell",
                         })
                     }
                 }
@@ -1284,7 +1272,7 @@ impl<T: Actor> ActorRef<T> {
                         );
                         Err(Error::Downcast {
                             identity: self.identity(),
-                            expected_type: std::any::type_name::<T::Reply>().to_string(),
+                            expected_type: std::any::type_name::<T::Reply>(),
                         })
                     }
                 }
@@ -1331,79 +1319,11 @@ impl<T: Actor> ActorRef<T> {
                         Error::Timeout {
                             identity,
                             timeout,
-                            operation: "blocking_ask".to_string(),
+                            operation: "blocking_ask",
                         }
                     })?
             },
         )
-    }
-
-    /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
-    ///
-    /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
-    ///
-    /// **Deprecated**: Use [`blocking_tell`](ActorRef::blocking_tell) instead. The timeout parameter is ignored.
-    #[deprecated(
-        since = "0.10.0",
-        note = "Use `blocking_tell` instead. Timeout parameter is ignored."
-    )]
-    #[cfg_attr(feature = "tracing", tracing::instrument(
-        level = "debug",
-        name = "actor_tell_blocking",
-        fields(
-            actor_id = %self.identity(),
-            message_type = %std::any::type_name::<M>(),
-            timeout_ms = timeout.map(|t| t.as_millis())
-        ),
-        skip(self, msg)
-    ))]
-    pub fn tell_blocking<M>(&self, msg: M, timeout: Option<Duration>) -> Result<()>
-    where
-        T: Message<M>,
-        M: Send + 'static,
-    {
-        #[cfg(feature = "tracing")]
-        debug!("Executing deprecated tell_blocking, delegating to blocking_tell");
-
-        // Ignore timeout parameter as documented in deprecation notice
-        let _ = timeout;
-
-        self.blocking_tell(msg, None)
-    }
-
-    /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
-    ///
-    /// This method is intended for use within `tokio::task::spawn_blocking` contexts.
-    ///
-    /// **Deprecated**: Use [`blocking_ask`](ActorRef::blocking_ask) instead. The timeout parameter is ignored.
-    #[deprecated(
-        since = "0.10.0",
-        note = "Use `blocking_ask` instead. Timeout parameter is ignored."
-    )]
-    #[cfg_attr(feature = "tracing", tracing::instrument(
-        level = "debug",
-        name = "actor_ask_blocking",
-        fields(
-            actor_id = %self.identity(),
-            message_type = %std::any::type_name::<M>(),
-            reply_type = %std::any::type_name::<T::Reply>(),
-            timeout_ms = timeout.map(|t| t.as_millis())
-        ),
-        skip(self, msg)
-    ))]
-    pub fn ask_blocking<M>(&self, msg: M, timeout: Option<Duration>) -> Result<T::Reply>
-    where
-        T: Message<M>,
-        M: Send + 'static,
-        T::Reply: Send + 'static,
-    {
-        #[cfg(feature = "tracing")]
-        debug!("Executing deprecated ask_blocking, delegating to blocking_ask");
-
-        // Ignore timeout parameter as documented in deprecation notice
-        let _ = timeout;
-
-        self.blocking_ask(msg, None)
     }
 
     /// Sends a message to an actor expecting a JoinHandle reply and awaits its completion.
@@ -1498,7 +1418,7 @@ impl<T: Actor> ActorRef<T> {
 
         let result = join_handle.await.map_err(|join_error| crate::Error::Join {
             identity: self.identity(),
-            source: join_error,
+            source: std::sync::Arc::new(join_error),
         })?;
 
         #[cfg(feature = "tracing")]
@@ -1617,7 +1537,7 @@ impl<T: Actor> Clone for ActorRef<T> {
 /// existing [`ActorRef<T>`]:
 ///
 /// ```ignore
-/// let weak_ref = actor_ref.downgrade();
+/// let weak_ref = ActorRef::downgrade(&actor_ref);
 /// ```
 ///
 /// ## Upgrading to `ActorRef<T>`

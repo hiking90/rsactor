@@ -214,7 +214,7 @@ A7: `rsActor` provides several methods for sending messages to actors:
     actor_ref.blocking_tell(MyMessage, Some(Duration::from_secs(5)))?;
     ```
 
-**Note:** The `ask_blocking` and `tell_blocking` methods are deprecated since v0.10.0. Use `blocking_ask` and `blocking_tell` instead.
+**Note:** The earlier `ask_blocking` / `tell_blocking` methods have been removed. Use `blocking_ask` / `blocking_tell` instead.
 
 **Q8: How do I stop an actor?**
 

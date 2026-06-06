@@ -8,7 +8,7 @@
 //! 2. Send data from the actor to the sync task using tokio channels
 //! 3. Send data from the sync task back to the actor using actor messages with the blocking API
 //!
-//! IMPORTANT: The blocking functions (ask_blocking and tell_blocking) are specifically designed
+//! IMPORTANT: The blocking functions (blocking_ask and blocking_tell) are specifically designed
 //! to be used within tokio::task::spawn_blocking tasks where a Tokio runtime is accessible.
 //! They are NOT intended for use in general synchronous code or threads created with std::thread::spawn.
 
@@ -94,10 +94,10 @@ impl Actor for SyncDataProcessorActor {
                 // Generate a random value (simulating sensor data or similar)
                 let raw_value = rand::random::<f64>() * 100.0;
 
-                // Send the data to our actor using tell_blocking
+                // Send the data to our actor using blocking_tell
                 debug!("Sync task sending value {raw_value:.2} to actor");
 
-                // Use tell_blocking which is designed for tokio blocking contexts
+                // Use blocking_tell which is designed for tokio blocking contexts
                 // Note: This requires access to a tokio runtime, which is available inside spawn_blocking
                 if let Err(e) = task_actor_ref.blocking_tell(
                     ProcessedData {

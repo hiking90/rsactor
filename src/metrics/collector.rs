@@ -20,20 +20,21 @@ use super::MetricsSnapshot;
 ///
 /// # Overflow Protection
 ///
-/// - `total_processing_nanos` uses saturating addition to prevent wraparound
 /// - Individual durations are capped at `u64::MAX` nanoseconds (~584 years)
+/// - `total_processing_nanos` accumulates with plain atomic add; the summed
+///   total wraps only after ~584 years of processing time
 #[derive(Debug)]
 pub(crate) struct MetricsCollector {
     /// Number of messages processed (regular mailbox only — priority messages are
     /// counted separately so callers can detect priority-channel abuse).
     message_count: AtomicU64,
-    /// Cumulative processing time for regular messages, in nanoseconds (saturating)
+    /// Cumulative processing time for regular messages, in nanoseconds
     total_processing_nanos: AtomicU64,
     /// Maximum regular message processing time observed in nanoseconds
     max_processing_nanos: AtomicU64,
     /// Number of priority messages processed (regular + drained-on-stop).
     priority_message_count: AtomicU64,
-    /// Cumulative processing time for priority messages, in nanoseconds (saturating)
+    /// Cumulative processing time for priority messages, in nanoseconds
     total_priority_processing_nanos: AtomicU64,
     /// Maximum priority message processing time observed in nanoseconds
     max_priority_processing_nanos: AtomicU64,
@@ -62,7 +63,7 @@ impl MetricsCollector {
     ///
     /// This method:
     /// 1. Increments the message count
-    /// 2. Adds the duration to total processing time (saturating)
+    /// 2. Adds the duration to total processing time
     /// 3. Updates max processing time if this was slower
     /// 4. Updates the last activity timestamp
     #[inline]
@@ -72,12 +73,11 @@ impl MetricsCollector {
         // Safe conversion: cap at u64::MAX (~584 years in nanos)
         let nanos = duration.as_nanos().min(u64::MAX as u128) as u64;
 
-        // Saturating add to prevent wraparound
-        let _ = self.total_processing_nanos.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |current| Some(current.saturating_add(nanos)),
-        );
+        // Plain atomic add (single RMW) rather than a fetch_update CAS loop: the
+        // accumulated total only wraps after ~584 years of summed processing
+        // time, so saturating is unnecessary on this hot path.
+        self.total_processing_nanos
+            .fetch_add(nanos, Ordering::Relaxed);
 
         // Update max using atomic fetch_max
         self.max_processing_nanos
@@ -97,11 +97,10 @@ impl MetricsCollector {
 
         let nanos = duration.as_nanos().min(u64::MAX as u128) as u64;
 
-        let _ = self.total_priority_processing_nanos.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |current| Some(current.saturating_add(nanos)),
-        );
+        // Plain atomic add (single RMW) instead of a fetch_update CAS loop; see
+        // `record_message` for the wraparound rationale.
+        self.total_priority_processing_nanos
+            .fetch_add(nanos, Ordering::Relaxed);
 
         self.max_priority_processing_nanos
             .fetch_max(nanos, Ordering::Relaxed);

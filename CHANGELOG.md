@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ BREAKING CHANGES
+
+- **`ActorRef::tell_blocking` / `ask_blocking` removed** (deprecated since 0.10.0).
+  Use `blocking_tell` / `blocking_ask`. Note the old methods silently ignored
+  their `timeout` argument; the replacements honor `Option<Duration>`.
+- **`Actor::Error` now requires `Display`** in addition to `Debug`
+  (`Send + Display + Debug`). This guarantees lifecycle failures surfaced through
+  `ActorResult` render as human-readable messages. `std::error::Error` is
+  intentionally *not* required, so `type Error = String` still works.
+- **`Error` now derives `Clone`.** To make this possible, `Error::Join.source`
+  changed from `tokio::task::JoinError` to `Arc<tokio::task::JoinError>`
+  (`JoinError` is not `Clone`). Deref still exposes `is_panic()` / `is_cancelled()`.
+- **Several `Error` fields changed from `String` to `&'static str`**:
+  `Error::Timeout.operation`, `Error::Downcast.expected_type`, and
+  `Error::MailboxCapacity.message` (all are fixed labels — no allocation).
+
+### Fixed
+
+- **Deadlock detection now covers `ask_priority` and concurrent asks.** Priority
+  asks register a wait-for edge (a cycle through the priority channel previously
+  went undetected and only resolved by timeout). The wait-for graph is now a
+  multiset keyed per caller, so two concurrent asks from one handler
+  (`tokio::join!(a.ask(..), b.ask(..))`) no longer clobber each other's edges.
+
+### Changed
+
+- Deadlock-detection internals moved to a dedicated `deadlock` module (gated by
+  the `deadlock-detection` feature); no public API change.
+- Metrics accumulate processing time with a plain atomic `fetch_add` instead of a
+  `fetch_update` CAS loop (the total wraps only after ~584 years).
+
 ## [0.16.0] - 2026-06-06
 
 This release reworks the actor idle / periodic-work model, makes the lifecycle
