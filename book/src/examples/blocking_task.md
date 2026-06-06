@@ -29,7 +29,7 @@ Tokio provides `spawn_blocking` to run blocking operations on a dedicated thread
 Actor ←→ [tokio channels] ←→ Blocking Task
   ↑                              ↓
   └──[blocking API]──────────────┘
-     (ask_blocking/tell_blocking)
+     (blocking_ask/blocking_tell)
 ```
 
 ## Implementation
@@ -151,7 +151,7 @@ fn sync_background_task(
             timestamp: std::time::Instant::now(),
         };
 
-        if let Err(e) = actor_ref.tell_blocking(message) {
+        if let Err(e) = actor_ref.blocking_tell(message, None) {
             info!("Background task: failed to send data to actor: {}", e);
             break;
         }
@@ -214,7 +214,7 @@ impl Message<GetState> for SyncDataProcessorActor {
 ## Key Patterns
 
 ### 1. **Proper Blocking API Usage**
-- Use `tell_blocking` and `ask_blocking` only within `spawn_blocking` tasks
+- Use `blocking_tell` and `blocking_ask` only within `spawn_blocking` tasks
 - These APIs are designed for Tokio's blocking thread pool
 - NOT for use in `std::thread::spawn` or general sync code
 

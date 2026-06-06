@@ -63,20 +63,6 @@ These methods on `ActorRef` are designed for use from any thread, including non-
 
 These methods are safe to call from within an existing Tokio runtime context because the timeout implementation spawns a separate thread with its own runtime, avoiding the "cannot start a runtime from within a runtime" panic.
 
-### Deprecated Methods
-
-The older `ask_blocking` and `tell_blocking` methods are deprecated since v0.10.0. Use `blocking_ask` and `blocking_tell` instead:
-
-```rust
-// Old (deprecated):
-// actor_ref.ask_blocking(msg, timeout);
-// actor_ref.tell_blocking(msg, timeout);
-
-// New:
-actor_ref.blocking_ask(msg, timeout);
-actor_ref.blocking_tell(msg, timeout);
-```
-
 ### Considerations
 
 *   **Thread Pool**: `spawn_blocking` uses a dedicated thread pool in Tokio. Be mindful of pool size if spawning many blocking tasks.

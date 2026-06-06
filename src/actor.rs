@@ -116,7 +116,12 @@ pub trait Actor: Sized + Send + 'static {
     type Args: Send;
     /// The error type that can be returned by the actor's lifecycle methods.
     /// Used in [`on_start`](Actor::on_start), [`on_idle`](Actor::on_idle), and [`on_stop`](Actor::on_stop).
-    type Error: Send + Debug;
+    ///
+    /// Requires `Display` (in addition to `Debug`) so a failure surfaced through
+    /// [`ActorResult`](crate::ActorResult) renders as a human-readable message
+    /// (`{}`) instead of only the `{:?}` debug form. `std::error::Error` is
+    /// intentionally *not* required, so plain types like `String` stay usable.
+    type Error: Send + std::fmt::Display + Debug;
     /// Event type carried by streams subscribed via
     /// [`ActorRef::subscribe_idle`](crate::actor_ref::ActorRef::subscribe_idle) and dispatched
     /// to [`on_idle`](Actor::on_idle).
