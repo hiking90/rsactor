@@ -66,6 +66,7 @@ struct MyActorArgs {
 impl Actor for MyActor {
     type Args = MyActorArgs;
     type Error = anyhow::Error;
+    type IdleEvent = (); // No periodic/idle work here (see Pattern 3 for idle streams)
 
     async fn on_start(args: Self::Args, _actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
         // Complex initialization logic
@@ -74,14 +75,6 @@ impl Actor for MyActor {
             connection,
             count: 0,
         })
-    }
-
-    // Optional: background task that runs concurrently with message processing
-    // Return Ok(true) to keep calling on_run, Ok(false) to stop
-    async fn on_run(&mut self, _actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        // Called repeatedly while returning Ok(true)
-        // Use tokio::select! for multiple async operations
-        Ok(true)
     }
 
     // Optional: cleanup when actor stops
@@ -103,44 +96,54 @@ impl MyActor {
 
 ### Pattern 3: Actor with Periodic Tasks
 
-Use `on_run` with `tokio::select!` for timers and async operations:
+Periodic/idle work is driven by `Stream`s you register with `subscribe_idle`. Map each
+stream's items to an `IdleEvent` and react to them in `on_idle`. The idle channel is
+**opt-in** — spawn with `SpawnOptions::new().with_idle()`:
 
 ```rust
-use rsactor::{Actor, ActorRef, ActorWeak, message_handlers};
+use rsactor::{Actor, ActorRef, ActorWeak, SpawnOptions, message_handlers, spawn_with_options};
+use futures::stream::StreamExt;
 use tokio::time::{interval, Duration};
+use tokio_stream::wrappers::IntervalStream;
+
+// The event type yielded by the subscribed stream(s)
+#[derive(Debug, Clone, Copy)]
+struct Tick;
 
 struct PeriodicActor {
-    tick_interval: tokio::time::Interval,
     tick_count: u32,
 }
 
 impl Actor for PeriodicActor {
-    type Args = Self;
+    type Args = ();
     type Error = anyhow::Error;
+    type IdleEvent = Tick; // required associated type
 
-    async fn on_start(args: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(args)
+    async fn on_start(_: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        // Register a periodic stream; the runtime drives it and calls on_idle per tick.
+        actor_ref.subscribe_idle(
+            IntervalStream::new(interval(Duration::from_secs(1))).map(|_| Tick),
+        )?;
+        Ok(Self { tick_count: 0 })
     }
 
-    async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        tokio::select! {
-            _ = self.tick_interval.tick() => {
-                self.tick_count += 1;
-                println!("Tick #{}", self.tick_count);
-            }
-        }
-        Ok(true)  // Continue calling on_run
+    // Called once per yielded event, but only while the mailbox is empty.
+    async fn on_idle(&mut self, _event: Tick, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        self.tick_count += 1;
+        println!("Tick #{}", self.tick_count);
+        Ok(())
     }
 }
 ```
 
-**Spawning:**
+**Spawning** (the idle channel must be enabled, or `subscribe_idle` errors and `on_idle` never fires):
 ```rust
-let (actor_ref, handle) = rsactor::spawn::<PeriodicActor>(PeriodicActor {
-    tick_interval: interval(Duration::from_secs(1)),
-    tick_count: 0,
-});
+let (actor_ref, handle) =
+    spawn_with_options::<PeriodicActor>((), SpawnOptions::new().with_idle());
 ```
+
+> For multiple sources, make `IdleEvent` an enum and `subscribe_idle` one stream per
+> variant; dispatch on the event in `on_idle`.
 
 ## Key Rules
 
@@ -162,14 +165,14 @@ actor_ref.tell(MyMessage { data: "hello".into() }).await?;
 // Request-response (ask)
 let response: String = actor_ref.ask(MyMessage { data: "hello".into() }).await?;
 
-// Stop actor gracefully
-actor_ref.stop().await?;
+// Stop actor gracefully (stop() and kill() are infallible — no `?`)
+actor_ref.stop().await;
 
 // Wait for actor completion
 let result = join_handle.await?;
 match result {
     rsactor::ActorResult::Completed { actor, killed } => { /* success */ }
-    rsactor::ActorResult::Failed { actor, error, phase, killed } => { /* failure */ }
+    rsactor::ActorResult::Failed { actor, error, phase, killed, .. } => { /* failure */ }
 }
 ```
 
@@ -179,10 +182,11 @@ match result {
 use rsactor::{
     Actor,           // Core trait
     ActorRef,        // Strong reference for sending messages
-    ActorWeak,       // Weak reference (used in on_run, on_stop)
+    ActorWeak,       // Weak reference (used in on_idle, on_stop)
     ActorResult,     // Result of actor lifecycle
     message_handlers, // Macro for handler impl block
-    spawn,           // Function to create actors
+    spawn,           // Create actors with default options
+    spawn_with_options, SpawnOptions, // Opt into the idle/priority channels (e.g. with_idle())
     // For polymorphic handler collections
     TellHandler, AskHandler, WeakTellHandler, WeakAskHandler,
     // For type-erased lifecycle management

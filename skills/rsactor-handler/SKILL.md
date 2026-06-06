@@ -181,7 +181,7 @@ let controls: Vec<Box<dyn ActorControl>> = vec![
 // Check status and stop all
 for control in &controls {
     println!("Actor {} alive: {}", control.identity(), control.is_alive());
-    control.stop().await?;
+    control.stop().await; // stop() is infallible (returns ())
 }
 ```
 

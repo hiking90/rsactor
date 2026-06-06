@@ -36,7 +36,7 @@ impl MyActor {
 async fn main() -> anyhow::Result<()> {
     let (actor_ref, handle) = spawn::<MyActor>(MyActor);
     actor_ref.tell(Ping).await?;
-    actor_ref.stop().await?;
+    actor_ref.stop().await; // stop() is infallible
     handle.await?;
     Ok(())
 }
@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
 ```
 spawn()
   → on_start()     [initialization, returns Self]
-  → on_run() loop  [concurrent with message processing]
+  → on_idle()      [reacts to subscribed idle-stream events, concurrent with messages]
   → on_stop()      [cleanup on shutdown]
   → ActorResult    [Completed or Failed]
 ```
@@ -71,14 +71,15 @@ spawn()
 impl Actor for MyActor {
     type Args = MyActorArgs;  // Arguments passed to spawn()
     type Error = anyhow::Error;
+    type IdleEvent = ();      // Event type delivered to on_idle; () when there is no idle work
 
     // Required: Initialize actor state
     async fn on_start(args: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error>;
 
-    // Optional: Background task (called repeatedly while returning Ok(true))
-    // Return Ok(true) to keep calling, Ok(false) to stop idle processing
-    async fn on_run(&mut self, actor_ref: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-        Ok(false)  // Default: no idle processing
+    // Optional: react to events from streams registered with `actor_ref.subscribe_idle(...)`.
+    // Requires the idle channel: spawn with `SpawnOptions::new().with_idle()`.
+    async fn on_idle(&mut self, event: Self::IdleEvent, actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
+        Ok(())  // Default: no-op
     }
 
     // Optional: Cleanup on shutdown
@@ -120,11 +121,12 @@ let result = actor_ref.ask_with_timeout(MyQuery, Duration::from_secs(5)).await?;
 ## Actor Control
 
 ```rust
-// Graceful stop (process remaining messages first)
-actor_ref.stop().await?;
+// Graceful stop (process remaining queued messages first)
+actor_ref.stop().await; // infallible (returns ())
 
-// Immediate stop (skip remaining messages)
-actor_ref.kill().await?;
+// Immediate termination (drop queued messages). kill() is sync and infallible.
+// Cooperative: a running handler finishes first — it cannot interrupt an in-flight `.await`.
+actor_ref.kill();
 
 // Check if alive
 if actor_ref.is_alive() { /* ... */ }
@@ -144,10 +146,11 @@ match result {
         // killed: true if stopped via kill(), false if stop()
         println!("Final state: {:?}", actor);
     }
-    ActorResult::Failed { actor, error, phase, killed } => {
+    ActorResult::Failed { actor, error, phase, killed, .. } => {
         // actor: Option<A> - may be None if failed in on_start
         // error: The error that caused failure
-        // phase: "on_start", "on_run", "on_stop", or "handler"
+        // secondary_error: Option<E> - the on_stop error when phase is OnIdleThenOnStop
+        // phase: FailurePhase::{OnStart, OnIdle, OnStop, OnIdleThenOnStop}
         eprintln!("Failed in {}: {}", phase, error);
     }
 }
@@ -208,7 +211,7 @@ for control in &controls {
 
 // Stop all actors
 for control in &controls {
-    control.stop().await?;
+    control.stop().await; // infallible
 }
 ```
 
@@ -216,19 +219,32 @@ for control in &controls {
 
 ### Periodic Tasks
 
+Register streams with `subscribe_idle` in `on_start`, react in `on_idle`. Requires the
+idle channel — spawn with `SpawnOptions::new().with_idle()`:
+
 ```rust
-async fn on_run(&mut self, _: &ActorWeak<Self>) -> Result<bool, Self::Error> {
-    tokio::select! {
-        _ = self.interval.tick() => {
-            self.do_periodic_work();
-        }
-        _ = self.some_future => {
-            self.handle_event();
-        }
-    }
-    Ok(true)  // Continue calling on_run
+use futures::stream::StreamExt;
+use tokio::time::{interval, Duration};
+use tokio_stream::wrappers::IntervalStream;
+
+#[derive(Clone, Copy)]
+struct Tick;
+// In the Actor impl: `type IdleEvent = Tick;`
+
+async fn on_start(_: Self::Args, actor_ref: &ActorRef<Self>) -> Result<Self, Self::Error> {
+    actor_ref.subscribe_idle(
+        IntervalStream::new(interval(Duration::from_secs(1))).map(|_| Tick),
+    )?;
+    Ok(/* ... */)
+}
+
+async fn on_idle(&mut self, _event: Tick, _: &ActorWeak<Self>) -> Result<(), Self::Error> {
+    self.do_periodic_work();
+    Ok(())
 }
 ```
+
+For multiple sources, make `IdleEvent` an enum and subscribe one stream per variant.
 
 ### Actor Supervision (Parent-Child)
 
@@ -281,7 +297,7 @@ use rsactor::Error;
 fn handle_error(err: &Error) {
     // Check if operation can be retried
     if err.is_retryable() {
-        // Only Timeout errors are retryable
+        // Retryable variants: Timeout and ChannelFull
         println!("Retrying...");
     }
 
@@ -378,7 +394,8 @@ let result: String = actor_ref.blocking_ask(query, Some(Duration::from_secs(10))
 - Check message type matches exactly
 
 ### Actor stops unexpectedly
-- Check `on_run` returns `Ok(true)` or `Ok(false)` (errors cause shutdown)
+- Check `on_idle` returns `Ok(())` (an `Err` shuts the actor down)
+- If `on_idle`/`subscribe_idle` seem to do nothing, confirm the actor was spawned with `SpawnOptions::new().with_idle()` (otherwise `subscribe_idle` returns `Error::IdleChannelNotEnabled`)
 - Check handler errors
 - Use `ActorResult::Failed` to see the error and phase
 
@@ -398,7 +415,7 @@ use rsactor::{
     // Macros
     message_handlers,
     // Functions
-    spawn,
+    spawn, spawn_with_options, SpawnOptions,
     // Handler traits (for polymorphism)
     TellHandler, AskHandler, WeakTellHandler, WeakAskHandler,
     // Control traits (for type-erased lifecycle management)

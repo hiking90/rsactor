@@ -24,11 +24,15 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 
-// Tests that read the global dead-letter counter must not run concurrently
-// with each other within this test binary, otherwise their `before`/`after`
-// captures race. The mutex is held across `.await` points (the test body),
-// so it must be `tokio::sync::Mutex` rather than `std::sync::Mutex`
-// (clippy::await_holding_lock).
+// The dead-letter counter is process-global. Any test that *reads* it
+// (`before`/`after` deltas) must not run concurrently with any test that
+// *generates* a dead letter (a timeout, or a send to a closed/killed actor),
+// or the generator's increment leaks into the reader's measurement window.
+// So BOTH kinds acquire this lock, and every holder fully joins its actor(s)
+// (`handle.await`) before releasing it — guaranteeing no dead letter is
+// recorded after the lock is dropped. The mutex is held across `.await` points
+// (the test body), so it must be `tokio::sync::Mutex` rather than
+// `std::sync::Mutex` (clippy::await_holding_lock).
 fn dead_letter_serial_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -211,6 +215,10 @@ async fn ask_priority_on_disabled_actor_returns_not_enabled_error() {
 
 #[tokio::test]
 async fn priority_bypasses_saturated_regular_mailbox() {
+    // The saturating `tell_with_timeout` below times out and records a dead
+    // letter, so this test must serialize against the dead-letter readers.
+    let _serial = dead_letter_serial_lock().lock().await;
+
     let started = Arc::new(AtomicU32::new(0));
     let release = Arc::new(Notify::new());
 
@@ -218,7 +226,7 @@ async fn priority_bypasses_saturated_regular_mailbox() {
     // actor while a second BlockMe sits in the channel slot. Any further
     // regular send would block on admission.
     let opts = SpawnOptions::new().mailbox_capacity(1).with_priority();
-    let (actor_ref, _handle) =
+    let (actor_ref, handle) =
         spawn_with_options::<BlockingActor>((started.clone(), release.clone()), opts);
 
     // 1) Saturate the regular mailbox: the first BlockMe is being processed,
@@ -261,6 +269,7 @@ async fn priority_bypasses_saturated_regular_mailbox() {
     release.notify_one();
     release.notify_one();
     actor_ref.stop().await;
+    handle.await.unwrap(); // fully quiesce before releasing the serial lock
 }
 
 #[tokio::test]
@@ -283,6 +292,10 @@ async fn ask_priority_returns_typed_reply() {
 
 #[tokio::test]
 async fn kill_overtakes_pending_priority_messages() {
+    // kill() drops the pending priority message, which is recorded as a dead
+    // letter during teardown; serialize against the dead-letter readers.
+    let _serial = dead_letter_serial_lock().lock().await;
+
     let started = Arc::new(AtomicU32::new(0));
     let release = Arc::new(Notify::new());
 
@@ -384,6 +397,11 @@ async fn stop_drain_loop_processes_racing_priority_send() {
     //   this is not currently a concern.
     // - ITERS = 200 keeps the assertion robust across scheduling jitter while
     //   still completing in well under a second on a typical laptop.
+
+    // Each iteration's racing tell_priority calls produce Timeout/Send dead
+    // letters; serialize against the dead-letter readers. (Each iteration joins
+    // its actor below, so nothing leaks past this lock.)
+    let _serial = dead_letter_serial_lock().lock().await;
 
     const ITERS: usize = 200;
     let mut saw_post_close_send = false;
@@ -738,11 +756,15 @@ async fn blocking_priority_on_disabled_actor_returns_not_enabled() {
 
 #[tokio::test]
 async fn capacity_one_serializes_concurrent_priority_admission() {
+    // One racing send times out and kill() drops the admitted priority message —
+    // both record dead letters; serialize against the dead-letter readers.
+    let _serial = dead_letter_serial_lock().lock().await;
+
     let started = Arc::new(AtomicU32::new(0));
     let release = Arc::new(Notify::new());
 
     let opts = SpawnOptions::new().mailbox_capacity(1).with_priority();
-    let (actor_ref, _handle) =
+    let (actor_ref, handle) =
         spawn_with_options::<BlockingActor>((started.clone(), release.clone()), opts);
 
     actor_ref.tell(BlockMe).await.unwrap();
@@ -781,6 +803,7 @@ async fn capacity_one_serializes_concurrent_priority_admission() {
 
     release.notify_one();
     actor_ref.kill();
+    let _ = handle.await; // fully quiesce before releasing the serial lock
 }
 
 // ---------------------------------------------------------------------------
