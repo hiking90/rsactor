@@ -103,9 +103,9 @@ This section details how an actor is terminated using `ActorRef::stop` (graceful
 2.  **`kill()` (Immediate Termination):**
     a.  The client calls `actor_ref.kill()`.
     b.  `ActorRef::kill` sends a `ControlSignal::Terminate` message via the dedicated, prioritized termination channel (`terminate_sender`).
-    c.  The actor's `tokio::select!` loop is `biased` to prioritize checking the `terminate_receiver`.
-    d.  Upon receiving `ControlSignal::Terminate`:
-        i.  The message loop immediately breaks out of the message processing loop, effectively ignoring any unprocessed messages in the main mailbox.
+    c.  The actor's `tokio::select!` loop is `biased` to prioritize checking the `terminate_receiver`. Note this is **cooperative**: the terminate branch is only evaluated when the loop reaches `select!`, so a message handler (or `on_idle`) that is already running is *not* interrupted — it runs to completion first, and a handler blocked forever blocks the kill too.
+    d.  Once control returns to the loop and `ControlSignal::Terminate` is observed:
+        i.  The message loop breaks out of the message processing loop, effectively ignoring any unprocessed messages still queued in the main mailbox.
         ii. It calls `on_stop(&actor_weak, true)` with `killed: true`.
     e.  The `JoinHandle` resolves with `ActorResult::Completed { actor: final_actor_state, killed: true }`.
 
