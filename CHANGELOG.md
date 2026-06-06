@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Target release: **0.16.0**. This release reworks the actor idle / periodic-work
-model, makes the lifecycle control APIs (`stop` / `kill`) infallible, and
-hardens error reporting. Most call sites are mechanical to update — the
-compiler points at each one. See
+## [0.16.0] - 2026-06-06
+
+This release reworks the actor idle / periodic-work model, makes the lifecycle
+control APIs (`stop` / `kill`) infallible, and hardens error reporting. Most
+call sites are mechanical to update — the compiler points at each one. See
 [Migrating from 0.15.x to 0.16.0](#migrating-from-015x-to-0160).
 
 ### ⚠️ BREAKING CHANGES

@@ -913,8 +913,19 @@ impl<T: Actor> ActorRef<T> {
 
     /// Sends an immediate termination signal to the actor.
     ///
-    /// The actor will stop processing messages and shut down as soon as possible.
-    /// The actor's final result will indicate it was killed.
+    /// The actor stops as soon as it returns to its message loop: any messages still
+    /// queued in the mailbox are dropped, then `on_stop(killed = true)` runs and the
+    /// actor's final result indicates it was killed.
+    ///
+    /// **Cooperative, not preemptive.** `kill()` cannot interrupt a message handler
+    /// (or [`on_idle`](crate::Actor::on_idle)) that is *already executing* — the
+    /// in-flight future runs until its next return before the terminate signal is
+    /// observed. A handler blocked forever on an `.await`, or spinning in a
+    /// synchronous/CPU-bound loop, therefore blocks `kill()` as well; the terminate
+    /// signal is delivered but cannot be acted on until control returns to the loop.
+    /// Guard against this with timeouts on external operations, the
+    /// `deadlock-detection` feature for `ask` cycles, and by isolating blocking work
+    /// (e.g. `tokio::task::spawn_blocking` or a separate process).
     ///
     /// This method is idempotent: a `Full` or `Closed` terminate channel is treated as
     /// "termination already in flight" — the desired terminal state is met either way.

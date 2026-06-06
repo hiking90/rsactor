@@ -230,7 +230,7 @@ A8: To stop an actor, you can use:
     ```rust
     actor_ref.kill();
     ```
-    This abruptly stops the actor. The actor will not finish processing its current message, but will call `on_stop(killed=true)` before terminating.
+    This drops any messages still queued in the mailbox and terminates as soon as the actor returns to its message loop, calling `on_stop(killed=true)` before terminating. It is **cooperative, not preemptive**: a handler (or `on_idle`) that is *already running* finishes first — `kill()` cannot interrupt an in-flight `.await`, so a handler blocked forever blocks `kill()` too. See **Q: When should I use the priority channel vs the regular mailbox vs `kill()`?** for how to guard against hangs (timeouts, the `deadlock-detection` feature, isolating blocking work).
 
 3.  **From within the actor**:
     An actor can stop itself by calling `actor_ref.stop()` or `actor_ref.kill()` within its own methods.

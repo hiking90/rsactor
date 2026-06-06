@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
 ### Actor Termination
 
 - **`stop()`**: Graceful shutdown - processes remaining messages
-- **`kill()`**: Immediate termination - stops processing immediately
+- **`kill()`**: Immediate termination - drops queued messages and stops. Cooperative, not preemptive: a handler that is already running finishes first (`kill()` cannot interrupt an in-flight `.await`)
 
 ### Type Safety
 
