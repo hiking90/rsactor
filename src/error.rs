@@ -67,12 +67,25 @@ pub enum Error {
         /// The expected type name that the downcast failed to match
         expected_type: &'static str,
     },
-    /// Error when a runtime operation fails
+    /// Error from a runtime-level operation.
+    ///
+    /// Emitted when a `blocking_*` call has to run on a dedicated thread with a
+    /// temporary Tokio runtime (because the caller is not already inside a
+    /// multi-thread runtime) and that runtime fails to build, or its worker
+    /// thread panics. Actor *lifecycle* failures (`on_start` / `on_idle` /
+    /// `on_stop`) are **not** reported here — they surface through
+    /// [`ActorResult::Failed`](crate::ActorResult) carrying the actor's own
+    /// error type.
     Runtime {
         /// ID of the actor where the runtime error occurred
         identity: Identity,
         /// Additional context about the error
         details: String,
+        /// Underlying cause, when one exists (e.g. the [`std::io::Error`] from
+        /// failing to build the runtime). Returned from
+        /// [`Error::source`](std::error::Error::source). `None` when the failure
+        /// has no chainable source (e.g. a worker-thread panic).
+        source: Option<std::sync::Arc<dyn std::error::Error + Send + Sync>>,
     },
     /// Error related to mailbox capacity configuration
     MailboxCapacity {
@@ -156,7 +169,9 @@ impl std::fmt::Display for Error {
                     "Failed to downcast reply from actor {identity} to expected type '{expected_type}'"
                 )
             }
-            Error::Runtime { identity, details } => {
+            Error::Runtime {
+                identity, details, ..
+            } => {
                 write!(f, "Runtime error in actor {identity}: {details}")
             }
             Error::MailboxCapacity { message } => {
@@ -191,6 +206,10 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Join { source, .. } => Some(source.as_ref()),
+            Error::Runtime {
+                source: Some(source),
+                ..
+            } => Some(source.as_ref()),
             _ => None,
         }
     }
@@ -300,11 +319,10 @@ impl Error {
                 "This usually indicates a bug in handler implementation",
             ],
             Error::Runtime { .. } => &[
-                "Check if on_start() or on_idle() returned an error",
-                "Look for panic messages in the error details field",
-                "Use `ActorResult::is_startup_failed()` or `is_runtime_failed()` to identify failure phase",
-                "Call `ActorResult::error()` to get the underlying error details",
-                "Initialize tracing-subscriber and set RUST_LOG=debug for lifecycle diagnostics",
+                "Emitted when a blocking_* call fails to build or run its dedicated temporary runtime",
+                "Match on `Error::Runtime { source, .. }` and inspect `source` for the underlying cause (e.g. std::io::Error)",
+                "This usually indicates OS resource exhaustion (unable to spawn a thread or build a runtime)",
+                "Prefer calling blocking_* from within an existing multi-thread runtime, or use the async ask()/tell() APIs",
             ],
             Error::MailboxCapacity { .. } => &[
                 "Mailbox capacity must be greater than 0",

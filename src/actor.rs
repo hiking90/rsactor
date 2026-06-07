@@ -145,7 +145,8 @@ pub trait Actor: Sized + Send + 'static {
     /// This method is the initialization point for an actor and a fundamental part of the actor model design.
     /// Unlike traditional object construction, the actor's instance is created within this asynchronous method,
     /// allowing for complex initialization that may require awaiting resources. This method is called by
-    /// [`spawn`](crate::spawn) or [`spawn_with_mailbox_capacity`](crate::spawn_with_mailbox_capacity).
+    /// [`spawn`](crate::spawn), [`spawn_with_mailbox_capacity`](crate::spawn_with_mailbox_capacity),
+    /// or [`spawn_with_options`](crate::spawn_with_options).
     ///
     /// # Actor State Initialization
     ///
@@ -554,6 +555,11 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
             };
         }
     };
+
+    // Anchor the metrics uptime baseline to on_start completion (the actor_ref
+    // strong reference is still held here; it is dropped just below).
+    #[cfg(feature = "metrics")]
+    actor_ref.metrics.mark_started();
 
     debug!("Actor {actor_id} runtime starting - entering main processing loop.");
 

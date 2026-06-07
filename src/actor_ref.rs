@@ -36,7 +36,9 @@ fn current_multi_thread_handle() -> Option<Handle> {
 /// identically.
 ///
 /// `panic_msg` describes the failure surfaced when the spawned thread itself
-/// panics (the `join.join()` returns `Err`); it is wrapped in `Error::Send`.
+/// panics (the `join.join()` returns `Err`); it is wrapped in `Error::Runtime`.
+/// A failure to build the temporary runtime is also reported as `Error::Runtime`,
+/// carrying the underlying [`std::io::Error`] as its [`source`](std::error::Error::source).
 fn run_blocking_with_runtime<F, R>(identity: Identity, panic_msg: &'static str, fut: F) -> Result<R>
 where
     F: std::future::Future<Output = Result<R>> + Send + 'static,
@@ -46,17 +48,19 @@ where
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
-            .map_err(|e| Error::Send {
+            .map_err(|e| Error::Runtime {
                 identity,
-                details: format!("Failed to create runtime: {}", e),
+                details: "Failed to build blocking runtime".to_string(),
+                source: Some(std::sync::Arc::new(e)),
             })?;
         runtime.block_on(fut)
     });
 
     join.join().unwrap_or_else(|_| {
-        Err(Error::Send {
+        Err(Error::Runtime {
             identity,
             details: panic_msg.to_string(),
+            source: None,
         })
     })
 }
@@ -95,7 +99,11 @@ use std::sync::Arc;
 ///   - [`blocking_ask`](ActorRef::blocking_ask): Send a message and block until a typed reply is received (no runtime context required).
 ///   - [`blocking_tell`](ActorRef::blocking_tell): Send a message and block until it is sent (no runtime context required).
 ///
-///   The new `blocking_*` methods use Tokio's underlying `blocking_send` and `blocking_recv` and can be used from any thread.
+///   The `blocking_*` methods can be called from any thread and from within a
+///   multi-thread Tokio runtime. The exact mechanism (`block_in_place` +
+///   `block_on`, `blocking_send` / `blocking_recv`, or a temporary runtime on a
+///   dedicated thread) depends on the calling context — see each method's
+///   "Execution paths" section for details.
 ///
 /// - **Control Methods**:
 ///   - [`stop`](ActorRef::stop): Gracefully stop the actor.
@@ -203,6 +211,12 @@ impl<T: Actor> ActorRef<T> {
     /// The optional priority channel is intentionally **not** consulted: it is a
     /// secondary channel, and the actor is considered alive as long as the regular
     /// mailbox and the terminate channel remain open.
+    ///
+    /// **Note**: This is a heuristic, point-in-time check. The channels are
+    /// closed only after the actor's loop exits, so this can briefly report
+    /// `true` after `on_stop` has already run, and a `true` result does not
+    /// guarantee that a subsequent send will succeed. A successful send is the
+    /// only definitive liveness signal.
     #[inline]
     pub fn is_alive(&self) -> bool {
         // Both channels must be open for the actor to be considered alive
@@ -773,6 +787,17 @@ impl<T: Actor> ActorRef<T> {
     /// worker thread for the duration of the call. Avoid invoking from
     /// runtimes with very few workers; prefer [`tell_priority`](Self::tell_priority)
     /// directly from async code where possible.
+    ///
+    /// # Deadlock warning
+    ///
+    /// Never call this (or any `blocking_*` method) from inside the actor's own
+    /// message handler — directly on `self`, or transitively via a cycle that
+    /// routes back into this actor. If the priority slot is full, the call parks
+    /// the actor's message loop synchronously while waiting for admission that
+    /// only that same loop could make room for — an unrecoverable hang that
+    /// `kill()` cannot interrupt (note that `deadlock-detection` only tracks
+    /// `ask` cycles, not `tell`). Prefer the async
+    /// [`tell_priority`](Self::tell_priority) from handler code.
     pub fn blocking_tell_priority<M>(&self, msg: M, timeout: Duration) -> Result<()>
     where
         M: Send + 'static,
@@ -872,6 +897,17 @@ impl<T: Actor> ActorRef<T> {
     /// On a multi-thread runtime the `block_in_place` path holds the calling
     /// worker thread for the duration of the call. Avoid invoking from
     /// runtimes with very few workers.
+    ///
+    /// # Deadlock warning
+    ///
+    /// Never call this (or any `blocking_*` method) from inside the actor's own
+    /// message handler — directly on `self`, or transitively via a cycle that
+    /// asks back into this actor. The call parks the actor's message loop
+    /// synchronously while waiting for a reply that only that same loop could
+    /// produce — an unrecoverable hang that `kill()` cannot interrupt. Enable
+    /// the `deadlock-detection` feature to turn such a cycle into an immediate
+    /// panic instead, or use the async [`ask_priority`](Self::ask_priority) from
+    /// handler code.
     pub fn blocking_ask_priority<M>(&self, msg: M, timeout: Duration) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -1008,6 +1044,17 @@ impl<T: Actor> ActorRef<T> {
     /// worker thread for the duration of the call. Avoid invoking from
     /// runtimes with very few workers; prefer [`tell`](Self::tell) directly
     /// from async code where possible.
+    ///
+    /// # Deadlock warning
+    ///
+    /// Never call this (or any `blocking_*` method) from inside the actor's own
+    /// message handler — directly on `self`, or transitively via a cycle that
+    /// routes back into this actor. If the target mailbox is full, the call
+    /// parks the actor's message loop synchronously while waiting for admission
+    /// that only that same loop could make room for — an unrecoverable hang that
+    /// `kill()` cannot interrupt (note that `deadlock-detection` only tracks
+    /// `ask` cycles, not `tell`). Prefer the async [`tell`](Self::tell) from
+    /// handler code.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_blocking_tell",
@@ -1184,6 +1231,16 @@ impl<T: Actor> ActorRef<T> {
     /// worker thread for the duration of the call. Avoid invoking from
     /// runtimes with very few workers; prefer [`ask`](Self::ask) directly
     /// from async code where possible.
+    ///
+    /// # Deadlock warning
+    ///
+    /// Never call this (or any `blocking_*` method) from inside the actor's own
+    /// message handler — directly on `self`, or transitively via a cycle that
+    /// asks back into this actor. The call parks the actor's message loop
+    /// synchronously while waiting for a reply that only that same loop could
+    /// produce — an unrecoverable hang that `kill()` cannot interrupt. Enable
+    /// the `deadlock-detection` feature to turn such a cycle into an immediate
+    /// panic instead, or use the async [`ask`](Self::ask) from handler code.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_blocking_ask",
@@ -1431,8 +1488,8 @@ impl<T: Actor> ActorRef<T> {
 
     /// Returns a snapshot of all metrics for this actor.
     ///
-    /// The snapshot includes message count, processing times, error count, uptime,
-    /// and last activity timestamp.
+    /// The snapshot includes message count, processing times, priority message
+    /// counts, uptime, and last activity timestamp.
     ///
     /// # Example
     ///

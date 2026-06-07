@@ -10,7 +10,7 @@
 //!
 //! - **Message count**: Total number of messages processed
 //! - **Processing time**: Average and maximum message processing times
-//! - **Error count**: Total number of errors during message handling
+//! - **Priority messages**: Count and processing times for priority-channel messages
 //! - **Uptime**: Time elapsed since actor started
 //! - **Last activity**: Timestamp of most recent message processing
 //!

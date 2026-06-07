@@ -45,6 +45,7 @@ fn test_is_retryable_for_all_variants() {
     let runtime_err = Error::Runtime {
         identity,
         details: "test error".into(),
+        source: None,
     };
     assert!(!runtime_err.is_retryable());
 
@@ -80,6 +81,7 @@ fn test_all_errors_have_debugging_tips() {
         Error::Runtime {
             identity,
             details: "test".into(),
+            source: None,
         },
         Error::MailboxCapacity { message: "test" },
     ];
@@ -100,18 +102,20 @@ fn test_runtime_error_tips_are_specific() {
     let err = Error::Runtime {
         identity,
         details: "test".into(),
+        source: None,
     };
     let tips = err.debugging_tips();
 
-    // Verify tips mention specific lifecycle methods
+    // Verify tips reflect the real source of this error: a failed blocking_*
+    // temporary runtime, with a chainable `source` for the underlying cause.
     let tips_text = tips.join(" ");
     assert!(
-        tips_text.contains("on_start") || tips_text.contains("on_run"),
-        "Runtime tips should mention lifecycle methods"
+        tips_text.contains("blocking"),
+        "Runtime tips should mention the blocking_* runtime source"
     );
     assert!(
-        tips_text.contains("ActorResult"),
-        "Runtime tips should mention ActorResult"
+        tips_text.contains("source"),
+        "Runtime tips should point at the chainable source"
     );
 }
 
@@ -184,6 +188,7 @@ fn test_error_display_all_variants() {
         Error::Runtime {
             identity,
             details: "panic in handler".into(),
+            source: None,
         },
         Error::MailboxCapacity {
             message: "capacity must be > 0",
@@ -798,6 +803,7 @@ fn test_error_source_returns_none_for_non_join() {
         Error::Runtime {
             identity,
             details: "test".into(),
+            source: None,
         },
         Error::MailboxCapacity { message: "test" },
     ];
@@ -809,6 +815,27 @@ fn test_error_source_returns_none_for_non_join() {
             err
         );
     }
+}
+
+#[test]
+fn test_runtime_error_with_source_exposes_source() {
+    use std::error::Error as StdError;
+
+    let identity = Identity::new(1, "TestActor");
+    let io_err = std::io::Error::other("boom");
+    let err = Error::Runtime {
+        identity,
+        details: "Failed to build blocking runtime".into(),
+        source: Some(std::sync::Arc::new(io_err)),
+    };
+
+    let source = err
+        .source()
+        .expect("Runtime error with a cause should expose source()");
+    assert!(
+        source.to_string().contains("boom"),
+        "source() should surface the underlying io::Error message"
+    );
 }
 
 #[tokio::test]
