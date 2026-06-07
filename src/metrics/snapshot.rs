@@ -54,7 +54,10 @@ pub struct MetricsSnapshot {
 
     /// Time elapsed since the actor was started.
     ///
-    /// This is measured from when the actor's `on_start` completed successfully.
+    /// This is measured from when the actor's `on_start` completed successfully
+    /// (the point the actor enters its message loop). Before `on_start`
+    /// completes, the value falls back to the time since the metrics collector
+    /// was created at [`spawn`](crate::spawn).
     pub uptime: Duration,
 
     /// Timestamp of the last message processing completion.

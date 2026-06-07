@@ -673,6 +673,7 @@ async fn test_error_runtime_display_format() {
     let error = rsactor::Error::Runtime {
         identity,
         details: "Test runtime error details".to_string(),
+        source: None,
     };
 
     let display_str = format!("{error}");

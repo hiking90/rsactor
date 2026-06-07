@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
 use super::MetricsSnapshot;
@@ -40,8 +41,13 @@ pub(crate) struct MetricsCollector {
     max_priority_processing_nanos: AtomicU64,
     /// Last activity timestamp as milliseconds since UNIX_EPOCH
     last_activity_millis: AtomicU64,
-    /// When the actor started (for uptime calculation)
+    /// Collector construction time. Used as the uptime baseline until the actor
+    /// finishes `on_start` (see `started_at`).
     start_instant: Instant,
+    /// When the actor's `on_start` completed successfully. Set once via
+    /// [`mark_started`](Self::mark_started); until then `uptime` falls back to
+    /// `start_instant`.
+    started_at: OnceLock<Instant>,
 }
 
 impl MetricsCollector {
@@ -56,7 +62,23 @@ impl MetricsCollector {
             max_priority_processing_nanos: AtomicU64::new(0),
             last_activity_millis: AtomicU64::new(0),
             start_instant: Instant::now(),
+            started_at: OnceLock::new(),
         }
+    }
+
+    /// Marks the moment the actor's `on_start` completed successfully, which
+    /// becomes the baseline for [`uptime`](Self::uptime). Idempotent — only the
+    /// first call takes effect.
+    #[inline]
+    pub fn mark_started(&self) {
+        let _ = self.started_at.set(Instant::now());
+    }
+
+    /// Returns the instant uptime is measured from: the `on_start`-completion
+    /// time once recorded, otherwise the collector's construction time.
+    #[inline]
+    fn uptime_baseline(&self) -> Instant {
+        self.started_at.get().copied().unwrap_or(self.start_instant)
     }
 
     /// Records a completed message processing with its duration.
@@ -156,7 +178,7 @@ impl MetricsCollector {
             max_priority_processing_time: Duration::from_nanos(
                 self.max_priority_processing_nanos.load(Ordering::Relaxed),
             ),
-            uptime: self.start_instant.elapsed(),
+            uptime: self.uptime_baseline().elapsed(),
             last_activity: self.get_last_activity(),
         }
     }
@@ -212,7 +234,7 @@ impl MetricsCollector {
     /// Returns the uptime since actor start.
     #[inline]
     pub fn uptime(&self) -> Duration {
-        self.start_instant.elapsed()
+        self.uptime_baseline().elapsed()
     }
 
     /// Returns the last activity timestamp.
@@ -259,6 +281,13 @@ impl<'a> MessageProcessingGuard<'a> {
 impl Drop for MessageProcessingGuard<'_> {
     #[inline]
     fn drop(&mut self) {
+        // Only count a message whose handler returned normally. If the handler
+        // panicked, this guard is dropped while the task unwinds; recording here
+        // would inflate `message_count`, which is documented as the number of
+        // *successfully processed* messages.
+        if std::thread::panicking() {
+            return;
+        }
         self.collector.record_message(self.start.elapsed());
     }
 }
@@ -285,6 +314,11 @@ impl<'a> PriorityMessageProcessingGuard<'a> {
 impl Drop for PriorityMessageProcessingGuard<'_> {
     #[inline]
     fn drop(&mut self) {
+        // See `MessageProcessingGuard::drop`: skip recording a handler that
+        // panicked so the priority count reflects only successful processing.
+        if std::thread::panicking() {
+            return;
+        }
         self.collector.record_priority_message(self.start.elapsed());
     }
 }
@@ -339,5 +373,55 @@ mod tests {
         let uptime2 = collector.uptime();
 
         assert!(uptime2 > uptime1);
+    }
+
+    #[test]
+    fn test_mark_started_resets_uptime_baseline() {
+        let collector = MetricsCollector::new();
+        std::thread::sleep(Duration::from_millis(20));
+        let before = collector.uptime();
+        collector.mark_started();
+        let after = collector.uptime();
+
+        // After marking on_start completion, uptime is measured from ~now, so it
+        // is smaller than the pre-mark value that included the 20ms sleep.
+        assert!(
+            after < before,
+            "mark_started should reset the uptime baseline (before={before:?}, after={after:?})"
+        );
+    }
+
+    #[test]
+    fn test_guard_skips_record_on_panic() {
+        let collector = MetricsCollector::new();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = MessageProcessingGuard::new(&collector);
+            panic!("handler panicked");
+        }));
+
+        assert!(result.is_err(), "the closure should have panicked");
+        assert_eq!(
+            collector.message_count(),
+            0,
+            "a panicking handler must not be counted as successfully processed"
+        );
+    }
+
+    #[test]
+    fn test_priority_guard_skips_record_on_panic() {
+        let collector = MetricsCollector::new();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = PriorityMessageProcessingGuard::new(&collector);
+            panic!("priority handler panicked");
+        }));
+
+        assert!(result.is_err(), "the closure should have panicked");
+        assert_eq!(
+            collector.priority_message_count(),
+            0,
+            "a panicking priority handler must not be counted as successfully processed"
+        );
     }
 }
