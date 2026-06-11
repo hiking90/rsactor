@@ -250,78 +250,13 @@ impl Default for MetricsCollector {
     }
 }
 
-/// RAII guard for measuring message processing time.
-///
-/// When this guard is dropped, it automatically records the elapsed time
-/// to the associated `MetricsCollector`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let guard = MessageProcessingGuard::new(&collector);
-/// // ... process message ...
-/// drop(guard); // Automatically records duration
-/// ```
-pub(crate) struct MessageProcessingGuard<'a> {
-    collector: &'a MetricsCollector,
-    start: Instant,
-}
-
-impl<'a> MessageProcessingGuard<'a> {
-    /// Creates a new guard that will record to the given collector.
-    #[inline]
-    pub fn new(collector: &'a MetricsCollector) -> Self {
-        Self {
-            collector,
-            start: Instant::now(),
-        }
-    }
-}
-
-impl Drop for MessageProcessingGuard<'_> {
-    #[inline]
-    fn drop(&mut self) {
-        // Only count a message whose handler returned normally. If the handler
-        // panicked, this guard is dropped while the task unwinds; recording here
-        // would inflate `message_count`, which is documented as the number of
-        // *successfully processed* messages.
-        if std::thread::panicking() {
-            return;
-        }
-        self.collector.record_message(self.start.elapsed());
-    }
-}
-
-/// RAII guard for measuring priority message processing time.
-///
-/// Mirrors [`MessageProcessingGuard`] but records into the priority counters so the two
-/// channels can be observed independently.
-pub(crate) struct PriorityMessageProcessingGuard<'a> {
-    collector: &'a MetricsCollector,
-    start: Instant,
-}
-
-impl<'a> PriorityMessageProcessingGuard<'a> {
-    #[inline]
-    pub fn new(collector: &'a MetricsCollector) -> Self {
-        Self {
-            collector,
-            start: Instant::now(),
-        }
-    }
-}
-
-impl Drop for PriorityMessageProcessingGuard<'_> {
-    #[inline]
-    fn drop(&mut self) {
-        // See `MessageProcessingGuard::drop`: skip recording a handler that
-        // panicked so the priority count reflects only successful processing.
-        if std::thread::panicking() {
-            return;
-        }
-        self.collector.record_priority_message(self.start.elapsed());
-    }
-}
+// NOTE: recording is *not* RAII-based. The runtime calls `record_message` /
+// `record_priority_message` explicitly after the handler future returns
+// normally (see `process_envelope!` in actor.rs). A drop-guard would also fire
+// when the actor task is cancelled mid-handler (`JoinHandle::abort`, runtime
+// shutdown) — a path that is neither a panic nor a success — and would record
+// a partially-processed message against the documented "successfully
+// processed" counters.
 
 #[cfg(test)]
 mod tests {
@@ -353,19 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn test_guard_records_duration() {
-        let collector = MetricsCollector::new();
-
-        {
-            let _guard = MessageProcessingGuard::new(&collector);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        assert_eq!(collector.message_count(), 1);
-        assert!(collector.max_processing_time() >= Duration::from_millis(10));
-    }
-
-    #[test]
     fn test_uptime_increases() {
         let collector = MetricsCollector::new();
         let uptime1 = collector.uptime();
@@ -388,40 +310,6 @@ mod tests {
         assert!(
             after < before,
             "mark_started should reset the uptime baseline (before={before:?}, after={after:?})"
-        );
-    }
-
-    #[test]
-    fn test_guard_skips_record_on_panic() {
-        let collector = MetricsCollector::new();
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = MessageProcessingGuard::new(&collector);
-            panic!("handler panicked");
-        }));
-
-        assert!(result.is_err(), "the closure should have panicked");
-        assert_eq!(
-            collector.message_count(),
-            0,
-            "a panicking handler must not be counted as successfully processed"
-        );
-    }
-
-    #[test]
-    fn test_priority_guard_skips_record_on_panic() {
-        let collector = MetricsCollector::new();
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = PriorityMessageProcessingGuard::new(&collector);
-            panic!("priority handler panicked");
-        }));
-
-        assert!(result.is_err(), "the closure should have panicked");
-        assert_eq!(
-            collector.priority_message_count(),
-            0,
-            "a panicking priority handler must not be counted as successfully processed"
         );
     }
 }

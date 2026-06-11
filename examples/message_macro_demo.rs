@@ -98,8 +98,8 @@ async fn main() -> Result<()> {
                 actor.value, killed
             );
         }
-        rsactor::ActorResult::Failed { error, .. } => {
-            println!("❌ Calculator failed: {error}");
+        rsactor::ActorResult::Failed { failure, .. } => {
+            println!("❌ Calculator failed: {}", failure.error());
         }
     }
 

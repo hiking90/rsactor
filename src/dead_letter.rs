@@ -146,7 +146,10 @@ impl std::fmt::Display for DeadLetterReason {
 ///
 /// * `identity` - The identity of the actor that failed to receive the message
 /// * `reason` - Why the message became a dead letter
-/// * `operation` - The operation that failed ("tell", "ask", "blocking_tell", etc.)
+/// * `operation` - The logical operation that failed ("tell", "ask",
+///   "tell_priority", "ask_priority"). Blocking variants record the same
+///   label as their async counterparts so the same call site aggregates to
+///   one operation regardless of which execution path it took.
 ///
 /// # Type Parameters
 ///
@@ -158,11 +161,7 @@ impl std::fmt::Display for DeadLetterReason {
 /// The `#[cold]` attribute hints to the compiler that this function is rarely
 /// called, allowing better optimization of the hot path (successful message delivery).
 #[cold]
-pub(crate) fn record<M: 'static>(
-    identity: Identity,
-    reason: DeadLetterReason,
-    operation: &'static str,
-) {
+pub(crate) fn record<M>(identity: Identity, reason: DeadLetterReason, operation: &'static str) {
     #[cfg(any(test, feature = "test-utils"))]
     DEAD_LETTER_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -185,10 +184,16 @@ pub fn dead_letter_count() -> u64 {
     DEAD_LETTER_COUNT.load(Ordering::Relaxed)
 }
 
-/// Resets the dead letter counter.
+/// Atomically resets the dead letter counter and returns the value it held.
+///
+/// The read-and-reset is a single atomic `swap`, so no increment can be lost
+/// *between* reading and resetting. Dead letters recorded concurrently with
+/// the call still race with it (they land in either the returned value or the
+/// fresh count) — serialize generators against this call when exact
+/// accounting matters.
 ///
 /// This function is only available when the `test-utils` feature is enabled.
 #[cfg(any(test, feature = "test-utils"))]
-pub fn reset_dead_letter_count() {
-    DEAD_LETTER_COUNT.store(0, Ordering::Relaxed);
+pub fn reset_dead_letter_count() -> u64 {
+    DEAD_LETTER_COUNT.swap(0, Ordering::Relaxed)
 }

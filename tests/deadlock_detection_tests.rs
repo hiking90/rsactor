@@ -369,3 +369,175 @@ async fn test_sequential_ask_no_false_positive() {
     let _ = b_handle.await;
     let _ = c_handle.await;
 }
+
+// ============================================================
+// Reply-time edge removal: no false positive in the window
+// between B sending its reply and A's ask future resuming
+// ============================================================
+
+#[derive(Debug)]
+struct FpA;
+#[derive(Debug)]
+struct FpB;
+
+#[derive(Debug)]
+struct FpPing;
+struct FpTrigger(ActorRef<FpB>);
+struct FpMsg1(ActorRef<FpA>);
+struct FpMsg2(ActorRef<FpA>);
+
+impl Actor for FpA {
+    type Args = ();
+    type Error = anyhow::Error;
+    type IdleEvent = ();
+
+    async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(FpA)
+    }
+}
+
+impl Actor for FpB {
+    type Args = ();
+    type Error = anyhow::Error;
+    type IdleEvent = ();
+
+    async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(FpB)
+    }
+}
+
+impl Message<FpPing> for FpA {
+    type Reply = u32;
+
+    async fn handle(&mut self, _: FpPing, _: &ActorRef<Self>) -> u32 {
+        7
+    }
+}
+
+impl Message<FpTrigger> for FpA {
+    type Reply = u32;
+
+    async fn handle(&mut self, msg: FpTrigger, actor_ref: &ActorRef<Self>) -> u32 {
+        // A asks B from inside a handler → edge A->B registered.
+        msg.0.ask(FpMsg1(actor_ref.clone())).await.unwrap()
+    }
+}
+
+impl Message<FpMsg1> for FpB {
+    type Reply = u32;
+
+    async fn handle(&mut self, msg: FpMsg1, actor_ref: &ActorRef<Self>) -> u32 {
+        // Queue FpMsg2 before replying; the reply to A is sent when this
+        // handler returns, and B's very next message asks back into A.
+        actor_ref.tell(FpMsg2(msg.0)).await.unwrap();
+        1
+    }
+}
+
+impl Message<FpMsg2> for FpB {
+    type Reply = u32;
+
+    async fn handle(&mut self, msg: FpMsg2, _: &ActorRef<Self>) -> u32 {
+        // Regression: with caller-side-only edge removal, the stale A->B edge
+        // was still in the wait-for graph here (A's ask future had not been
+        // polled yet), so this ask closed a phantom cycle and panicked even
+        // though A was already runnable. Reply-time edge removal (the token
+        // carried in the ask envelope) must make this succeed.
+        msg.0.ask(FpPing).await.unwrap()
+    }
+}
+
+#[tokio::test]
+async fn test_reply_send_window_has_no_false_positive() {
+    let (a_ref, a_handle) = spawn::<FpA>(());
+    let (b_ref, b_handle) = spawn::<FpB>(());
+
+    let r = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        a_ref.ask(FpTrigger(b_ref.clone())),
+    )
+    .await
+    .expect("must not hang")
+    .expect("must not error");
+    assert_eq!(r, 1);
+
+    // Let B process FpMsg2 — its ask back into A must not panic.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        b_ref.is_alive(),
+        "B must survive: the ask issued right after replying to A must not \
+         trip a false-positive deadlock panic"
+    );
+
+    drop(a_ref);
+    drop(b_ref);
+    let _ = a_handle.await;
+    let _ = b_handle.await;
+}
+
+// ============================================================
+// Slow-path detection: blocking_ask from a current_thread
+// runtime handler still panics immediately on a self-cycle
+// ============================================================
+
+#[derive(Debug)]
+struct SlowPathActor;
+
+#[derive(Debug)]
+struct PlainPing;
+#[derive(Debug)]
+struct BlockingSelfAsk;
+
+impl Actor for SlowPathActor {
+    type Args = ();
+    type Error = anyhow::Error;
+    type IdleEvent = ();
+
+    async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(SlowPathActor)
+    }
+}
+
+impl Message<PlainPing> for SlowPathActor {
+    type Reply = u32;
+
+    async fn handle(&mut self, _: PlainPing, _: &ActorRef<Self>) -> u32 {
+        1
+    }
+}
+
+impl Message<BlockingSelfAsk> for SlowPathActor {
+    type Reply = u32;
+
+    async fn handle(&mut self, _: BlockingSelfAsk, actor_ref: &ActorRef<Self>) -> u32 {
+        // On a current_thread runtime the blocking_* call takes the
+        // dedicated-thread slow path. Regression: the CURRENT_ACTOR
+        // task-local did not propagate to that thread, so this self-cycle
+        // silently hung until the timeout instead of panicking.
+        actor_ref
+            .blocking_ask(PlainPing, Some(std::time::Duration::from_secs(5)))
+            .unwrap_or(0)
+    }
+}
+
+#[tokio::test]
+async fn test_blocking_slow_path_self_cycle_panics_immediately() {
+    let (actor_ref, handle) = spawn::<SlowPathActor>(());
+
+    let start = std::time::Instant::now();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        actor_ref.ask(BlockingSelfAsk),
+    )
+    .await;
+
+    let res = handle.await;
+    assert!(
+        res.is_err() && res.unwrap_err().is_panic(),
+        "self ask cycle through the blocking slow path must panic via deadlock detection"
+    );
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(4),
+        "detection must be immediate, not the 5s blocking timeout"
+    );
+}

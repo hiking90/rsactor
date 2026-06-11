@@ -9,7 +9,7 @@ use futures::stream::{Stream, StreamExt};
 use std::time::Duration;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio::sync::{mpsc, oneshot};
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 /// If the calling thread is currently inside a multi-thread Tokio runtime,
 /// returns a `Handle` to it. Otherwise (no runtime, or current_thread runtime)
@@ -20,11 +20,21 @@ use tracing::warn;
 /// `block_in_place` + `Handle::block_on` and reuse the caller's runtime.
 /// `block_in_place` requires a multi-thread runtime, so current_thread is
 /// excluded here and falls back to the original "new thread + new runtime"
-/// path.
+/// path. The comparison deliberately allows *only* `MultiThread`: should tokio
+/// ever add another flavor to the `#[non_exhaustive]` enum, the safe failure
+/// mode is the slow path, not a `block_in_place` panic.
 #[inline]
 fn current_multi_thread_handle() -> Option<Handle> {
     let handle = Handle::try_current().ok()?;
     (handle.runtime_flavor() == RuntimeFlavor::MultiThread).then_some(handle)
+}
+
+/// Fast-path helper shared by every `blocking_*` API: runs `fut` to completion
+/// on the caller's own multi-thread runtime via `block_in_place` + `block_on`.
+/// No new thread or runtime is created.
+#[inline]
+fn block_on_current_runtime<R>(handle: Handle, fut: impl std::future::Future<Output = R>) -> R {
+    tokio::task::block_in_place(|| handle.block_on(fut))
 }
 
 /// Slow-path helper shared by `blocking_*` APIs: spawns a dedicated thread,
@@ -32,41 +42,83 @@ fn current_multi_thread_handle() -> Option<Handle> {
 ///
 /// Used only when the caller is *not* inside a multi-thread runtime (i.e. when
 /// the fast `block_in_place` path is unavailable). Centralizes the
-/// thread/runtime/join boilerplate so all four slow paths report errors
-/// identically.
+/// thread/runtime/join boilerplate so all slow paths report errors identically:
+/// a failure to spawn the thread or to build the temporary runtime becomes
+/// `Error::Runtime` carrying the underlying [`std::io::Error`] as its
+/// [`source`](std::error::Error::source).
 ///
-/// `panic_msg` describes the failure surfaced when the spawned thread itself
-/// panics (the `join.join()` returns `Err`); it is wrapped in `Error::Runtime`.
-/// A failure to build the temporary runtime is also reported as `Error::Runtime`,
-/// carrying the underlying [`std::io::Error`] as its [`source`](std::error::Error::source).
+/// With `deadlock-detection` enabled, the calling actor's task-local identity
+/// is captured here and re-established inside the new runtime, so `ask` cycles
+/// taken through this slow path are still detected. A deadlock panic raised on
+/// the dedicated thread is resumed on the caller's thread (preserving the
+/// documented panic-on-detection contract); any other worker-thread panic is
+/// reported as `Error::Runtime` with `panic_msg` and the panic payload in its
+/// details.
 fn run_blocking_with_runtime<F, R>(identity: Identity, panic_msg: &'static str, fut: F) -> Result<R>
 where
     F: std::future::Future<Output = Result<R>> + Send + 'static,
     R: Send + 'static,
 {
-    let join = std::thread::spawn(move || -> Result<R> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .map_err(|e| Error::Runtime {
-                identity,
-                details: "Failed to build blocking runtime".to_string(),
-                source: Some(std::sync::Arc::new(e)),
-            })?;
-        runtime.block_on(fut)
-    });
+    // Capture the current actor (if any) *before* hopping threads — tokio
+    // task-locals do not propagate to new threads or runtimes.
+    #[cfg(feature = "deadlock-detection")]
+    let caller = crate::CURRENT_ACTOR.try_with(|id| *id).ok();
 
-    join.join().unwrap_or_else(|_| {
+    let join = std::thread::Builder::new()
+        .name("rsactor-blocking".to_string())
+        .spawn(move || -> Result<R> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .map_err(|e| Error::Runtime {
+                    identity,
+                    details: "Failed to build blocking runtime".to_string(),
+                    source: Some(std::sync::Arc::new(e)),
+                })?;
+            #[cfg(feature = "deadlock-detection")]
+            {
+                match caller {
+                    Some(id) => runtime.block_on(crate::CURRENT_ACTOR.scope(id, fut)),
+                    None => runtime.block_on(fut),
+                }
+            }
+            #[cfg(not(feature = "deadlock-detection"))]
+            {
+                runtime.block_on(fut)
+            }
+        })
+        .map_err(|e| Error::Runtime {
+            identity,
+            details: "Failed to spawn blocking thread".to_string(),
+            source: Some(std::sync::Arc::new(e)),
+        })?;
+
+    join.join().unwrap_or_else(|payload| {
+        let panic_text = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .map(str::to_owned)
+            .or_else(|| payload.downcast_ref::<String>().cloned());
+        // Deadlock detection promises an *immediate panic* on an ask cycle;
+        // swallowing it into Error::Runtime would silently downgrade that
+        // contract on the slow path.
+        #[cfg(feature = "deadlock-detection")]
+        if panic_text
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Deadlock detected"))
+        {
+            std::panic::resume_unwind(payload);
+        }
         Err(Error::Runtime {
             identity,
-            details: panic_msg.to_string(),
+            details: match panic_text {
+                Some(text) => format!("{panic_msg}: {text}"),
+                None => panic_msg.to_string(),
+            },
             source: None,
         })
     })
 }
-
-#[cfg(feature = "tracing")]
-use tracing::{debug, info};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::MetricsCollector;
@@ -229,16 +281,42 @@ impl<T: Actor> ActorRef<T> {
     /// and optionally upgrade back to a strong [`ActorRef<T>`] without keeping the actor alive.
     /// When the `metrics` feature is enabled, metrics are preserved via strong reference
     /// for post-mortem analysis.
-    pub fn downgrade(this: &Self) -> ActorWeak<T> {
+    ///
+    /// This is an inherent `&self` method (callable as `actor_ref.downgrade()`
+    /// or `ActorRef::downgrade(&actor_ref)`). Inherent methods win method
+    /// resolution, so the call stays unambiguous even with the
+    /// [`TellHandler`](crate::TellHandler) / [`AskHandler`](crate::AskHandler) /
+    /// [`ActorControl`](crate::ActorControl) traits in scope, all of which also
+    /// declare a `downgrade`; reach those via trait objects or fully-qualified
+    /// syntax.
+    pub fn downgrade(&self) -> ActorWeak<T> {
         ActorWeak {
-            id: this.id,
-            sender: this.sender.downgrade(),
-            priority_sender: this.priority_sender.as_ref().map(|s| s.downgrade()),
-            terminate_sender: this.terminate_sender.downgrade(),
-            idle_subscribe_sender: this.idle_subscribe_sender.as_ref().map(|s| s.downgrade()),
+            id: self.id,
+            sender: self.sender.downgrade(),
+            priority_sender: self.priority_sender.as_ref().map(|s| s.downgrade()),
+            terminate_sender: self.terminate_sender.downgrade(),
+            idle_subscribe_sender: self.idle_subscribe_sender.as_ref().map(|s| s.downgrade()),
             #[cfg(feature = "metrics")]
-            metrics: this.metrics.clone(),
+            metrics: self.metrics.clone(),
         }
+    }
+
+    /// Resolves once the actor has fully stopped — its runtime loop has exited
+    /// (after `on_stop` ran) and the mailbox channel has closed.
+    ///
+    /// Unlike awaiting the `JoinHandle` returned by [`spawn`](crate::spawn),
+    /// this works from any clone of the `ActorRef` and is type-erasable (see
+    /// [`ActorControl::wait_stopped`](crate::ActorControl::wait_stopped)), but
+    /// it only signals completion — it cannot return the
+    /// [`ActorResult`](crate::ActorResult).
+    ///
+    /// Returns immediately if the actor has already stopped. Note that holding
+    /// this `ActorRef` does not keep the actor alive forever: an actor also
+    /// stops when every *other* strong ref is dropped only if this one is
+    /// dropped too, so pair this with [`stop`](Self::stop) / [`kill`](Self::kill)
+    /// rather than waiting for ref-drop termination from a live ref.
+    pub async fn wait_stopped(&self) {
+        self.sender.closed().await
     }
 
     /// Registers a [`Stream`] of idle events to be merged into the actor's
@@ -294,7 +372,6 @@ impl<T: Actor> ActorRef<T> {
         S: Stream<Item = T::IdleEvent> + Send + 'static,
     {
         let Some(idle_subscribe_sender) = self.idle_subscribe_sender.as_ref() else {
-            #[cfg(feature = "tracing")]
             warn!("subscribe_idle called on actor without an idle channel");
             return Err(Error::IdleChannelNotEnabled {
                 identity: self.identity(),
@@ -309,7 +386,7 @@ impl<T: Actor> ActorRef<T> {
             },
             mpsc::error::TrySendError::Closed(_) => Error::Send {
                 identity: self.identity(),
-                details: "Idle subscribe channel closed (actor is no longer alive)".to_string(),
+                details: "Idle subscribe channel closed (actor is no longer alive)",
             },
         })
     }
@@ -338,9 +415,9 @@ impl<T: Actor> ActorRef<T> {
             payload: Box::new(msg),
             reply_channel: None,     // reply_channel is None for tell
             actor_ref: self.clone(), // Include the actor ref for context
+            ask_edge: Default::default(),
         };
 
-        #[cfg(feature = "tracing")]
         debug!("Sending tell message (fire-and-forget)");
 
         let result = if self.sender.send(envelope).await.is_err() {
@@ -351,13 +428,12 @@ impl<T: Actor> ActorRef<T> {
             );
             Err(Error::Send {
                 identity: self.identity(),
-                details: "Mailbox channel closed".to_string(),
+                details: "Mailbox channel closed",
             })
         } else {
             Ok(())
         };
 
-        #[cfg(feature = "tracing")]
         match &result {
             Ok(_) => debug!("Tell message sent successfully"),
             Err(e) => warn!(error = %e, "Failed to send tell message"),
@@ -387,7 +463,6 @@ impl<T: Actor> ActorRef<T> {
         T: Message<M>,
         M: Send + 'static,
     {
-        #[cfg(feature = "tracing")]
         debug!(
             timeout_ms = timeout.as_millis(),
             "Sending tell message with timeout"
@@ -408,7 +483,6 @@ impl<T: Actor> ActorRef<T> {
                 }
             })?;
 
-        #[cfg(feature = "tracing")]
         match &result {
             Ok(_) => debug!("Tell with timeout completed successfully"),
             Err(e) => warn!(error = %e, "Tell with timeout failed"),
@@ -442,18 +516,25 @@ impl<T: Actor> ActorRef<T> {
     {
         // Deadlock detection: register this `ask` as a wait-for edge and hold
         // the guard until the reply is received (or this future is dropped).
-        // Panics if it would close an ask cycle.
+        // Panics if it would close an ask cycle. The envelope carries a token
+        // so the callee removes the edge the moment it sends the reply —
+        // waiting for this future to resume would leave a stale-edge window
+        // that produces false-positive cycle panics.
         #[cfg(feature = "deadlock-detection")]
         let _guard = crate::register_ask_edge(self.identity(), "ask");
+        #[cfg(feature = "deadlock-detection")]
+        let ask_edge = _guard.as_ref().map(|g| g.token());
+        #[cfg(not(feature = "deadlock-detection"))]
+        let ask_edge = ();
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let envelope = MailboxMessage::Envelope {
             payload: Box::new(msg),
             reply_channel: Some(reply_tx),
             actor_ref: self.clone(), // Include the actor ref for context
+            ask_edge,
         };
 
-        #[cfg(feature = "tracing")]
         debug!("Sending ask message and waiting for reply");
 
         if self.sender.send(envelope).await.is_err() {
@@ -463,12 +544,11 @@ impl<T: Actor> ActorRef<T> {
                 "ask",
             );
 
-            #[cfg(feature = "tracing")]
             warn!("Failed to send ask message: mailbox channel closed");
 
             return Err(Error::Send {
                 identity: self.identity(),
-                details: "Mailbox channel closed".to_string(),
+                details: "Mailbox channel closed",
             });
         }
 
@@ -477,12 +557,10 @@ impl<T: Actor> ActorRef<T> {
                 // Successfully received reply from actor
                 match reply_any.downcast::<T::Reply>() {
                     Ok(reply) => {
-                        #[cfg(feature = "tracing")]
                         debug!("Ask reply received successfully");
                         Ok(*reply)
                     }
                     Err(_) => {
-                        #[cfg(feature = "tracing")]
                         warn!(
                             expected_type = %std::any::type_name::<T::Reply>(),
                             "Ask reply type downcast failed"
@@ -501,11 +579,10 @@ impl<T: Actor> ActorRef<T> {
                     "ask",
                 );
 
-                #[cfg(feature = "tracing")]
                 warn!("Ask reply channel closed unexpectedly");
                 Err(Error::Receive {
                     identity: self.identity(),
-                    details: "Reply channel closed unexpectedly".to_string(),
+                    details: "Reply channel closed unexpectedly",
                 })
             }
         }
@@ -534,7 +611,6 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
-        #[cfg(feature = "tracing")]
         debug!(
             timeout_ms = timeout.as_millis(),
             "Sending ask message with timeout"
@@ -555,7 +631,6 @@ impl<T: Actor> ActorRef<T> {
                 }
             })?;
 
-        #[cfg(feature = "tracing")]
         match &result {
             Ok(_) => debug!("Ask with timeout completed successfully"),
             Err(e) => warn!(error = %e, "Ask with timeout failed"),
@@ -600,7 +675,6 @@ impl<T: Actor> ActorRef<T> {
         T: Message<M>,
     {
         let Some(priority_sender) = self.priority_sender.as_ref() else {
-            #[cfg(feature = "tracing")]
             warn!("tell_priority called on actor without a priority channel");
             return Err(Error::PriorityChannelNotEnabled {
                 identity: self.identity(),
@@ -611,9 +685,9 @@ impl<T: Actor> ActorRef<T> {
             payload: Box::new(msg),
             reply_channel: None,
             actor_ref: self.clone(),
+            ask_edge: Default::default(),
         };
 
-        #[cfg(feature = "tracing")]
         debug!(
             timeout_ms = timeout.as_millis(),
             "Sending priority tell message"
@@ -630,7 +704,7 @@ impl<T: Actor> ActorRef<T> {
                 );
                 Err(Error::Send {
                     identity: self.identity(),
-                    details: "Priority channel closed".to_string(),
+                    details: "Priority channel closed",
                 })
             }
             Err(_) => {
@@ -647,7 +721,6 @@ impl<T: Actor> ActorRef<T> {
             }
         };
 
-        #[cfg(feature = "tracing")]
         match &result {
             Ok(_) => debug!("Priority tell message sent successfully"),
             Err(e) => warn!(error = %e, "Priority tell failed"),
@@ -692,7 +765,6 @@ impl<T: Actor> ActorRef<T> {
         T::Reply: Send + 'static,
     {
         let Some(priority_sender) = self.priority_sender.as_ref() else {
-            #[cfg(feature = "tracing")]
             warn!("ask_priority called on actor without a priority channel");
             return Err(Error::PriorityChannelNotEnabled {
                 identity: self.identity(),
@@ -706,6 +778,10 @@ impl<T: Actor> ActorRef<T> {
         // the cycle is detected immediately instead of only timing out.
         #[cfg(feature = "deadlock-detection")]
         let _guard = crate::register_ask_edge(self.identity(), "ask_priority");
+        #[cfg(feature = "deadlock-detection")]
+        let ask_edge = _guard.as_ref().map(|g| g.token());
+        #[cfg(not(feature = "deadlock-detection"))]
+        let ask_edge = ();
 
         let result = tokio::time::timeout(timeout, async {
             let (reply_tx, reply_rx) = oneshot::channel();
@@ -713,6 +789,7 @@ impl<T: Actor> ActorRef<T> {
                 payload: Box::new(msg),
                 reply_channel: Some(reply_tx),
                 actor_ref: self.clone(),
+                ask_edge,
             };
 
             if priority_sender.send(envelope).await.is_err() {
@@ -723,7 +800,7 @@ impl<T: Actor> ActorRef<T> {
                 );
                 return Err(Error::Send {
                     identity: self.identity(),
-                    details: "Priority channel closed".to_string(),
+                    details: "Priority channel closed",
                 });
             }
 
@@ -743,7 +820,7 @@ impl<T: Actor> ActorRef<T> {
                     );
                     Err(Error::Receive {
                         identity: self.identity(),
-                        details: "Reply channel closed unexpectedly".to_string(),
+                        details: "Reply channel closed unexpectedly",
                     })
                 }
             }
@@ -772,7 +849,7 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Execution paths
     ///
-    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    /// - **Worker of a multi-thread Tokio runtime (including `async fn`)**: uses
     ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
     ///   to reuse the caller's runtime. No new thread or runtime is created.
     /// - **Priority slot empty, no runtime context**: a `try_send` fast path
@@ -811,15 +888,14 @@ impl<T: Actor> ActorRef<T> {
 
         // Fast path: caller is inside a multi-thread runtime. Reuse it.
         if let Some(handle) = current_multi_thread_handle() {
-            return tokio::task::block_in_place(|| {
-                handle.block_on(self.tell_priority(msg, timeout))
-            });
+            return block_on_current_runtime(handle, self.tell_priority(msg, timeout));
         }
 
         let envelope = MailboxMessage::Envelope {
             payload: Box::new(msg),
             reply_channel: None,
             actor_ref: self.clone(),
+            ask_edge: Default::default(),
         };
 
         // Fast path: priority channel has capacity 1, but if it is empty we
@@ -834,7 +910,7 @@ impl<T: Actor> ActorRef<T> {
                 );
                 return Err(Error::Send {
                     identity: self.identity(),
-                    details: "Priority channel closed".to_string(),
+                    details: "Priority channel closed",
                 });
             }
             Err(mpsc::error::TrySendError::Full(env)) => env,
@@ -857,7 +933,7 @@ impl<T: Actor> ActorRef<T> {
                         );
                         Err(Error::Send {
                             identity,
-                            details: "Priority channel closed".to_string(),
+                            details: "Priority channel closed",
                         })
                     }
                     Err(_) => {
@@ -882,7 +958,7 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Execution paths
     ///
-    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    /// - **Worker of a multi-thread Tokio runtime (including `async fn`)**: uses
     ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
     ///   to reuse the caller's runtime. No new thread or runtime is created.
     /// - **`current_thread` runtime, or no runtime context**: spawns a short-lived
@@ -922,9 +998,7 @@ impl<T: Actor> ActorRef<T> {
 
         // Fast path: caller is inside a multi-thread runtime. Reuse it.
         if let Some(handle) = current_multi_thread_handle() {
-            return tokio::task::block_in_place(|| {
-                handle.block_on(self.ask_priority(msg, timeout))
-            });
+            return block_on_current_runtime(handle, self.ask_priority(msg, timeout));
         }
 
         let self_clone = self.clone();
@@ -959,13 +1033,11 @@ impl<T: Actor> ActorRef<T> {
         tracing::instrument(level = "info", name = "actor_kill", skip(self))
     )]
     pub fn kill(&self) {
-        #[cfg(feature = "tracing")]
         info!(actor_id = %self.identity(), "Killing actor");
 
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
-                #[cfg(feature = "tracing")]
                 info!("Kill signal sent successfully");
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -985,6 +1057,11 @@ impl<T: Actor> ActorRef<T> {
     /// New messages sent after this call might be ignored or fail.
     /// The actor's final result will indicate normal completion.
     ///
+    /// The returned future resolves once the stop signal is **enqueued**, not
+    /// when the actor has finished stopping. Await the `JoinHandle` from
+    /// [`spawn`](crate::spawn) or [`wait_stopped`](Self::wait_stopped) to
+    /// observe completion.
+    ///
     /// This method is idempotent: a closed mailbox channel is treated as "stop already
     /// in flight" — the desired terminal state is met either way. The condition is
     /// logged via `tracing::warn!` for diagnostics.
@@ -999,7 +1076,6 @@ impl<T: Actor> ActorRef<T> {
             .await
         {
             Ok(_) => {
-                #[cfg(feature = "tracing")]
                 info!(actor_id = %self.identity(), "Actor stop signal sent successfully");
             }
             Err(_) => {
@@ -1016,23 +1092,26 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Execution paths
     ///
-    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    /// - **Worker of a multi-thread Tokio runtime (including `async fn`)**: uses
     ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
     ///   to reuse the caller's runtime. No new thread or runtime is created.
-    /// - **`current_thread` runtime, or no runtime context, with `timeout: None`**:
-    ///   uses Tokio's `blocking_send` directly. Most efficient, but blocks
-    ///   indefinitely if the mailbox is full.
-    /// - **`current_thread` runtime, or no runtime context, with `timeout: Some(_)`
-    ///   and mailbox empty**: a `try_send` fast path completes without spawning
-    ///   a thread.
-    /// - **`current_thread` runtime, or no runtime context, with `timeout: Some(_)`
-    ///   and mailbox full**: spawns a short-lived dedicated thread with a
-    ///   temporary single-thread runtime to await admission with the timeout.
+    /// - **Any other context, mailbox has room**: a `try_send` fast path
+    ///   completes without blocking or spawning a thread (both `timeout`
+    ///   variants).
+    /// - **Mailbox full, `timeout: Some(_)`**: spawns a short-lived dedicated
+    ///   thread with a temporary single-thread runtime to await admission with
+    ///   the timeout.
+    /// - **Mailbox full, `timeout: None`, no runtime context**: uses Tokio's
+    ///   `blocking_send` directly; blocks indefinitely until admitted.
+    /// - **Mailbox full, `timeout: None`, inside a `current_thread` runtime or
+    ///   a thread driving `Handle::block_on`**: spawns a dedicated thread (like
+    ///   the timeout path, but unbounded) — calling `blocking_send` there would
+    ///   panic. The calling runtime thread is parked for the duration.
     ///
     /// # Performance Considerations
     ///
-    /// The slow-path fallback (`current_thread` runtime or no runtime, with
-    /// timeout, mailbox full) incurs:
+    /// The slow-path fallbacks (mailbox full outside a multi-thread runtime)
+    /// incur:
     /// - **Thread creation**: ~50-200μs depending on the platform
     /// - **Tokio runtime creation**: ~1-10μs for a single-threaded runtime
     ///
@@ -1044,6 +1123,12 @@ impl<T: Actor> ActorRef<T> {
     /// worker thread for the duration of the call. Avoid invoking from
     /// runtimes with very few workers; prefer [`tell`](Self::tell) directly
     /// from async code where possible.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called from inside a [`LocalSet`](https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html)
+    /// running on a multi-thread runtime: the runtime handle reports
+    /// multi-thread flavor, but `block_in_place` is not permitted there.
     ///
     /// # Deadlock warning
     ///
@@ -1075,13 +1160,11 @@ impl<T: Actor> ActorRef<T> {
         // thread and runtime. Safe to call from async contexts on a
         // multi-thread runtime.
         if let Some(handle) = current_multi_thread_handle() {
-            return tokio::task::block_in_place(|| {
-                handle.block_on(async {
-                    match timeout {
-                        Some(t) => self.tell_with_timeout(msg, t).await,
-                        None => self.tell(msg).await,
-                    }
-                })
+            return block_on_current_runtime(handle, async {
+                match timeout {
+                    Some(t) => self.tell_with_timeout(msg, t).await,
+                    None => self.tell(msg).await,
+                }
             });
         }
 
@@ -1101,24 +1184,69 @@ impl<T: Actor> ActorRef<T> {
             payload: Box::new(msg),
             reply_channel: None,     // reply_channel is None for tell
             actor_ref: self.clone(), // Include the actor ref for context
+            ask_edge: Default::default(),
         };
 
-        #[cfg(feature = "tracing")]
         debug!("Sending blocking tell message (fire-and-forget)");
+
+        // Fast path: room in the mailbox — finish without blocking at all.
+        let envelope = match self.sender.try_send(envelope) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                crate::dead_letter::record::<M>(
+                    self.identity(),
+                    crate::dead_letter::DeadLetterReason::ActorStopped,
+                    "tell",
+                );
+                return Err(Error::Send {
+                    identity: self.identity(),
+                    details: "Mailbox channel closed",
+                });
+            }
+            Err(mpsc::error::TrySendError::Full(env)) => env,
+        };
+
+        // Inside *any* runtime context (a current_thread runtime task, or a
+        // thread driving `Handle::block_on`), tokio's `blocking_send` panics
+        // with "Cannot block the current thread from within a runtime". Route
+        // through the dedicated-thread slow path instead: same
+        // blocks-until-admitted semantics, no panic. The calling runtime
+        // thread is still parked for the duration — see the deadlock warning
+        // on [`blocking_tell`](Self::blocking_tell).
+        if Handle::try_current().is_ok() {
+            let identity = self.identity();
+            let sender = self.sender.clone();
+            return run_blocking_with_runtime(
+                identity,
+                "Blocking thread terminated unexpectedly",
+                async move {
+                    sender.send(envelope).await.map_err(|_| {
+                        crate::dead_letter::record::<M>(
+                            identity,
+                            crate::dead_letter::DeadLetterReason::ActorStopped,
+                            "tell",
+                        );
+                        Error::Send {
+                            identity,
+                            details: "Mailbox channel closed",
+                        }
+                    })
+                },
+            );
+        }
 
         let result = self.sender.blocking_send(envelope).map_err(|_| {
             crate::dead_letter::record::<M>(
                 self.identity(),
                 crate::dead_letter::DeadLetterReason::ActorStopped,
-                "blocking_tell",
+                "tell",
             );
             Error::Send {
                 identity: self.identity(),
-                details: "Mailbox channel closed".to_string(),
+                details: "Mailbox channel closed",
             }
         });
 
-        #[cfg(feature = "tracing")]
         match &result {
             Ok(_) => debug!("Blocking tell message sent successfully"),
             Err(e) => warn!(error = %e, "Failed to send blocking tell message"),
@@ -1137,6 +1265,7 @@ impl<T: Actor> ActorRef<T> {
             payload: Box::new(msg),
             reply_channel: None,
             actor_ref: self.clone(),
+            ask_edge: Default::default(),
         };
 
         // Fast path: if the mailbox has room, finish without spawning a
@@ -1149,11 +1278,11 @@ impl<T: Actor> ActorRef<T> {
                 crate::dead_letter::record::<M>(
                     self.identity(),
                     crate::dead_letter::DeadLetterReason::ActorStopped,
-                    "blocking_tell",
+                    "tell",
                 );
                 return Err(Error::Send {
                     identity: self.identity(),
-                    details: "Mailbox channel closed".to_string(),
+                    details: "Mailbox channel closed",
                 });
             }
             Err(mpsc::error::TrySendError::Full(env)) => env,
@@ -1172,18 +1301,18 @@ impl<T: Actor> ActorRef<T> {
                         crate::dead_letter::record::<M>(
                             identity,
                             crate::dead_letter::DeadLetterReason::ActorStopped,
-                            "blocking_tell",
+                            "tell",
                         );
                         Err(Error::Send {
                             identity,
-                            details: "Mailbox channel closed".to_string(),
+                            details: "Mailbox channel closed",
                         })
                     }
                     Err(_) => {
                         crate::dead_letter::record::<M>(
                             identity,
                             crate::dead_letter::DeadLetterReason::Timeout,
-                            "blocking_tell",
+                            "tell",
                         );
                         Err(Error::Timeout {
                             identity,
@@ -1203,22 +1332,26 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Execution paths
     ///
-    /// - **Multi-thread Tokio runtime (any context, including `async fn`)**: uses
+    /// - **Worker of a multi-thread Tokio runtime (including `async fn`)**: uses
     ///   [`tokio::task::block_in_place`] + [`Handle::block_on`](tokio::runtime::Handle::block_on)
     ///   to reuse the caller's runtime. No new thread or runtime is created.
-    /// - **`current_thread` runtime, or no runtime context, with `timeout: None`**:
-    ///   uses Tokio's `blocking_send` and `blocking_recv` directly. Most
-    ///   efficient, but blocks indefinitely if the actor never responds.
-    /// - **`current_thread` runtime, or no runtime context, with `timeout: Some(_)`**:
-    ///   spawns a short-lived dedicated thread with a temporary single-thread
-    ///   runtime to await the reply with the timeout. Unlike the `tell`
-    ///   variants, no `try_send` fast path is possible because a sync
-    ///   `recv_timeout` for the reply channel is unavailable.
+    /// - **`timeout: Some(_)`, any other context**: spawns a short-lived
+    ///   dedicated thread with a temporary single-thread runtime to await the
+    ///   reply with the timeout. Unlike the `tell` variants, no `try_send`
+    ///   fast path is possible because a sync `recv_timeout` for the reply
+    ///   channel is unavailable.
+    /// - **`timeout: None`, no runtime context**: uses Tokio's `blocking_send`
+    ///   and `blocking_recv` directly; blocks indefinitely until the reply
+    ///   arrives.
+    /// - **`timeout: None`, inside a `current_thread` runtime or a thread
+    ///   driving `Handle::block_on`**: spawns a dedicated thread (like the
+    ///   timeout path, but unbounded) — calling `blocking_send`/`blocking_recv`
+    ///   there would panic. The calling runtime thread is parked for the
+    ///   duration.
     ///
     /// # Performance Considerations
     ///
-    /// The slow-path fallback (`current_thread` runtime or no runtime, with
-    /// timeout) incurs:
+    /// The slow-path fallbacks (dedicated thread + temporary runtime) incur:
     /// - **Thread creation**: ~50-200μs depending on the platform
     /// - **Tokio runtime creation**: ~1-10μs for a single-threaded runtime
     ///
@@ -1231,6 +1364,12 @@ impl<T: Actor> ActorRef<T> {
     /// worker thread for the duration of the call. Avoid invoking from
     /// runtimes with very few workers; prefer [`ask`](Self::ask) directly
     /// from async code where possible.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called from inside a [`LocalSet`](https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html)
+    /// running on a multi-thread runtime: the runtime handle reports
+    /// multi-thread flavor, but `block_in_place` is not permitted there.
     ///
     /// # Deadlock warning
     ///
@@ -1263,13 +1402,11 @@ impl<T: Actor> ActorRef<T> {
         // thread and runtime. Safe to call from async contexts on a
         // multi-thread runtime.
         if let Some(handle) = current_multi_thread_handle() {
-            return tokio::task::block_in_place(|| {
-                handle.block_on(async {
-                    match timeout {
-                        Some(t) => self.ask_with_timeout(msg, t).await,
-                        None => self.ask(msg).await,
-                    }
-                })
+            return block_on_current_runtime(handle, async {
+                match timeout {
+                    Some(t) => self.ask_with_timeout(msg, t).await,
+                    None => self.ask(msg).await,
+                }
             });
         }
 
@@ -1286,29 +1423,45 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
+        debug!("Sending blocking ask message and waiting for reply");
+
+        // Inside *any* runtime context (a current_thread runtime task, or a
+        // thread driving `Handle::block_on`), tokio's `blocking_send` /
+        // `blocking_recv` panic with "Cannot block the current thread from
+        // within a runtime". Route the whole ask through the dedicated-thread
+        // slow path instead: same blocks-until-replied semantics, no panic.
+        // Deadlock detection still works on this path —
+        // `run_blocking_with_runtime` re-establishes the calling actor's
+        // identity inside the temporary runtime.
+        if Handle::try_current().is_ok() {
+            let self_clone = self.clone();
+            return run_blocking_with_runtime(
+                self.identity(),
+                "Blocking thread terminated unexpectedly",
+                async move { self_clone.ask(msg).await },
+            );
+        }
+
         let (reply_tx, reply_rx) = oneshot::channel();
         let envelope = MailboxMessage::Envelope {
             payload: Box::new(msg),
             reply_channel: Some(reply_tx),
             actor_ref: self.clone(), // Include the actor ref for context
+            ask_edge: Default::default(),
         };
-
-        #[cfg(feature = "tracing")]
-        debug!("Sending blocking ask message and waiting for reply");
 
         self.sender.blocking_send(envelope).map_err(|_| {
             crate::dead_letter::record::<M>(
                 self.identity(),
                 crate::dead_letter::DeadLetterReason::ActorStopped,
-                "blocking_ask",
+                "ask",
             );
 
-            #[cfg(feature = "tracing")]
             warn!("Failed to send blocking ask message: mailbox channel closed");
 
             Error::Send {
                 identity: self.identity(),
-                details: "Mailbox channel closed".to_string(),
+                details: "Mailbox channel closed",
             }
         })?;
 
@@ -1317,12 +1470,10 @@ impl<T: Actor> ActorRef<T> {
                 // Successfully received reply from actor
                 match reply_any.downcast::<T::Reply>() {
                     Ok(reply) => {
-                        #[cfg(feature = "tracing")]
                         debug!("Blocking ask reply received successfully");
                         Ok(*reply)
                     }
                     Err(_) => {
-                        #[cfg(feature = "tracing")]
                         warn!(
                             expected_type = %std::any::type_name::<T::Reply>(),
                             "Blocking ask reply type downcast failed"
@@ -1338,14 +1489,13 @@ impl<T: Actor> ActorRef<T> {
                 crate::dead_letter::record::<M>(
                     self.identity(),
                     crate::dead_letter::DeadLetterReason::ReplyDropped,
-                    "blocking_ask",
+                    "ask",
                 );
 
-                #[cfg(feature = "tracing")]
                 warn!("Blocking ask reply channel closed unexpectedly");
                 Err(Error::Receive {
                     identity: self.identity(),
-                    details: "Reply channel closed unexpectedly".to_string(),
+                    details: "Reply channel closed unexpectedly",
                 })
             }
         }
@@ -1371,7 +1521,7 @@ impl<T: Actor> ActorRef<T> {
                         crate::dead_letter::record::<M>(
                             identity,
                             crate::dead_letter::DeadLetterReason::Timeout,
-                            "blocking_ask",
+                            "ask",
                         );
                         Error::Timeout {
                             identity,
@@ -1465,12 +1615,10 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         R: Send + 'static,
     {
-        #[cfg(feature = "tracing")]
         tracing::debug!("Sending ask_join message and waiting for task completion");
 
         let join_handle = self.ask(msg).await?;
 
-        #[cfg(feature = "tracing")]
         tracing::debug!("Received JoinHandle, awaiting task completion");
 
         let result = join_handle.await.map_err(|join_error| crate::Error::Join {
@@ -1478,7 +1626,6 @@ impl<T: Actor> ActorRef<T> {
             source: std::sync::Arc::new(join_error),
         })?;
 
-        #[cfg(feature = "tracing")]
         tracing::debug!("Task completed successfully");
 
         Ok(result)

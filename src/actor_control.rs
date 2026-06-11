@@ -73,6 +73,10 @@ pub trait ActorControl: Send + Sync {
     ///
     /// The actor will process all remaining messages in its mailbox before stopping.
     /// Idempotent: a closed mailbox is treated as "stop already in flight".
+    ///
+    /// The returned future resolves once the stop signal is **enqueued**, not
+    /// when the actor has finished stopping. To observe completion, follow up
+    /// with [`wait_stopped`](Self::wait_stopped).
     fn stop(&self) -> BoxFuture<'_, ()>;
 
     /// Immediately terminates the actor.
@@ -81,6 +85,15 @@ pub trait ActorControl: Send + Sync {
     /// Idempotent: a closed or full terminate channel is treated as
     /// "termination already in flight".
     fn kill(&self);
+
+    /// Resolves once the actor has fully stopped (its runtime loop exited and
+    /// the mailbox closed). Returns immediately if the actor already stopped.
+    ///
+    /// Type-erased counterpart of
+    /// [`ActorRef::wait_stopped`](crate::ActorRef::wait_stopped); it signals
+    /// completion only and cannot return the actor's
+    /// [`ActorResult`](crate::ActorResult).
+    fn wait_stopped(&self) -> BoxFuture<'_, ()>;
 
     /// Downgrades to a weak control reference.
     fn downgrade(&self) -> Box<dyn WeakActorControl>;
@@ -150,13 +163,18 @@ impl Clone for Box<dyn WeakActorControl> {
     }
 }
 
-impl fmt::Debug for Box<dyn ActorControl> {
+// Debug is implemented on the trait objects themselves (not on `Box<dyn ...>`)
+// so that `&dyn`, `Arc<dyn>`, and any other pointer type get Debug too, and
+// `Box<dyn ...>` picks it up through std's blanket `impl Debug for Box<T>`.
+// A manual Box impl would also collide with that blanket impl the moment a
+// dyn-level impl is added — this is the future-proof of the two shapes.
+impl fmt::Debug for dyn ActorControl + '_ {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.debug_fmt(f)
     }
 }
 
-impl fmt::Debug for Box<dyn WeakActorControl> {
+impl fmt::Debug for dyn WeakActorControl + '_ {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.debug_fmt(f)
     }
@@ -166,7 +184,7 @@ impl fmt::Debug for Box<dyn WeakActorControl> {
 // Blanket implementations for ActorRef
 // ============================================================================
 
-impl<T: Actor + 'static> ActorControl for ActorRef<T> {
+impl<T: Actor> ActorControl for ActorRef<T> {
     fn identity(&self) -> Identity {
         ActorRef::identity(self)
     }
@@ -181,6 +199,10 @@ impl<T: Actor + 'static> ActorControl for ActorRef<T> {
 
     fn kill(&self) {
         ActorRef::kill(self)
+    }
+
+    fn wait_stopped(&self) -> BoxFuture<'_, ()> {
+        ActorRef::wait_stopped(self).boxed()
     }
 
     fn downgrade(&self) -> Box<dyn WeakActorControl> {
@@ -203,7 +225,7 @@ impl<T: Actor + 'static> ActorControl for ActorRef<T> {
 // Blanket implementations for ActorWeak
 // ============================================================================
 
-impl<T: Actor + 'static> WeakActorControl for ActorWeak<T> {
+impl<T: Actor> WeakActorControl for ActorWeak<T> {
     fn identity(&self) -> Identity {
         ActorWeak::identity(self)
     }
@@ -233,28 +255,28 @@ impl<T: Actor + 'static> WeakActorControl for ActorWeak<T> {
 // ============================================================================
 
 // From ActorRef (ownership transfer) to Box<dyn ActorControl>
-impl<T: Actor + 'static> From<ActorRef<T>> for Box<dyn ActorControl> {
+impl<T: Actor> From<ActorRef<T>> for Box<dyn ActorControl> {
     fn from(actor_ref: ActorRef<T>) -> Self {
         Box::new(actor_ref)
     }
 }
 
 // From &ActorRef (clone) to Box<dyn ActorControl>
-impl<T: Actor + 'static> From<&ActorRef<T>> for Box<dyn ActorControl> {
+impl<T: Actor> From<&ActorRef<T>> for Box<dyn ActorControl> {
     fn from(actor_ref: &ActorRef<T>) -> Self {
         Box::new(actor_ref.clone())
     }
 }
 
 // From ActorWeak (ownership transfer) to Box<dyn WeakActorControl>
-impl<T: Actor + 'static> From<ActorWeak<T>> for Box<dyn WeakActorControl> {
+impl<T: Actor> From<ActorWeak<T>> for Box<dyn WeakActorControl> {
     fn from(actor_weak: ActorWeak<T>) -> Self {
         Box::new(actor_weak)
     }
 }
 
 // From &ActorWeak (clone) to Box<dyn WeakActorControl>
-impl<T: Actor + 'static> From<&ActorWeak<T>> for Box<dyn WeakActorControl> {
+impl<T: Actor> From<&ActorWeak<T>> for Box<dyn WeakActorControl> {
     fn from(actor_weak: &ActorWeak<T>) -> Self {
         Box::new(actor_weak.clone())
     }

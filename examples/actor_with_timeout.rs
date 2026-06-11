@@ -229,13 +229,12 @@ async fn main() -> Result<()> {
         rsactor::ActorResult::Completed { actor: _, killed } => {
             info!("Actor stopped successfully. Killed: {killed}");
         }
-        rsactor::ActorResult::Failed {
-            error,
-            killed,
-            phase,
-            ..
-        } => {
-            info!("Actor stop failed: {error}. Killed: {killed}, Phase: {phase}");
+        rsactor::ActorResult::Failed { failure, killed } => {
+            info!(
+                "Actor stop failed: {}. Killed: {killed}, Phase: {}",
+                failure.error(),
+                failure.phase()
+            );
         }
     }
     info!("Example finished successfully");

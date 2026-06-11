@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use futures::stream::StreamExt;
-use rsactor::{spawn, Actor, ActorRef, ActorResult, ActorWeak, FailurePhase, Message};
+use rsactor::{
+    spawn, Actor, ActorFailure, ActorRef, ActorResult, ActorWeak, FailurePhase, Message,
+};
 use tokio_stream::wrappers::IntervalStream;
 
 // Dummy message for test actors
@@ -123,7 +125,7 @@ async fn test_actor_result_completed_stopped_normally() {
     // Test error access
     assert!(result.error().is_none(), "Should not have error");
 
-    // Test to_result conversion
+    // Test into_result conversion
     let result_copy = ActorResult::Completed {
         actor: TestActor {
             id: "test_normal".to_string(),
@@ -131,7 +133,7 @@ async fn test_actor_result_completed_stopped_normally() {
         },
         killed: false,
     };
-    let std_result = result_copy.to_result();
+    let std_result = result_copy.into_result();
     assert!(std_result.is_ok(), "to_result should be Ok");
     if let Ok(actor) = std_result {
         assert_eq!(actor.id, "test_normal");
@@ -219,15 +221,14 @@ async fn test_actor_result_failed_on_start() {
         assert!(error.to_string().contains("Test failure in on_start"));
     }
 
-    // Test to_result conversion
+    // Test into_result conversion
     let result_copy = ActorResult::Failed::<FailureTestActor> {
-        actor: None,
-        error: anyhow::anyhow!("Test failure in on_start"),
-        secondary_error: None,
-        phase: FailurePhase::OnStart,
+        failure: ActorFailure::OnStart {
+            error: anyhow::anyhow!("Test failure in on_start"),
+        },
         killed: false,
     };
-    let std_result = result_copy.to_result();
+    let std_result = result_copy.into_result();
     assert!(std_result.is_err(), "to_result should be Err");
     if let Err(error) = std_result {
         assert!(error.to_string().contains("Test failure in on_start"));
@@ -412,13 +413,13 @@ async fn test_actor_result_from_completed() {
 #[tokio::test]
 async fn test_actor_result_from_failed_with_actor() {
     let result = ActorResult::Failed {
-        actor: Some(TestActor {
-            id: "test".to_string(),
-            value: 456,
-        }),
-        error: anyhow::anyhow!("test error"),
-        secondary_error: None,
-        phase: FailurePhase::OnIdle,
+        failure: ActorFailure::OnIdle {
+            actor: TestActor {
+                id: "test".to_string(),
+                value: 456,
+            },
+            error: anyhow::anyhow!("test error"),
+        },
         killed: false,
     };
 
@@ -440,10 +441,9 @@ async fn test_actor_result_from_failed_with_actor() {
 #[tokio::test]
 async fn test_actor_result_from_failed_without_actor() {
     let result = ActorResult::Failed::<TestActor> {
-        actor: None,
-        error: anyhow::anyhow!("startup error"),
-        secondary_error: None,
-        phase: FailurePhase::OnStart,
+        failure: ActorFailure::OnStart {
+            error: anyhow::anyhow!("startup error"),
+        },
         killed: false,
     };
 
@@ -479,10 +479,9 @@ async fn test_actor_result_into_error_completed() {
 #[tokio::test]
 async fn test_actor_result_into_error_failed() {
     let result = ActorResult::Failed::<TestActor> {
-        actor: None,
-        error: anyhow::anyhow!("test into_error"),
-        secondary_error: None,
-        phase: FailurePhase::OnStart,
+        failure: ActorFailure::OnStart {
+            error: anyhow::anyhow!("test into_error"),
+        },
         killed: false,
     };
 
@@ -513,10 +512,9 @@ async fn test_actor_result_debug_format() {
     );
 
     let failed_result = ActorResult::Failed::<TestActor> {
-        actor: None,
-        error: anyhow::anyhow!("debug error"),
-        secondary_error: None,
-        phase: FailurePhase::OnStart,
+        failure: ActorFailure::OnStart {
+            error: anyhow::anyhow!("debug error"),
+        },
         killed: false,
     };
     let debug_str = format!("{failed_result:?}");
@@ -552,49 +550,48 @@ async fn test_all_boolean_combinations() {
 
     // Failed OnStart, not killed
     let result3 = ActorResult::Failed::<TestActor> {
-        actor: None,
-        error: anyhow::anyhow!("error3"),
-        secondary_error: None,
-        phase: FailurePhase::OnStart,
+        failure: ActorFailure::OnStart {
+            error: anyhow::anyhow!("error3"),
+        },
         killed: false,
     };
     assert!(!result3.is_completed() && !result3.was_killed() && result3.is_startup_failed());
 
     // Failed OnRun, not killed
     let result4 = ActorResult::Failed {
-        actor: Some(TestActor {
-            id: "test4".to_string(),
-            value: 4,
-        }),
-        error: anyhow::anyhow!("error4"),
-        secondary_error: None,
-        phase: FailurePhase::OnIdle,
+        failure: ActorFailure::OnIdle {
+            actor: TestActor {
+                id: "test4".to_string(),
+                value: 4,
+            },
+            error: anyhow::anyhow!("error4"),
+        },
         killed: false,
     };
     assert!(!result4.is_completed() && !result4.was_killed() && result4.is_runtime_failed());
 
     // Failed OnStop, not killed
     let result5 = ActorResult::Failed {
-        actor: Some(TestActor {
-            id: "test5".to_string(),
-            value: 5,
-        }),
-        error: anyhow::anyhow!("error5"),
-        secondary_error: None,
-        phase: FailurePhase::OnStop,
+        failure: ActorFailure::OnStop {
+            actor: TestActor {
+                id: "test5".to_string(),
+                value: 5,
+            },
+            error: anyhow::anyhow!("error5"),
+        },
         killed: false,
     };
     assert!(!result5.is_completed() && !result5.was_killed() && result5.is_stop_failed());
 
     // Failed OnStop, killed
     let result6 = ActorResult::Failed {
-        actor: Some(TestActor {
-            id: "test6".to_string(),
-            value: 6,
-        }),
-        error: anyhow::anyhow!("error6"),
-        secondary_error: None,
-        phase: FailurePhase::OnStop,
+        failure: ActorFailure::OnStop {
+            actor: TestActor {
+                id: "test6".to_string(),
+                value: 6,
+            },
+            error: anyhow::anyhow!("error6"),
+        },
         killed: true,
     };
     assert!(!result6.is_completed() && result6.was_killed() && result6.is_stop_failed());

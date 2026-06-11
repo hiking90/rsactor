@@ -23,8 +23,11 @@ pub enum Error {
     Send {
         /// ID of the actor that failed to receive the message
         identity: Identity,
-        /// Additional context about the error
-        details: String,
+        /// Additional context about the error.
+        ///
+        /// Every emitter uses a fixed message, so this is `&'static str`
+        /// rather than `String` (no allocation on this failure path).
+        details: &'static str,
     },
     /// Error when a bounded channel is currently at capacity.
     ///
@@ -48,8 +51,11 @@ pub enum Error {
     Receive {
         /// ID of the actor that failed to send a response
         identity: Identity,
-        /// Additional context about the error
-        details: String,
+        /// Additional context about the error.
+        ///
+        /// Every emitter uses a fixed message, so this is `&'static str`
+        /// rather than `String` (no allocation on this failure path).
+        details: &'static str,
     },
     /// Error when a request times out
     Timeout {
@@ -236,9 +242,11 @@ impl Error {
     /// | `Send` | ✗ No | Actor stopped; channel permanently closed |
     /// | `Receive` | ✗ No | Reply channel dropped; cannot recover |
     /// | `Downcast` | ✗ No | Type mismatch; programming error |
-    /// | `Runtime` | ✗ No | Actor lifecycle failure |
+    /// | `Runtime` | ✗ No | Failed to spawn/build the temporary blocking runtime |
     /// | `MailboxCapacity` | ✗ No | Configuration error |
     /// | `Join` | ✗ No | Task panic or cancellation |
+    /// | `PriorityChannelNotEnabled` | ✗ No | Configuration error |
+    /// | `IdleChannelNotEnabled` | ✗ No | Configuration error |
     ///
     /// # Example
     ///

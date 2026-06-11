@@ -431,8 +431,8 @@ mod on_run_error_tests {
 
         // Phase should be OnIdleThenOnStop since both on_idle and on_stop failed
         match &result {
-            rsactor::ActorResult::Failed { phase, .. } => {
-                assert_eq!(*phase, rsactor::FailurePhase::OnIdleThenOnStop);
+            rsactor::ActorResult::Failed { failure, .. } => {
+                assert_eq!(failure.phase(), rsactor::FailurePhase::OnIdleThenOnStop);
             }
             _ => panic!("Expected Failed result"),
         }
@@ -1096,8 +1096,8 @@ mod actor_result_methods_tests {
         actor_ref.stop().await;
         let result = handle.await.unwrap();
 
-        // Use to_result() for conversion
-        let std_result = result.to_result();
+        // Use into_result() for conversion
+        let std_result = result.into_result();
         assert!(std_result.is_ok());
         assert_eq!(std_result.unwrap().data, "test");
     }
@@ -1120,8 +1120,8 @@ mod actor_result_methods_tests {
         let (_, handle) = spawn::<FailActor>(());
         let result = handle.await.unwrap();
 
-        // Use to_result() for conversion
-        let std_result = result.to_result();
+        // Use into_result() for conversion
+        let std_result = result.into_result();
         assert!(std_result.is_err());
         assert_eq!(std_result.unwrap_err(), "failed");
     }

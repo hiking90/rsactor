@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::actor_ref::ActorRef;
-use crate::{ActorResult, ActorWeak, ControlSignal, FailurePhase, MailboxMessage};
+use crate::{ActorFailure, ActorResult, ActorWeak, ControlSignal, MailboxMessage};
 use futures::stream::{BoxStream, SelectAll, StreamExt};
 use std::{fmt::Debug, future::Future};
 use tokio::sync::mpsc;
@@ -11,6 +11,20 @@ use tracing::{debug, error, Instrument};
 /// Boxed, dynamically-typed stream of idle events delivered to an actor's [`Actor::on_idle`]
 /// handler. Subscriptions are added via [`ActorRef::subscribe_idle`].
 pub(crate) type IdleEventStream<T> = BoxStream<'static, <T as Actor>::IdleEvent>;
+
+/// Upper bound on how long the graceful-stop priority drain waits for one more
+/// message before concluding the channel is quiet.
+///
+/// The drain (see the `StopGracefully` arm in [`run_actor_lifecycle`]) must use
+/// `recv()` rather than `try_recv()` to observe sends from permits acquired
+/// before `close()`, but a bare `recv().await` can suffer a lost wakeup when a
+/// racing send is cancelled around `close()` (its briefly-held permit is
+/// released without a receiver wake). One full quiet window with no delivery
+/// means no sender is mid-send — a granted permit is pushed synchronously in
+/// the same poll — so concluding the drain after it cannot drop a deliverable
+/// message. The window is paid at most once per graceful stop, and only when
+/// the channel is already quiet or wedged by that race.
+const PRIORITY_DRAIN_QUIET_PERIOD: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Wrap a future with CURRENT_ACTOR scope and await it.
 /// Used for on_start, message handler, on_stop.
@@ -30,8 +44,8 @@ macro_rules! run_with_actor_scope {
 /// Process a single Envelope from any of the message-receiving paths
 /// (regular mailbox, priority mailbox, or stop-time priority drain).
 ///
-/// Centralizes the tracing span, optional metrics guard, and dispatch boilerplate
-/// so the three call sites stay in sync.
+/// Centralizes the tracing span, optional metrics recording, and dispatch
+/// boilerplate so the three call sites stay in sync.
 macro_rules! process_envelope {
     (
         actor_id = $actor_id:expr,
@@ -40,7 +54,7 @@ macro_rules! process_envelope {
         reply_channel = $reply_channel:expr,
         actor_ref = $actor_ref:expr,
         span_name = $span_name:literal,
-        guard = $guard_type:ident $(,)?
+        record = $record_fn:ident $(,)?
     ) => {{
         #[cfg(feature = "tracing")]
         let msg_span = tracing::debug_span!($span_name);
@@ -57,7 +71,7 @@ macro_rules! process_envelope {
         #[cfg(feature = "metrics")]
         let metrics_collector = $actor_ref.metrics.clone();
         #[cfg(feature = "metrics")]
-        let _metrics_guard = crate::metrics::collector::$guard_type::new(&metrics_collector);
+        let metrics_start = std::time::Instant::now();
 
         run_with_actor_scope!(
             $actor_id,
@@ -65,6 +79,14 @@ macro_rules! process_envelope {
                 .handle_message(&mut $actor, $actor_ref, $reply_channel)
                 .instrument(msg_span)
         );
+
+        // Recorded only after the handler future returned normally. A panic
+        // unwinds past this point and a cancellation (JoinHandle::abort, runtime
+        // shutdown) drops the future at an `.await` before reaching it, so
+        // neither inflates the documented "successfully processed" counters —
+        // an RAII guard recorded cancelled messages as successes.
+        #[cfg(feature = "metrics")]
+        metrics_collector.$record_fn(metrics_start.elapsed());
 
         #[cfg(feature = "tracing")]
         debug!(
@@ -87,16 +109,16 @@ macro_rules! process_envelope {
 /// are handled depends on when they occur:
 ///
 /// 1. Errors in [`on_start`](Actor::on_start): The actor fails to initialize. The error is captured in
-///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
-///    [`FailurePhase::OnStart`](crate::FailurePhase::OnStart) and `actor` set to `None`.
+///    [`ActorResult::Failed`](crate::ActorResult::Failed) as
+///    [`ActorFailure::OnStart`](crate::ActorFailure::OnStart) — no actor instance exists.
 ///
 /// 2. Errors in [`on_idle`](Actor::on_idle): The actor terminates during runtime. The error is captured in
-///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
-///    [`FailurePhase::OnIdle`](crate::FailurePhase::OnIdle) and `actor` contains the actor instance.
+///    [`ActorResult::Failed`](crate::ActorResult::Failed) as
+///    [`ActorFailure::OnIdle`](crate::ActorFailure::OnIdle), carrying the actor instance.
 ///
 /// 3. Errors in [`on_stop`](Actor::on_stop): The actor fails during cleanup. The error is captured in
-///    [`ActorResult::Failed`](crate::ActorResult::Failed) with `phase` set to
-///    [`FailurePhase::OnStop`](crate::FailurePhase::OnStop) and `actor` contains the actor instance.
+///    [`ActorResult::Failed`](crate::ActorResult::Failed) as
+///    [`ActorFailure::OnStop`](crate::ActorFailure::OnStop), carrying the actor instance.
 ///
 /// When awaiting the completion of an actor, check the [`ActorResult`] to determine
 /// the outcome and access any errors:
@@ -215,9 +237,9 @@ pub trait Actor: Sized + Send + 'static {
     ///             // The `actor` field contains the final actor instance
     ///             // The `killed` flag indicates whether the actor was stopped or killed
     ///         }
-    ///         ActorResult::Failed { error, phase, .. } => {
-    ///             println!("Actor failed in phase {:?}: {}", phase, error);
-    ///             // The `phase` field indicates which lifecycle method caused the failure
+    ///         ActorResult::Failed { failure, .. } => {
+    ///             println!("Actor failed in phase {:?}: {}", failure.phase(), failure.error());
+    ///             // `failure.phase()` indicates which lifecycle method caused the failure
     ///             // See [`FailurePhase`](crate::FailurePhase) enum for possible values
     ///         }
     ///     }
@@ -545,12 +567,9 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
             actor
         }
         Err(e) => {
-            error!("Actor {actor_id} on_start failed: {e:?}");
+            error!("Actor {actor_id} on_start failed: {e}");
             return ActorResult::Failed {
-                actor: None,
-                error: e,
-                secondary_error: None,
-                phase: FailurePhase::OnStart,
+                failure: ActorFailure::OnStart { error: e },
                 killed: false,
             };
         }
@@ -570,10 +589,12 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
 
     // Aggregates every stream registered via `ActorRef::subscribe_idle`. New
     // streams arrive on `idle_subscribe_receiver`; completed streams are removed
-    // automatically by `SelectAll`. The branch below is guarded so the runtime
-    // does not poll the empty set forever — `futures::stream::SelectAll::next()`
-    // on an empty set returns `Poll::Ready(None)` immediately, which would
-    // busy-loop without the guard.
+    // automatically by `SelectAll`. The branch below carries an
+    // `if !idle_streams.is_empty()` guard as an optimization: without it,
+    // `SelectAll::next()` on an empty set resolves to `Poll::Ready(None)`
+    // immediately, the `Some(event)` pattern fails to match, and `select!`
+    // disables that branch for the remainder of the call — one wasted poll per
+    // loop iteration (not a busy-loop). The guard skips even that poll.
     let mut idle_streams: SelectAll<IdleEventStream<T>> = SelectAll::new();
 
     // Drain any subscriptions queued during `on_start`. The subscribe arm in
@@ -599,14 +620,14 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
             maybe_terminate = terminate_receiver.recv() => {
                 match maybe_terminate {
                     Some(_) => {
-                        // Explicit kill() was called
-                        #[cfg(feature = "tracing")]
+                        // Explicit kill() was called. Any messages still queued in
+                        // the regular and priority mailboxes are intentionally
+                        // discarded — kill() means "do not process anything else".
                         debug!("Actor termination via kill() method");
                         killed = true;
                     }
                     None => {
                         // All actor_ref instances were dropped
-                        #[cfg(feature = "tracing")]
                         debug!("Actor termination due to all actor_ref instances being dropped");
                         killed = false;
                     }
@@ -622,12 +643,9 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                     actor_id,
                     actor.on_stop(&actor_weak, killed).instrument(on_stop_span)
                 ) {
-                    error!("Actor {actor_id} on_stop failed during termination: {e:?}");
+                    error!("Actor {actor_id} on_stop failed during termination: {e}");
                     return ActorResult::Failed {
-                        actor: Some(actor),
-                        error: e,
-                        secondary_error: None,
-                        phase: FailurePhase::OnStop,
+                        failure: ActorFailure::OnStop { actor, error: e },
                         killed,
                     };
                 }
@@ -644,7 +662,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 }
             } => {
                 match maybe_priority {
-                    Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
+                    Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref, ask_edge: _ask_edge }) => {
                         process_envelope!(
                             actor_id = actor_id,
                             actor = actor,
@@ -652,8 +670,11 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             reply_channel = reply_channel,
                             actor_ref = actor_ref,
                             span_name = "actor_process_priority_message",
-                            guard = PriorityMessageProcessingGuard,
+                            record = record_priority_message,
                         );
+                        // `_ask_edge` (deadlock-detection token) drops here, right
+                        // after the reply was sent — removing the wait-for edge
+                        // before the next message is processed.
                     }
                     Some(MailboxMessage::StopGracefully(_)) => {
                         // Invariant: stop() only writes to the regular mailbox, never the
@@ -707,7 +728,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
             // Messages can be: regular message envelopes or graceful stop signals
             maybe_message = receiver.recv() => {
                 match maybe_message {
-                    Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref }) => {
+                    Some(MailboxMessage::Envelope { payload, reply_channel, actor_ref, ask_edge: _ask_edge }) => {
                         process_envelope!(
                             actor_id = actor_id,
                             actor = actor,
@@ -715,26 +736,54 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             reply_channel = reply_channel,
                             actor_ref = actor_ref,
                             span_name = "actor_process_message",
-                            guard = MessageProcessingGuard,
+                            record = record_message,
                         );
+                        // `_ask_edge` (deadlock-detection token) drops here, right
+                        // after the reply was sent — removing the wait-for edge
+                        // before the next message is processed.
                     }
-                    _msg @ (Some(MailboxMessage::StopGracefully(_)) | None) => {
-                        #[cfg(feature = "tracing")]
-                        match &_msg {
+                    msg @ (Some(MailboxMessage::StopGracefully(_)) | None) => {
+                        match &msg {
                             Some(_) => debug!("Actor termination: explicit graceful stop"),
                             None => debug!("Actor termination: all strong refs dropped"),
                         }
 
                         // Drain any priority messages already enqueued before stopping.
-                        // close() refuses new priority sends (they get Closed errors and
-                        // are recorded as dead letters), then try_recv() pulls everything
-                        // currently in the slot. This closes the race where a sender
-                        // pushed a priority message just before stop() arrived.
+                        // close() refuses *new* priority sends (they get Closed errors
+                        // and are recorded as dead letters), but tokio documents that a
+                        // sender which already acquired a `Permit` — and `send().await`
+                        // is reserve-then-send under the hood — can still deliver after
+                        // close(). `recv()` is the only drain that observes those
+                        // in-flight permit sends: it returns `None` only once the buffer
+                        // is empty *and* every outstanding permit has been consumed. A
+                        // `try_recv()` loop here would race with a permit holder and
+                        // silently drop its message without a dead letter.
                         if let Some(rx) = priority_receiver.as_mut() {
                             rx.close();
-                            while let Ok(msg) = rx.try_recv() {
+                            loop {
+                                // A bare `recv().await` here can park forever: a
+                                // sender whose `send().await` is cancelled (its
+                                // timeout fires) right around close() briefly
+                                // holds — then silently releases — the channel
+                                // permit, and tokio does not wake the receiver on
+                                // that release. With the caller still holding an
+                                // ActorRef (so the channel never fully closes),
+                                // the lost wakeup becomes a deadlock. The bounded
+                                // wait converts it into drain completion, which
+                                // is safe: a full quiet window with no delivery
+                                // means no sender is mid-send (a granted permit
+                                // is pushed synchronously in the same poll).
+                                let msg = match tokio::time::timeout(
+                                    PRIORITY_DRAIN_QUIET_PERIOD,
+                                    rx.recv(),
+                                )
+                                .await
+                                {
+                                    Ok(Some(msg)) => msg,
+                                    Ok(None) | Err(_) => break,
+                                };
                                 match msg {
-                                    MailboxMessage::Envelope { payload, reply_channel, actor_ref } => {
+                                    MailboxMessage::Envelope { payload, reply_channel, actor_ref, ask_edge: _ask_edge } => {
                                         process_envelope!(
                                             actor_id = actor_id,
                                             actor = actor,
@@ -742,7 +791,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                                             reply_channel = reply_channel,
                                             actor_ref = actor_ref,
                                             span_name = "actor_drain_priority_message",
-                                            guard = PriorityMessageProcessingGuard,
+                                            record = record_priority_message,
                                         );
                                     }
                                     MailboxMessage::StopGracefully(_) => {
@@ -769,12 +818,9 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             actor_id,
                             actor.on_stop(&actor_weak, false).instrument(on_stop_span)
                         ) {
-                            error!("Actor {actor_id} on_stop failed during graceful stop: {e:?}");
+                            error!("Actor {actor_id} on_stop failed during graceful stop: {e}");
                             return ActorResult::Failed {
-                                actor: Some(actor),
-                                error: e,
-                                secondary_error: None,
-                                phase: FailurePhase::OnStop,
+                                failure: ActorFailure::OnStop { actor, error: e },
                                 killed: false,
                             };
                         }
@@ -786,8 +832,12 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
 
             // Dispatch one event from the merged set of subscribed idle streams
             // to the actor's `on_idle` handler. The `if !idle_streams.is_empty()`
-            // guard is essential: `SelectAll::next()` on an empty set resolves
-            // to `Poll::Ready(None)` immediately and would busy-loop.
+            // guard is an optimization, not a correctness requirement: on an
+            // empty set `SelectAll::next()` resolves to `Poll::Ready(None)`
+            // immediately, the `Some(event)` pattern fails to match, and
+            // `select!` merely disables this branch for the remainder of the
+            // current call — costing one wasted poll per loop iteration. The
+            // guard skips that poll entirely.
             //
             // Each underlying stream is responsible for its own cancel-safety.
             // Streams that complete (return None) are removed from the set
@@ -804,7 +854,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                 );
 
                 if let Err(e) = result {
-                    error!("Actor {actor_id} on_idle error: {e:?}");
+                    error!("Actor {actor_id} on_idle error: {e}");
 
                     // Call on_stop for cleanup even after on_idle failure
                     #[cfg(feature = "tracing")]
@@ -812,25 +862,29 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                     #[cfg(not(feature = "tracing"))]
                     let on_stop_span = tracing::Span::none();
 
-                    let (phase, secondary_error) = match run_with_actor_scope!(
+                    let failure = match run_with_actor_scope!(
                         actor_id,
                         actor.on_stop(&actor_weak, false).instrument(on_stop_span)
                     ) {
                         Err(stop_err) => {
                             error!(
-                                "Actor {actor_id} on_stop failed during on_idle error cleanup: {stop_err:?}"
+                                "Actor {actor_id} on_stop failed during on_idle error cleanup: {stop_err}"
                             );
-                            (FailurePhase::OnIdleThenOnStop, Some(stop_err))
+                            ActorFailure::OnIdleThenOnStop {
+                                actor,
+                                error: e,
+                                stop_error: stop_err,
+                            }
                         }
-                        Ok(()) => (FailurePhase::OnIdle, None),
+                        Ok(()) => ActorFailure::OnIdle { actor, error: e },
                     };
 
+                    // `killed` is necessarily false here: the only assignment to
+                    // true happens in the terminate arm, which returns or breaks
+                    // out of the loop before this arm can run again.
                     return ActorResult::Failed {
-                        actor: Some(actor),
-                        error: e,
-                        secondary_error,
-                        phase,
-                        killed,
+                        failure,
+                        killed: false,
                     };
                 }
             }

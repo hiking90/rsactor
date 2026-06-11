@@ -19,22 +19,146 @@ pub enum FailurePhase {
     OnStop,
     /// Actor failed during [`on_idle`](crate::Actor::on_idle), and then
     /// [`on_stop`](crate::Actor::on_stop) also failed during cleanup.
-    /// The primary `on_idle` error is exposed via [`ActorResult::error`]; the
-    /// `on_stop` error is exposed via [`ActorResult::secondary_error`].
+    /// The primary `on_idle` error is exposed via [`ActorFailure::error`]; the
+    /// `on_stop` error is exposed via [`ActorFailure::stop_error`].
     OnIdleThenOnStop,
 }
 
 /// Implements Display for FailurePhase to provide human-readable error messages.
 ///
-/// This allows `FailurePhase` to be easily converted to strings for logging,
-/// error reporting, and debugging purposes.
+/// The human-readable form is the variant name, so this delegates to the
+/// derived `Debug` impl — one source of truth when variants are added.
 impl std::fmt::Display for FailurePhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+/// Phase-specific payload of a failed actor lifecycle.
+///
+/// Each variant carries exactly the data that can exist in that phase, so the
+/// invariants that were previously documentation-only are enforced by the type
+/// system:
+///
+/// - Only [`OnStart`](ActorFailure::OnStart) lacks an actor instance (the actor
+///   was never constructed).
+/// - Only [`OnIdleThenOnStop`](ActorFailure::OnIdleThenOnStop) carries a second
+///   error (the `on_stop` cleanup failure after the primary `on_idle` failure).
+///
+/// Use the accessors ([`phase`](Self::phase), [`error`](Self::error),
+/// [`actor`](Self::actor), [`stop_error`](Self::stop_error)) for uniform access
+/// across variants, or match directly when handling a specific phase.
+#[derive(Debug)]
+pub enum ActorFailure<T: Actor> {
+    /// [`on_start`](crate::Actor::on_start) returned an error; the actor was
+    /// never constructed, so no instance is available.
+    OnStart {
+        /// The error returned by `on_start`.
+        error: T::Error,
+    },
+    /// [`on_idle`](crate::Actor::on_idle) returned an error and the subsequent
+    /// `on_stop` cleanup succeeded.
+    OnIdle {
+        /// The actor instance, recovered for inspection or restart.
+        actor: T,
+        /// The error returned by `on_idle`.
+        error: T::Error,
+    },
+    /// [`on_stop`](crate::Actor::on_stop) returned an error during shutdown.
+    OnStop {
+        /// The actor instance, recovered for inspection or restart.
+        actor: T,
+        /// The error returned by `on_stop`.
+        error: T::Error,
+    },
+    /// [`on_idle`](crate::Actor::on_idle) returned an error, and then
+    /// [`on_stop`](crate::Actor::on_stop) also failed while cleaning up.
+    OnIdleThenOnStop {
+        /// The actor instance, recovered for inspection or restart.
+        actor: T,
+        /// The primary error returned by `on_idle`.
+        error: T::Error,
+        /// The secondary error returned by `on_stop` during cleanup.
+        stop_error: T::Error,
+    },
+}
+
+impl<T: Actor> ActorFailure<T> {
+    /// Returns the lifecycle phase this failure occurred in.
+    pub fn phase(&self) -> FailurePhase {
         match self {
-            FailurePhase::OnStart => write!(f, "OnStart"),
-            FailurePhase::OnIdle => write!(f, "OnIdle"),
-            FailurePhase::OnStop => write!(f, "OnStop"),
-            FailurePhase::OnIdleThenOnStop => write!(f, "OnIdleThenOnStop"),
+            ActorFailure::OnStart { .. } => FailurePhase::OnStart,
+            ActorFailure::OnIdle { .. } => FailurePhase::OnIdle,
+            ActorFailure::OnStop { .. } => FailurePhase::OnStop,
+            ActorFailure::OnIdleThenOnStop { .. } => FailurePhase::OnIdleThenOnStop,
+        }
+    }
+
+    /// Returns the primary error of this failure.
+    ///
+    /// For [`OnIdleThenOnStop`](Self::OnIdleThenOnStop) this is the original
+    /// `on_idle` error; the `on_stop` cleanup error is available via
+    /// [`stop_error`](Self::stop_error).
+    pub fn error(&self) -> &T::Error {
+        match self {
+            ActorFailure::OnStart { error }
+            | ActorFailure::OnIdle { error, .. }
+            | ActorFailure::OnStop { error, .. }
+            | ActorFailure::OnIdleThenOnStop { error, .. } => error,
+        }
+    }
+
+    /// Consumes the failure and returns the primary error.
+    ///
+    /// Drops the recovered actor instance (if any) and the `on_stop` cleanup
+    /// error (for [`OnIdleThenOnStop`](Self::OnIdleThenOnStop)).
+    pub fn into_error(self) -> T::Error {
+        match self {
+            ActorFailure::OnStart { error }
+            | ActorFailure::OnIdle { error, .. }
+            | ActorFailure::OnStop { error, .. }
+            | ActorFailure::OnIdleThenOnStop { error, .. } => error,
+        }
+    }
+
+    /// Returns the recovered actor instance, if one exists.
+    ///
+    /// `None` only for [`OnStart`](Self::OnStart) failures, where the actor was
+    /// never constructed.
+    pub fn actor(&self) -> Option<&T> {
+        match self {
+            ActorFailure::OnStart { .. } => None,
+            ActorFailure::OnIdle { actor, .. }
+            | ActorFailure::OnStop { actor, .. }
+            | ActorFailure::OnIdleThenOnStop { actor, .. } => Some(actor),
+        }
+    }
+
+    /// Consumes the failure and returns the recovered actor instance, if any.
+    pub fn into_actor(self) -> Option<T> {
+        match self {
+            ActorFailure::OnStart { .. } => None,
+            ActorFailure::OnIdle { actor, .. }
+            | ActorFailure::OnStop { actor, .. }
+            | ActorFailure::OnIdleThenOnStop { actor, .. } => Some(actor),
+        }
+    }
+
+    /// Returns the `on_stop` cleanup error, present only for
+    /// [`OnIdleThenOnStop`](Self::OnIdleThenOnStop).
+    pub fn stop_error(&self) -> Option<&T::Error> {
+        match self {
+            ActorFailure::OnIdleThenOnStop { stop_error, .. } => Some(stop_error),
+            _ => None,
+        }
+    }
+
+    /// Consumes the failure and returns the `on_stop` cleanup error, present
+    /// only for [`OnIdleThenOnStop`](Self::OnIdleThenOnStop).
+    pub fn into_stop_error(self) -> Option<T::Error> {
+        match self {
+            ActorFailure::OnIdleThenOnStop { stop_error, .. } => Some(stop_error),
+            _ => None,
         }
     }
 }
@@ -73,8 +197,8 @@ impl std::fmt::Display for FailurePhase {
 ///         println!("Actor completed successfully, killed: {}", killed);
 ///         // Use the recovered actor instance
 ///     }
-///     ActorResult::Failed { error, phase, .. } => {
-///         eprintln!("Actor failed in phase {:?}: {}", phase, error);
+///     ActorResult::Failed { failure, .. } => {
+///         eprintln!("Actor failed in phase {}: {}", failure.phase(), failure.error());
 ///         // Handle the error appropriately
 ///     }
 /// }
@@ -139,26 +263,11 @@ pub enum ActorResult<T: Actor> {
     },
     /// Actor failed during one of its lifecycle phases.
     ///
-    /// This variant indicates that the actor encountered an error during execution.
+    /// The phase, the error(s), and the recovered actor instance (when one
+    /// exists) live in the phase-specific [`ActorFailure`] payload.
     Failed {
-        /// The actor instance (if recoverable), or None if not recoverable.
-        /// This will be `None` specifically when the failure occurred during the [`on_start`](Actor::on_start) phase,
-        /// as the actor wasn't fully initialized.
-        actor: Option<T>,
-        /// The error that caused the failure (the primary cause).
-        ///
-        /// For [`FailurePhase::OnIdleThenOnStop`] this holds the original `on_idle` error;
-        /// the subsequent `on_stop` error is exposed via the `secondary_error` field
-        /// (or the [`ActorResult::secondary_error`] accessor).
-        error: T::Error,
-        /// Secondary error, set only when a *cleanup* hook also failed after the primary failure.
-        ///
-        /// Currently set only for [`FailurePhase::OnIdleThenOnStop`], where it carries the
-        /// `on_stop` error that was emitted while cleaning up after a failed `on_idle`.
-        /// `None` for every other phase.
-        secondary_error: Option<T::Error>,
-        /// The lifecycle phase during which the failure occurred
-        phase: FailurePhase,
+        /// What failed, where, and what could be recovered.
+        failure: ActorFailure<T>,
         /// Whether the actor was killed (`true`) or was attempting to stop gracefully (`false`)
         killed: bool,
     },
@@ -168,6 +277,11 @@ pub enum ActorResult<T: Actor> {
 ///
 /// This allows extracting both the actor instance and error (if any) in a single operation.
 /// Useful for pattern matching and destructuring in supervision contexts.
+///
+/// **Lossy**: this conversion discards the failure phase, the `killed` flag,
+/// and — for [`FailurePhase::OnIdleThenOnStop`] — the secondary `on_stop`
+/// cleanup error. Use the accessors on [`ActorResult`] / [`ActorFailure`] when
+/// any of those matter.
 ///
 /// # Example
 /// ```ignore
@@ -183,11 +297,12 @@ impl<T: Actor> From<ActorResult<T>> for (Option<T>, Option<T::Error>) {
     fn from(result: ActorResult<T>) -> Self {
         match result {
             ActorResult::Completed { actor, .. } => (Some(actor), None),
-            ActorResult::Failed {
-                actor,
-                error: cause,
-                ..
-            } => (actor, Some(cause)),
+            ActorResult::Failed { failure, .. } => match failure {
+                ActorFailure::OnStart { error } => (None, Some(error)),
+                ActorFailure::OnIdle { actor, error }
+                | ActorFailure::OnStop { actor, error }
+                | ActorFailure::OnIdleThenOnStop { actor, error, .. } => (Some(actor), Some(error)),
+            },
         }
     }
 }
@@ -221,6 +336,14 @@ impl<T: Actor> ActorResult<T> {
         matches!(self, ActorResult::Completed { killed: false, .. })
     }
 
+    /// Returns the failure phase, or `None` if the actor completed successfully.
+    pub fn phase(&self) -> Option<FailurePhase> {
+        match self {
+            ActorResult::Completed { .. } => None,
+            ActorResult::Failed { failure, .. } => Some(failure.phase()),
+        }
+    }
+
     /// Returns `true` if the actor failed to start.
     ///
     /// This indicates that the actor failed during the [`on_start`](crate::Actor::on_start) lifecycle phase,
@@ -229,7 +352,7 @@ impl<T: Actor> ActorResult<T> {
         matches!(
             self,
             ActorResult::Failed {
-                phase: FailurePhase::OnStart,
+                failure: ActorFailure::OnStart { .. },
                 ..
             }
         )
@@ -245,7 +368,7 @@ impl<T: Actor> ActorResult<T> {
         matches!(
             self,
             ActorResult::Failed {
-                phase: FailurePhase::OnIdle | FailurePhase::OnIdleThenOnStop,
+                failure: ActorFailure::OnIdle { .. } | ActorFailure::OnIdleThenOnStop { .. },
                 ..
             }
         )
@@ -259,21 +382,25 @@ impl<T: Actor> ActorResult<T> {
         matches!(
             self,
             ActorResult::Failed {
-                phase: FailurePhase::OnIdleThenOnStop,
+                failure: ActorFailure::OnIdleThenOnStop { .. },
                 ..
             }
         )
     }
 
-    /// Returns `true` if the actor failed during the stop phase.
+    /// Returns `true` if [`on_stop`](crate::Actor::on_stop) failed.
     ///
-    /// This indicates that the actor encountered an error while trying to shut down
-    /// in the [`on_stop`](crate::Actor::on_stop) lifecycle phase.
+    /// This covers both a failure during a normal shutdown
+    /// ([`FailurePhase::OnStop`]) and an `on_stop` failure while cleaning up
+    /// after an `on_idle` error ([`FailurePhase::OnIdleThenOnStop`]) —
+    /// mirroring how [`is_runtime_failed()`](Self::is_runtime_failed) includes
+    /// the composite phase. Use [`is_cleanup_failed()`](Self::is_cleanup_failed)
+    /// to distinguish the composite case.
     pub fn is_stop_failed(&self) -> bool {
         matches!(
             self,
             ActorResult::Failed {
-                phase: FailurePhase::OnStop,
+                failure: ActorFailure::OnStop { .. } | ActorFailure::OnIdleThenOnStop { .. },
                 ..
             }
         )
@@ -311,7 +438,7 @@ impl<T: Actor> ActorResult<T> {
     pub fn actor(&self) -> Option<&T> {
         match self {
             ActorResult::Completed { actor, .. } => Some(actor),
-            ActorResult::Failed { actor, .. } => actor.as_ref(),
+            ActorResult::Failed { failure, .. } => failure.actor(),
         }
     }
 
@@ -342,7 +469,7 @@ impl<T: Actor> ActorResult<T> {
     pub fn into_actor(self) -> Option<T> {
         match self {
             ActorResult::Completed { actor, .. } => Some(actor),
-            ActorResult::Failed { actor, .. } => actor,
+            ActorResult::Failed { failure, .. } => failure.into_actor(),
         }
     }
 
@@ -353,7 +480,7 @@ impl<T: Actor> ActorResult<T> {
     pub fn error(&self) -> Option<&T::Error> {
         match self {
             ActorResult::Completed { .. } => None,
-            ActorResult::Failed { error: cause, .. } => Some(cause),
+            ActorResult::Failed { failure, .. } => Some(failure.error()),
         }
     }
 
@@ -364,7 +491,7 @@ impl<T: Actor> ActorResult<T> {
     pub fn into_error(self) -> Option<T::Error> {
         match self {
             ActorResult::Completed { .. } => None,
-            ActorResult::Failed { error: cause, .. } => Some(cause),
+            ActorResult::Failed { failure, .. } => Some(failure.into_error()),
         }
     }
 
@@ -376,9 +503,7 @@ impl<T: Actor> ActorResult<T> {
     /// remains accessible via [`error()`](Self::error).
     pub fn secondary_error(&self) -> Option<&T::Error> {
         match self {
-            ActorResult::Failed {
-                secondary_error, ..
-            } => secondary_error.as_ref(),
+            ActorResult::Failed { failure, .. } => failure.stop_error(),
             ActorResult::Completed { .. } => None,
         }
     }
@@ -388,9 +513,7 @@ impl<T: Actor> ActorResult<T> {
     /// See [`secondary_error()`](Self::secondary_error) for semantics.
     pub fn into_secondary_error(self) -> Option<T::Error> {
         match self {
-            ActorResult::Failed {
-                secondary_error, ..
-            } => secondary_error,
+            ActorResult::Failed { failure, .. } => failure.into_stop_error(),
             ActorResult::Completed { .. } => None,
         }
     }
@@ -415,8 +538,10 @@ impl<T: Actor> ActorResult<T> {
     /// This transforms the `ActorResult<T>` into a `Result<T, T::Error>`,
     /// which is useful for integrating with Rust's standard error handling patterns.
     ///
-    /// **Note**: This method discards information about whether the actor was killed
-    /// and the failure phase. Use the individual query methods if you need this information.
+    /// **Lossy**: this discards whether the actor was killed and the failure
+    /// phase, and on failure it also drops the recovered actor instance (when
+    /// one exists) and the secondary `on_stop` cleanup error. Use the
+    /// individual query methods if you need any of that information.
     ///
     /// # Example
     /// ```rust,no_run
@@ -430,14 +555,14 @@ impl<T: Actor> ActorResult<T> {
     /// # }
     /// # fn example(result: ActorResult<MyActor>) -> Result<MyActor, anyhow::Error> {
     /// // Convert to standard Result for use with ? operator
-    /// let actor = result.to_result()?;
+    /// let actor = result.into_result()?;
     /// Ok(actor)
     /// # }
     /// ```
-    pub fn to_result(self) -> std::result::Result<T, T::Error> {
+    pub fn into_result(self) -> std::result::Result<T, T::Error> {
         match self {
             ActorResult::Completed { actor, .. } => Ok(actor),
-            ActorResult::Failed { error: cause, .. } => Err(cause),
+            ActorResult::Failed { failure, .. } => Err(failure.into_error()),
         }
     }
 }

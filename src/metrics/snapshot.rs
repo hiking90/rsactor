@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime};
 /// println!("Messages processed: {}", metrics.message_count);
 /// println!("Average processing time: {:?}", metrics.avg_processing_time);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct MetricsSnapshot {
     /// Total number of messages successfully processed by this actor.
@@ -64,21 +64,6 @@ pub struct MetricsSnapshot {
     ///
     /// Returns `None` if no messages have been processed yet.
     pub last_activity: Option<SystemTime>,
-}
-
-impl Default for MetricsSnapshot {
-    fn default() -> Self {
-        Self {
-            message_count: 0,
-            avg_processing_time: Duration::ZERO,
-            max_processing_time: Duration::ZERO,
-            priority_message_count: 0,
-            avg_priority_processing_time: Duration::ZERO,
-            max_priority_processing_time: Duration::ZERO,
-            uptime: Duration::ZERO,
-            last_activity: None,
-        }
-    }
 }
 
 #[cfg(test)]
