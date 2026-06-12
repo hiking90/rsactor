@@ -73,11 +73,33 @@ impl AskEdge {
     /// owners call this. Recovers a poisoned lock the same way insertion does —
     /// skipping removal on poison would leak the edge permanently and turn
     /// every later ask through these actors into a false-positive panic.
+    ///
+    /// Claiming the flag and removing the edge happen together under the graph
+    /// lock. Claiming first (flag swap outside the lock) would let the *other*
+    /// owner observe "already removed" and proceed — e.g. the callee's runtime
+    /// loop dropping its [`AskEdgeToken`] after the reply and moving on to the
+    /// next message — while the edge physically lingers in the graph until the
+    /// claiming thread wins the lock. A registration serialized into that
+    /// window (the callee's next handler asking the original caller) would DFS
+    /// over the stale edge and panic on a phantom cycle in a healthy system.
+    /// Under the lock, whichever owner runs first completes the physical
+    /// removal before returning, so the graph is consistent at every point
+    /// where a registration can observe it.
     fn remove_once(&self) {
-        if self.removed.swap(true, Ordering::AcqRel) {
+        // Relaxed pre-check so the second owner's no-op stays lock-free (every
+        // completed ask calls remove_once twice): the flag is only ever set
+        // while holding the graph lock and the physical removal completes
+        // before that lock is released, so observing `true` here means no
+        // registration can see the stale edge.
+        if self.removed.load(Ordering::Relaxed) {
             return;
         }
         let mut graph = wait_for_graph().lock().unwrap_or_else(|e| e.into_inner());
+        // Relaxed: the graph mutex provides all the ordering needed; the flag
+        // is atomic only for the pre-check above and so `AskEdge` is `Sync`.
+        if self.removed.swap(true, Ordering::Relaxed) {
+            return;
+        }
         remove_edge(&mut graph, self.caller, self.callee_id);
     }
 }

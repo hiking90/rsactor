@@ -197,7 +197,10 @@ async fn subscribe_idle_fails_once_stop_began() {
 
     let res = actor_ref.subscribe_idle(futures::stream::pending::<()>());
     assert!(
-        matches!(res, Err(rsactor::Error::Send { .. })),
+        matches!(
+            res.as_ref().map_err(|e| &e.error),
+            Err(rsactor::Error::Send { .. })
+        ),
         "subscribe_idle during shutdown must fail fast, got {res:?}"
     );
 
@@ -221,7 +224,10 @@ async fn subscribe_idle_fails_once_kill_began() {
 
     let res = actor_ref.subscribe_idle(futures::stream::pending::<()>());
     assert!(
-        matches!(res, Err(rsactor::Error::Send { .. })),
+        matches!(
+            res.as_ref().map_err(|e| &e.error),
+            Err(rsactor::Error::Send { .. })
+        ),
         "subscribe_idle during kill shutdown must fail fast, got {res:?}"
     );
 

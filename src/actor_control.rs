@@ -76,12 +76,24 @@ pub trait ActorControl: Send + Sync {
     ///
     /// The returned future resolves once the stop signal is **enqueued**, not
     /// when the actor has finished stopping. To observe completion, follow up
-    /// with [`wait_stopped`](Self::wait_stopped).
+    /// with [`wait_stopped`](Self::wait_stopped). Enqueueing awaits mailbox
+    /// admission, so on a **full** mailbox the future does not resolve until a
+    /// slot frees up — and a self-stop from inside the actor's own handler on
+    /// a full mailbox can never be admitted (the loop that would free a slot
+    /// is parked awaiting that handler). With the `deadlock-detection` feature
+    /// enabled, that self-stop panics instead of hanging; see
+    /// [`ActorRef::stop`](crate::ActorRef::stop).
     fn stop(&self) -> BoxFuture<'_, ()>;
 
     /// Immediately terminates the actor.
     ///
-    /// The actor will stop without processing remaining messages.
+    /// Any messages still queued in the mailbox are discarded without being
+    /// processed (the physical drain happens after `on_stop(killed = true)`
+    /// returns). **First signal wins**: if a graceful
+    /// stop has already been dequeued, the actor completes that graceful stop
+    /// (draining its mailbox) and this kill is never observed — and a handler
+    /// already executing always runs to completion first; see
+    /// [`ActorRef::kill`](crate::ActorRef::kill) for the full semantics.
     /// Idempotent: a closed or full terminate channel is treated as
     /// "termination already in flight".
     fn kill(&self);

@@ -8,10 +8,15 @@
 //!
 //! # Background
 //!
-//! Dead letters occur when a message cannot be delivered to an actor, such as:
+//! Dead letters occur when a message cannot be delivered to an actor — or,
+//! for `ask`-family operations, when its **reply** is not observed — such as:
 //! - The actor's mailbox channel has closed (actor stopped)
-//! - A send or ask operation times out
+//! - A send operation times out before admission, or an ask round-trip times
+//!   out before the reply arrives (the message itself may have been delivered
+//!   and processed; see [`DeadLetterReason::Timeout`])
 //! - The reply channel was dropped before responding
+//! - The message was accepted but the actor terminated before processing it
+//!   (see [`DeadLetterReason::DiscardedAtShutdown`])
 //!
 //! # Observability
 //!
@@ -108,10 +113,20 @@ pub enum DeadLetterReason {
 
     /// A send or ask operation exceeded its timeout.
     ///
-    /// When using [`ActorRef::tell_with_timeout`](crate::ActorRef::tell_with_timeout) or
-    /// [`ActorRef::ask_with_timeout`](crate::ActorRef::ask_with_timeout),
-    /// if the message cannot be delivered within the specified duration,
-    /// it becomes a dead letter.
+    /// Recorded by every timeout-carrying API: `tell_with_timeout`,
+    /// `ask_with_timeout`, `tell_priority`, `ask_priority`, and the
+    /// `blocking_*` variants.
+    ///
+    /// **What this means differs by family.** For `tell` operations the
+    /// deadline covers mailbox admission only, so a record means the message
+    /// was never delivered. For `ask` operations the deadline covers the whole
+    /// round-trip (admission + handler execution + reply), so a record means
+    /// **no reply was observed in time** — the message may well have been
+    /// delivered and fully processed, with any side effects applied, and only
+    /// the reply was late. Do not treat an ask-timeout dead letter (or
+    /// [`dead_letter_count`](crate::dead_letter_count)) as proof the handler
+    /// did not run — in particular, do not blindly retry non-idempotent
+    /// operations on it.
     Timeout,
 
     /// The reply channel was dropped before a response could be sent.

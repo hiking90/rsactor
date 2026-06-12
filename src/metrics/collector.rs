@@ -22,8 +22,9 @@ use super::MetricsSnapshot;
 /// # Overflow Protection
 ///
 /// - Individual durations are capped at `u64::MAX` nanoseconds (~584 years)
-/// - `total_processing_nanos` accumulates with plain atomic add; the summed
-///   total wraps only after ~584 years of processing time
+/// - The `total_*_nanos` counters (regular, priority, idle) accumulate with
+///   plain atomic add; a summed total wraps only after ~584 years of
+///   processing time
 #[derive(Debug)]
 pub(crate) struct MetricsCollector {
     /// Number of messages processed (regular mailbox only — priority messages are
@@ -39,6 +40,12 @@ pub(crate) struct MetricsCollector {
     total_priority_processing_nanos: AtomicU64,
     /// Maximum priority message processing time observed in nanoseconds
     max_priority_processing_nanos: AtomicU64,
+    /// Number of idle events dispatched to `on_idle` (successful returns only).
+    idle_event_count: AtomicU64,
+    /// Cumulative `on_idle` processing time, in nanoseconds
+    total_idle_processing_nanos: AtomicU64,
+    /// Maximum `on_idle` processing time observed in nanoseconds
+    max_idle_processing_nanos: AtomicU64,
     /// Last activity timestamp as milliseconds since UNIX_EPOCH
     last_activity_millis: AtomicU64,
     /// Collector construction time. Used as the uptime baseline until the actor
@@ -60,6 +67,9 @@ impl MetricsCollector {
             priority_message_count: AtomicU64::new(0),
             total_priority_processing_nanos: AtomicU64::new(0),
             max_priority_processing_nanos: AtomicU64::new(0),
+            idle_event_count: AtomicU64::new(0),
+            total_idle_processing_nanos: AtomicU64::new(0),
+            max_idle_processing_nanos: AtomicU64::new(0),
             last_activity_millis: AtomicU64::new(0),
             start_instant: Instant::now(),
             started_at: OnceLock::new(),
@@ -130,6 +140,30 @@ impl MetricsCollector {
         self.update_last_activity();
     }
 
+    /// Records a completed `on_idle` dispatch with its duration.
+    ///
+    /// Idle events do work with the same exclusive access to actor state as
+    /// message handlers; without these counters an actor driven purely by
+    /// subscribed idle streams would look permanently inactive
+    /// (`last_activity == None`) and a slow `on_idle` would be invisible to
+    /// the processing-time metrics.
+    #[inline]
+    pub fn record_idle_event(&self, duration: Duration) {
+        self.idle_event_count.fetch_add(1, Ordering::Relaxed);
+
+        let nanos = duration.as_nanos().min(u64::MAX as u128) as u64;
+
+        // Plain atomic add (single RMW) instead of a fetch_update CAS loop; see
+        // `record_message` for the wraparound rationale.
+        self.total_idle_processing_nanos
+            .fetch_add(nanos, Ordering::Relaxed);
+
+        self.max_idle_processing_nanos
+            .fetch_max(nanos, Ordering::Relaxed);
+
+        self.update_last_activity();
+    }
+
     /// Updates the last activity timestamp to now.
     fn update_last_activity(&self) {
         let millis = SystemTime::now()
@@ -164,10 +198,14 @@ impl MetricsCollector {
         let total_nanos = self.total_processing_nanos.load(Ordering::Relaxed);
         let priority_count = self.priority_message_count.load(Ordering::Relaxed);
         let total_priority_nanos = self.total_priority_processing_nanos.load(Ordering::Relaxed);
+        let idle_count = self.idle_event_count.load(Ordering::Relaxed);
+        let total_idle_nanos = self.total_idle_processing_nanos.load(Ordering::Relaxed);
         let max_processing_time =
             Duration::from_nanos(self.max_processing_nanos.load(Ordering::Relaxed));
         let max_priority_processing_time =
             Duration::from_nanos(self.max_priority_processing_nanos.load(Ordering::Relaxed));
+        let max_idle_processing_time =
+            Duration::from_nanos(self.max_idle_processing_nanos.load(Ordering::Relaxed));
 
         MetricsSnapshot {
             message_count: count,
@@ -184,6 +222,13 @@ impl MetricsCollector {
                 .unwrap_or(Duration::ZERO)
                 .min(max_priority_processing_time),
             max_priority_processing_time,
+            idle_event_count: idle_count,
+            avg_idle_processing_time: total_idle_nanos
+                .checked_div(idle_count)
+                .map(Duration::from_nanos)
+                .unwrap_or(Duration::ZERO)
+                .min(max_idle_processing_time),
+            max_idle_processing_time,
             uptime: self.uptime_baseline().elapsed(),
             last_activity: self.get_last_activity(),
         }
@@ -244,6 +289,33 @@ impl MetricsCollector {
     #[inline]
     pub fn max_priority_processing_time(&self) -> Duration {
         Duration::from_nanos(self.max_priority_processing_nanos.load(Ordering::Relaxed))
+    }
+
+    /// Returns the total number of idle events dispatched to `on_idle`.
+    #[inline]
+    pub fn idle_event_count(&self) -> u64 {
+        self.idle_event_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns the average `on_idle` processing time.
+    ///
+    /// Clamped to [`max_idle_processing_time`](Self::max_idle_processing_time);
+    /// see [`avg_processing_time`](Self::avg_processing_time).
+    #[inline]
+    pub fn avg_idle_processing_time(&self) -> Duration {
+        let count = self.idle_event_count.load(Ordering::Relaxed);
+        let total_nanos = self.total_idle_processing_nanos.load(Ordering::Relaxed);
+        total_nanos
+            .checked_div(count)
+            .map(Duration::from_nanos)
+            .unwrap_or(Duration::ZERO)
+            .min(self.max_idle_processing_time())
+    }
+
+    /// Returns the maximum `on_idle` processing time observed.
+    #[inline]
+    pub fn max_idle_processing_time(&self) -> Duration {
+        Duration::from_nanos(self.max_idle_processing_nanos.load(Ordering::Relaxed))
     }
 
     /// Returns the uptime since actor start.

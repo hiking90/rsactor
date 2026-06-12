@@ -286,7 +286,7 @@ mod metrics;
 pub use metrics::MetricsSnapshot;
 
 mod actor_ref;
-pub use actor_ref::{ActorRef, ActorWeak};
+pub use actor_ref::{ActorRef, ActorWeak, IdleSubscribeError};
 
 mod actor_result;
 pub use actor_result::{ActorFailure, ActorResult, FailurePhase};
@@ -533,7 +533,7 @@ pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 /// [`SpawnOptions::with_priority`] for the rationale.
 pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 
-/// Capacity of the idle-subscribe channel used by
+/// Default capacity of the idle-subscribe channel used by
 /// [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle).
 ///
 /// Subscriptions are rare events (typically a handful per actor, established
@@ -547,8 +547,12 @@ pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 ///
 /// `subscribe_idle` uses `try_send` and returns [`Error::ChannelFull`] when the
 /// buffer is full, so the failure mode is a loud, actionable error rather
-/// than a silent hang — callers can batch or raise this constant if it is
-/// ever hit in practice.
+/// than a silent hang. Actors that legitimately need more (e.g. one
+/// subscription per item of a large config list, all registered in
+/// `on_start`) can raise the per-actor capacity with
+/// [`SpawnOptions::with_idle_capacity`], merge sources into one stream
+/// before subscribing (e.g. [`futures::stream::select_all()`]), or batch
+/// subscriptions across separate handler invocations.
 pub const IDLE_SUBSCRIBE_CHANNEL_CAPACITY: usize = 32;
 
 /// Sets the global default buffer size for actor mailboxes.
@@ -618,6 +622,10 @@ pub struct SpawnOptions {
     /// `select!` loop, which the majority of actors (those that never use `on_idle`) would
     /// otherwise pay on every message.
     pub(crate) idle_enabled: bool,
+    /// Capacity of the idle-subscribe channel when it is enabled. Defaults to
+    /// [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`]. Set via
+    /// [`SpawnOptions::with_idle_capacity`].
+    pub(crate) idle_capacity: usize,
 }
 
 impl SpawnOptions {
@@ -632,6 +640,7 @@ impl SpawnOptions {
             mailbox_capacity: capacity,
             priority_enabled: false,
             idle_enabled: false,
+            idle_capacity: IDLE_SUBSCRIBE_CHANNEL_CAPACITY,
         }
     }
 
@@ -658,6 +667,16 @@ impl SpawnOptions {
     /// channel, so admission resumes immediately at the next select! iteration. Callers
     /// must always pass a [`Duration`](std::time::Duration) so a wedged actor can never
     /// block a sender indefinitely.
+    ///
+    /// # Runtime requirement: time driver
+    ///
+    /// The graceful-stop path of a priority-enabled actor drains the priority
+    /// channel with a short [`tokio::time`] quiet window, so the hosting
+    /// runtime must be built with the time driver enabled (`enable_time()` or
+    /// `enable_all()`; `#[tokio::main]`/`#[tokio::test]` enable it by
+    /// default). On a runtime without timers, stopping such an actor panics
+    /// inside the actor task ("A Tokio 1.x context was found, but timers are
+    /// disabled") instead of completing `on_stop`.
     pub fn with_priority(mut self) -> Self {
         self.priority_enabled = true;
         self
@@ -676,6 +695,28 @@ impl SpawnOptions {
     /// should pay. Enable it when (and only when) the actor subscribes idle streams.
     pub fn with_idle(mut self) -> Self {
         self.idle_enabled = true;
+        self
+    }
+
+    /// Enables the idle-event channel with a custom subscribe-buffer capacity
+    /// (implies [`with_idle`](Self::with_idle)).
+    ///
+    /// The buffer must absorb every subscription made before the runtime
+    /// enters its select! loop — in particular all `subscribe_idle` calls
+    /// issued inside `on_start`, which are only drained after `on_start`
+    /// returns. Raise the capacity above the default
+    /// ([`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`]) when an actor legitimately
+    /// fans out more subscriptions than that in one burst; alternatives are
+    /// merging sources into a single stream before subscribing or batching
+    /// subscriptions across separate handler invocations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n == 0`.
+    pub fn with_idle_capacity(mut self, n: usize) -> Self {
+        assert!(n > 0, "Idle-subscribe capacity must be greater than 0");
+        self.idle_enabled = true;
+        self.idle_capacity = n;
         self
     }
 }
@@ -761,7 +802,7 @@ pub fn spawn_with_options<T: Actor>(
     };
 
     let (idle_subscribe_tx, idle_subscribe_rx) = if opts.idle_enabled {
-        let (tx, rx) = mpsc::channel(IDLE_SUBSCRIBE_CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::channel(opts.idle_capacity);
         (Some(tx), Some(rx))
     } else {
         (None, None)

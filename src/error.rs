@@ -35,11 +35,26 @@ pub enum Error {
     /// failure — the actor is alive and the channel will drain as the runtime makes
     /// progress. [`Error::is_retryable`] returns `true` for this variant.
     ///
+    /// **Retry only from outside the target actor.** The saturated buffer is
+    /// drained by the actor's own runtime loop, which runs only *between* that
+    /// actor's handler invocations (and not at all until `on_start` returns).
+    /// A retry loop inside the actor's own `on_start` or message handler
+    /// therefore spins forever on a buffer that can never drain — and because
+    /// the loop never returns, the actor cannot even be `kill()`ed. From
+    /// inside the actor, treat this error as terminal for the current attempt:
+    /// spawn with a larger
+    /// [`SpawnOptions::with_idle_capacity`](crate::SpawnOptions::with_idle_capacity),
+    /// merge sources into one stream, or defer the work to a later handler
+    /// invocation.
+    ///
     /// Currently emitted only by
     /// [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle) when the bounded
-    /// subscribe buffer (capacity
-    /// [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`](crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY))
-    /// is saturated.
+    /// subscribe buffer (default capacity
+    /// [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`](crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY),
+    /// configurable per actor via
+    /// [`SpawnOptions::with_idle_capacity`](crate::SpawnOptions::with_idle_capacity))
+    /// is saturated; the rejected stream is handed back via
+    /// [`IdleSubscribeError`](crate::IdleSubscribeError) so a retry can reuse it.
     ChannelFull {
         /// ID of the actor whose channel was full
         identity: Identity,
@@ -63,7 +78,14 @@ pub enum Error {
         identity: Identity,
         /// The duration after which the request timed out
         timeout: Duration,
-        /// Type of operation that timed out (e.g., "send", "ask")
+        /// The operation family whose deadline was missed. One of `"tell"`,
+        /// `"ask"`, `"tell_priority"`, `"ask_priority"`, `"blocking_tell"`,
+        /// `"blocking_tell_priority"`, `"blocking_ask"`, or
+        /// `"blocking_ask_priority"`: [`tell_with_timeout`](crate::ActorRef::tell_with_timeout)
+        /// reports `"tell"` and [`ask_with_timeout`](crate::ActorRef::ask_with_timeout)
+        /// reports `"ask"` (the async `tell`/`ask` themselves carry no
+        /// deadline); the `*_priority` and `blocking_*` methods report their
+        /// own names, regardless of which execution path served them.
         operation: &'static str,
     },
     /// Error when downcasting a reply to the expected type
@@ -305,10 +327,14 @@ impl Error {
                 "Consider using `ActorWeak` for long-lived references",
             ],
             Error::ChannelFull { .. } => &[
-                "Transient failure - retry after a short delay or batch your sends",
-                "Bounded channels drain as the actor processes work; the actor is alive",
-                "For subscribe_idle specifically, batch subscriptions across handler invocations \
-                 or raise IDLE_SUBSCRIBE_CHANNEL_CAPACITY if you regularly fan out > 32 streams",
+                "Transient failure - the actor is alive and its runtime loop drains the buffer",
+                "Retry only from OUTSIDE the target actor: the buffer drains between handler \
+                 invocations, so a retry loop inside the actor's own on_start/handler spins \
+                 forever and cannot be kill()ed",
+                "For subscribe_idle specifically, spawn with SpawnOptions::with_idle_capacity(n) \
+                 if you regularly fan out more than 32 streams, merge sources into one stream \
+                 (futures::stream::select_all), or batch subscriptions across handler invocations",
+                "The rejected stream is returned in IdleSubscribeError - reuse it for the retry",
             ],
             Error::Receive { .. } => &[
                 "The actor dropped the reply channel before responding",

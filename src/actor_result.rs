@@ -235,6 +235,11 @@ impl<T: Actor> ActorFailure<T> {
 ///             let (new_ref, new_handle) = restart_actor().await?;
 ///         }
 ///     }
+///     result if result.is_stop_failed() => {
+///         // Stopped (or killed), but on_stop cleanup failed - resources may
+///         // not have been released (flushes, connections, files)
+///         eprintln!("Cleanup failed: {}", result.error().unwrap());
+///     }
 ///     result if result.was_killed() => {
 ///         // Actor was forcefully terminated
 ///         println!("Actor was killed - no restart needed");
