@@ -1053,7 +1053,9 @@ A23: Backpressure is important to prevent overwhelming actors with more messages
     let (actor_ref, handle) = spawn_with_mailbox_capacity::<MyActor>(args, mailbox_capacity);
     ```
 
-    When the mailbox is full, `ask` and `tell` operations will return an error, allowing the sender to implement backpressure strategies.
+    When the mailbox is full, the no-timeout `tell` and `ask` operations **wait for space** (admission) rather than returning an error — the bounded mailbox applies backpressure by suspending the sender. To get error-based backpressure, use `tell_with_timeout` / `ask_with_timeout` (which fail with `Error::Timeout` when admission doesn't complete in time) or the priority variants (whose timeout is mandatory).
+
+    ⚠️ **Never issue a no-timeout `tell`/`stop` to the actor's own `ActorRef` from inside one of its handlers when the mailbox may be full.** The only consumer of the mailbox is the actor's own loop, which is parked awaiting that handler — the wait can never be satisfied and `kill()` cannot interrupt it. Use `tell_with_timeout`, enlarge the mailbox, or send from a spawned task. (With the `deadlock-detection` feature enabled, this situation panics immediately instead of hanging; a full-mailbox self-`ask` is likewise detected.)
 
 2.  **Rate Limiting**:
     Implement rate limiting within the actor:

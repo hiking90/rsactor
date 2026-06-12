@@ -10,9 +10,18 @@ use std::time::{Duration, SystemTime};
 ///
 /// # Consistency Note
 ///
-/// When reading metrics concurrently with message processing, individual fields
-/// are consistent but the snapshot as a whole may reflect different points in time.
-/// This is acceptable for monitoring purposes where exact consistency is not required.
+/// When reading metrics concurrently with message processing, each underlying
+/// counter is read atomically but the snapshot as a whole may reflect
+/// different points in time. Derived fields (the averages) are computed from
+/// two separately-read counters and are clamped to their corresponding maxima
+/// so that `avg <= max` always holds; the residual skew is bounded by a single
+/// message's duration. This is acceptable for monitoring purposes where exact
+/// consistency is not required.
+///
+/// There is also no ordering guarantee between a reply and the metrics that
+/// recorded it: immediately after an `ask().await` resolves, the counters may
+/// not yet include that message (recording happens after the reply is sent).
+/// Tests asserting exact counts right after an `ask` should retry briefly.
 ///
 /// # Example
 ///
@@ -58,6 +67,13 @@ pub struct MetricsSnapshot {
     /// (the point the actor enters its message loop). Before `on_start`
     /// completes, the value falls back to the time since the metrics collector
     /// was created at [`spawn`](crate::spawn).
+    ///
+    /// Note: metrics outlive the actor (they remain readable through retained
+    /// `ActorRef`/`ActorWeak` handles for post-mortem analysis), and `uptime`
+    /// is wall-clock based — it keeps growing after the actor has stopped.
+    /// Combine with `last_activity` or
+    /// [`ActorRef::is_alive`](crate::ActorRef::is_alive) when deciding whether
+    /// the actor is still running.
     pub uptime: Duration,
 
     /// Timestamp of the last message processing completion.

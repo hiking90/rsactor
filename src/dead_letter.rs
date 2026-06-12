@@ -119,6 +119,17 @@ pub enum DeadLetterReason {
     /// When using [`ActorRef::ask`](crate::ActorRef::ask), the handler may fail or the message processing
     /// may be interrupted before sending a reply.
     ReplyDropped,
+
+    /// The message was accepted into the actor's mailbox but the actor
+    /// terminated before processing it.
+    ///
+    /// This covers messages still queued when the actor was killed, and
+    /// messages admitted after a graceful stop signal (which the actor does
+    /// not process). The sender observed a successful send (`Ok`), so this
+    /// receiver-side record is the only trace of the loss. Recording is
+    /// best-effort: a send racing the final shutdown drain can still slip
+    /// through unrecorded.
+    DiscardedAtShutdown,
 }
 
 impl std::fmt::Display for DeadLetterReason {
@@ -127,6 +138,7 @@ impl std::fmt::Display for DeadLetterReason {
             DeadLetterReason::ActorStopped => write!(f, "actor stopped"),
             DeadLetterReason::Timeout => write!(f, "timeout"),
             DeadLetterReason::ReplyDropped => write!(f, "reply dropped"),
+            DeadLetterReason::DiscardedAtShutdown => write!(f, "discarded at shutdown"),
         }
     }
 }
@@ -162,6 +174,20 @@ impl std::fmt::Display for DeadLetterReason {
 /// called, allowing better optimization of the hot path (successful message delivery).
 #[cold]
 pub(crate) fn record<M>(identity: Identity, reason: DeadLetterReason, operation: &'static str) {
+    record_erased(identity, reason, operation, std::any::type_name::<M>());
+}
+
+/// Type-erased variant of [`record`] for call sites that no longer have the
+/// concrete message type — e.g. the shutdown drain, which only holds a
+/// `Box<dyn PayloadHandler>` and obtains the type name through
+/// `PayloadHandler::message_type_name`.
+#[cold]
+pub(crate) fn record_erased(
+    identity: Identity,
+    reason: DeadLetterReason,
+    operation: &'static str,
+    message_type: &'static str,
+) {
     #[cfg(any(test, feature = "test-utils"))]
     DEAD_LETTER_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -169,7 +195,7 @@ pub(crate) fn record<M>(identity: Identity, reason: DeadLetterReason, operation:
     tracing::warn!(
         actor.id = identity.id,
         actor.type_name = identity.name(),
-        message.type_name = std::any::type_name::<M>(),
+        message.type_name = message_type,
         dead_letter.reason = %reason,
         dead_letter.operation = operation,
         "Dead letter: message could not be delivered"

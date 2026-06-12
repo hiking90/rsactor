@@ -152,32 +152,38 @@ impl MetricsCollector {
 
     /// Creates an immutable snapshot of current metrics.
     ///
-    /// The snapshot is consistent for each individual field but may not
-    /// represent a single point in time across all fields when read
-    /// concurrently with message processing.
+    /// Each individual atomic is read consistently, but the snapshot as a
+    /// whole is not a single point in time: a recording that races this read
+    /// can land between the loads, so *derived* values (the averages, computed
+    /// from two separately-loaded atomics) can transiently disagree with the
+    /// other fields. The averages are clamped to their corresponding maxima so
+    /// the `avg <= max` invariant always holds in the values this returns; the
+    /// residual skew is bounded by a single message's duration.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let count = self.message_count.load(Ordering::Relaxed);
         let total_nanos = self.total_processing_nanos.load(Ordering::Relaxed);
         let priority_count = self.priority_message_count.load(Ordering::Relaxed);
         let total_priority_nanos = self.total_priority_processing_nanos.load(Ordering::Relaxed);
+        let max_processing_time =
+            Duration::from_nanos(self.max_processing_nanos.load(Ordering::Relaxed));
+        let max_priority_processing_time =
+            Duration::from_nanos(self.max_priority_processing_nanos.load(Ordering::Relaxed));
 
         MetricsSnapshot {
             message_count: count,
             avg_processing_time: total_nanos
                 .checked_div(count)
                 .map(Duration::from_nanos)
-                .unwrap_or(Duration::ZERO),
-            max_processing_time: Duration::from_nanos(
-                self.max_processing_nanos.load(Ordering::Relaxed),
-            ),
+                .unwrap_or(Duration::ZERO)
+                .min(max_processing_time),
+            max_processing_time,
             priority_message_count: priority_count,
             avg_priority_processing_time: total_priority_nanos
                 .checked_div(priority_count)
                 .map(Duration::from_nanos)
-                .unwrap_or(Duration::ZERO),
-            max_priority_processing_time: Duration::from_nanos(
-                self.max_priority_processing_nanos.load(Ordering::Relaxed),
-            ),
+                .unwrap_or(Duration::ZERO)
+                .min(max_priority_processing_time),
+            max_priority_processing_time,
             uptime: self.uptime_baseline().elapsed(),
             last_activity: self.get_last_activity(),
         }
@@ -192,6 +198,10 @@ impl MetricsCollector {
     }
 
     /// Returns the average processing time per message.
+    ///
+    /// Clamped to [`max_processing_time`](Self::max_processing_time) so the
+    /// `avg <= max` invariant holds even when this read races a recording
+    /// (count/total/max are separate atomics).
     #[inline]
     pub fn avg_processing_time(&self) -> Duration {
         let count = self.message_count.load(Ordering::Relaxed);
@@ -200,6 +210,7 @@ impl MetricsCollector {
             .checked_div(count)
             .map(Duration::from_nanos)
             .unwrap_or(Duration::ZERO)
+            .min(self.max_processing_time())
     }
 
     /// Returns the maximum processing time observed.
@@ -215,6 +226,9 @@ impl MetricsCollector {
     }
 
     /// Returns the average priority message processing time.
+    ///
+    /// Clamped to [`max_priority_processing_time`](Self::max_priority_processing_time);
+    /// see [`avg_processing_time`](Self::avg_processing_time).
     #[inline]
     pub fn avg_priority_processing_time(&self) -> Duration {
         let count = self.priority_message_count.load(Ordering::Relaxed);
@@ -223,6 +237,7 @@ impl MetricsCollector {
             .checked_div(count)
             .map(Duration::from_nanos)
             .unwrap_or(Duration::ZERO)
+            .min(self.max_priority_processing_time())
     }
 
     /// Returns the maximum priority message processing time observed.

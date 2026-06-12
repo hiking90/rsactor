@@ -541,3 +541,154 @@ async fn test_blocking_slow_path_self_cycle_panics_immediately() {
         "detection must be immediate, not the 5s blocking timeout"
     );
 }
+
+// ============================================================
+// Self-send on a full mailbox: unbounded waits panic, bounded
+// waits stay recoverable
+// ============================================================
+
+#[derive(Debug)]
+struct SelfSendActor {
+    entered: std::sync::Arc<tokio::sync::Notify>,
+    proceed: std::sync::Arc<tokio::sync::Notify>,
+}
+
+#[derive(Debug)]
+struct Padding;
+#[derive(Debug)]
+struct TriggerSelfTell;
+#[derive(Debug)]
+struct TriggerSelfStop;
+#[derive(Debug)]
+struct TriggerTimedSelfTell;
+
+impl Actor for SelfSendActor {
+    type Args = (
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    );
+    type Error = anyhow::Error;
+    type IdleEvent = ();
+
+    async fn on_start(
+        (entered, proceed): Self::Args,
+        _: &ActorRef<Self>,
+    ) -> Result<Self, Self::Error> {
+        Ok(SelfSendActor { entered, proceed })
+    }
+}
+
+impl Message<Padding> for SelfSendActor {
+    type Reply = ();
+
+    async fn handle(&mut self, _: Padding, _: &ActorRef<Self>) {}
+}
+
+impl Message<TriggerSelfTell> for SelfSendActor {
+    type Reply = ();
+
+    async fn handle(&mut self, _: TriggerSelfTell, actor_ref: &ActorRef<Self>) {
+        self.entered.notify_one();
+        self.proceed.notified().await;
+        // The test has filled the capacity-1 mailbox: this unbounded self-send
+        // can never be admitted (the loop is parked awaiting this handler) and
+        // must panic under deadlock-detection instead of hanging.
+        let _ = actor_ref.tell(Padding).await;
+    }
+}
+
+impl Message<TriggerSelfStop> for SelfSendActor {
+    type Reply = ();
+
+    async fn handle(&mut self, _: TriggerSelfStop, actor_ref: &ActorRef<Self>) {
+        self.entered.notify_one();
+        self.proceed.notified().await;
+        // Same hazard through stop(): StopGracefully travels the regular
+        // mailbox, so a full-mailbox self-stop is equally unrecoverable.
+        actor_ref.stop().await;
+    }
+}
+
+impl Message<TriggerTimedSelfTell> for SelfSendActor {
+    type Reply = bool;
+
+    async fn handle(&mut self, _: TriggerTimedSelfTell, actor_ref: &ActorRef<Self>) -> bool {
+        self.entered.notify_one();
+        self.proceed.notified().await;
+        // Bounded variant: must NOT panic — it resolves as a recoverable
+        // Error::Timeout once the 50ms admission window elapses.
+        actor_ref
+            .tell_with_timeout(Padding, std::time::Duration::from_millis(50))
+            .await
+            .is_err()
+    }
+}
+
+async fn run_self_send_panic_case<M>(msg: M) -> Result<(), tokio::task::JoinError>
+where
+    SelfSendActor: Message<M>,
+    M: Send + 'static,
+{
+    let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let proceed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let (actor_ref, handle) = rsactor::spawn_with_mailbox_capacity::<SelfSendActor>(
+        (entered.clone(), proceed.clone()),
+        1,
+    );
+
+    actor_ref.tell(msg).await.unwrap();
+    entered.notified().await;
+    // Fill the capacity-1 mailbox while the handler is parked.
+    actor_ref.tell::<Padding>(Padding).await.unwrap();
+    proceed.notify_one();
+
+    handle.await.map(|_| ())
+}
+
+#[tokio::test]
+async fn test_self_tell_on_full_mailbox_panics() {
+    let res = run_self_send_panic_case(TriggerSelfTell).await;
+    assert!(
+        res.is_err() && res.unwrap_err().is_panic(),
+        "unbounded self-tell on a full mailbox must panic under deadlock-detection"
+    );
+}
+
+#[tokio::test]
+async fn test_self_stop_on_full_mailbox_panics() {
+    let res = run_self_send_panic_case(TriggerSelfStop).await;
+    assert!(
+        res.is_err() && res.unwrap_err().is_panic(),
+        "self-stop on a full mailbox must panic under deadlock-detection"
+    );
+}
+
+#[tokio::test]
+async fn test_timed_self_tell_on_full_mailbox_times_out_without_panic() {
+    let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let proceed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let (actor_ref, handle) = rsactor::spawn_with_mailbox_capacity::<SelfSendActor>(
+        (entered.clone(), proceed.clone()),
+        1,
+    );
+
+    let asker = actor_ref.clone();
+    let ask_task = tokio::spawn(async move { asker.ask(TriggerTimedSelfTell).await });
+
+    entered.notified().await;
+    actor_ref.tell(Padding).await.unwrap();
+    proceed.notify_one();
+
+    let timed_out = ask_task
+        .await
+        .expect("ask task must not panic")
+        .expect("ask must succeed");
+    assert!(
+        timed_out,
+        "bounded self-tell must resolve as a recoverable timeout, not a panic"
+    );
+
+    actor_ref.stop().await;
+    let result = handle.await.expect("actor task must not panic");
+    assert!(result.is_completed());
+}

@@ -75,3 +75,11 @@ required-features = ["deadlock-detection"]
 [[test]]
 name = "priority_signal_tests"
 required-features = ["test-utils"]
+
+[[test]]
+name = "shutdown_discard_tests"
+required-features = ["test-utils"]
+
+[[test]]
+name = "metrics_consistency_tests"
+required-features = ["metrics"]

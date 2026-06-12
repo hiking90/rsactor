@@ -330,6 +330,16 @@ impl<T: Actor> ActorRef<T> {
     /// branch. This is the chief reason to prefer subscriptions over open-coded
     /// idle loops.
     ///
+    /// **Do not capture a strong `ActorRef` of this same actor inside the
+    /// stream.** Because the runtime task owns the stream, a stream that owns
+    /// a strong self-reference forms a permanent keep-alive cycle: dropping
+    /// every external `ActorRef` then never terminates the actor (the
+    /// ref-drop shutdown path can't fire), and once the last external ref is
+    /// gone there is no handle left to call [`stop`](Self::stop)/[`kill`](Self::kill)
+    /// with — the task leaks for the life of the runtime. Capture an
+    /// [`ActorWeak`] (via [`downgrade`](Self::downgrade)) and upgrade per
+    /// event instead.
+    ///
     /// Subscription can be called any number of times, from any context with
     /// access to an [`ActorRef`] — typically from [`Actor::on_start`] for the
     /// initial sources, and from message handlers to attach additional sources
@@ -356,6 +366,17 @@ impl<T: Actor> ActorRef<T> {
     ///   across separate handler invocations or raise
     ///   [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`](crate::IDLE_SUBSCRIBE_CHANNEL_CAPACITY).
     /// - [`Error::Send`] when the actor is no longer alive (channel closed) — terminal.
+    ///   The subscribe channel is closed as soon as the actor *begins* stopping
+    ///   (graceful stop, kill, or an `on_idle` failure), so most termination-racing
+    ///   calls fail here rather than succeed.
+    ///
+    /// # Ok is "accepted", not "installed"
+    ///
+    /// `Ok(())` means the stream was enqueued for installation. A call that
+    /// races the very start of the actor's shutdown can still return `Ok` for
+    /// a stream that is never polled — it is discarded (and its drop runs)
+    /// when the actor finishes stopping; the shutdown drain logs the count at
+    /// debug level.
     ///
     /// # Example
     ///
@@ -394,9 +415,23 @@ impl<T: Actor> ActorRef<T> {
     /// Sends a message to the actor without awaiting a reply (fire-and-forget).
     ///
     /// The message is sent to the actor's mailbox for processing.
-    /// This method returns immediately.
+    /// This method returns once the message is admitted into the mailbox —
+    /// **when the mailbox is full, it waits for space** rather than returning
+    /// an error (use [`tell_with_timeout`](Self::tell_with_timeout) for a
+    /// bounded wait).
     ///
     /// Type safety: Only messages that the actor `T` can handle via [`Message<M>`] trait are accepted.
+    ///
+    /// # Deadlock warning (self-send)
+    ///
+    /// Calling this on the actor's **own** `ActorRef` from inside one of its
+    /// handlers or lifecycle hooks while its mailbox is full is an
+    /// unrecoverable deadlock: the only consumer of the mailbox is the actor's
+    /// runtime loop, which is parked awaiting that very handler, so admission
+    /// can never succeed and [`kill`](Self::kill) cannot interrupt the wait.
+    /// With the `deadlock-detection` feature enabled this panics immediately
+    /// instead of hanging. Prefer [`tell_with_timeout`](Self::tell_with_timeout)
+    /// (bounded, recoverable) or send from a spawned task.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_tell",
@@ -411,6 +446,27 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T: Message<M>,
     {
+        self.tell_inner(msg, true).await
+    }
+
+    /// Shared implementation of [`tell`](Self::tell) and
+    /// [`tell_with_timeout`](Self::tell_with_timeout).
+    ///
+    /// `detect_self_deadlock` arms the deadlock-detection check for unbounded
+    /// admission waits: a no-timeout tell issued from inside this actor's own
+    /// handler while its mailbox is full can never be admitted (the loop that
+    /// would free a slot is parked awaiting that very handler), so under the
+    /// `deadlock-detection` feature it panics instead of hanging forever.
+    /// `tell_with_timeout` passes `false` — its admission wait is bounded by
+    /// the caller's timeout and therefore recoverable, not a deadlock.
+    async fn tell_inner<M>(&self, msg: M, detect_self_deadlock: bool) -> Result<()>
+    where
+        M: Send + 'static,
+        T: Message<M>,
+    {
+        #[cfg(not(feature = "deadlock-detection"))]
+        let _ = detect_self_deadlock;
+
         let envelope = MailboxMessage::Envelope {
             payload: Box::new(msg),
             reply_channel: None,     // reply_channel is None for tell
@@ -419,6 +475,25 @@ impl<T: Actor> ActorRef<T> {
         };
 
         debug!("Sending tell message (fire-and-forget)");
+
+        // Deadlock detection: probe admission first so a full mailbox is
+        // observable before committing to an unbounded wait. `Closed` falls
+        // through to `send().await`, which fails fast on the standard error
+        // path below.
+        #[cfg(feature = "deadlock-detection")]
+        let envelope = match self.sender.try_send(envelope) {
+            Ok(()) => {
+                debug!("Tell message sent successfully");
+                return Ok(());
+            }
+            Err(mpsc::error::TrySendError::Full(env)) => {
+                if detect_self_deadlock {
+                    self.panic_if_self_send_on_full("tell");
+                }
+                env
+            }
+            Err(mpsc::error::TrySendError::Closed(env)) => env,
+        };
 
         let result = if self.sender.send(envelope).await.is_err() {
             crate::dead_letter::record::<M>(
@@ -440,6 +515,30 @@ impl<T: Actor> ActorRef<T> {
         }
 
         result
+    }
+
+    /// Deadlock-detection helper: panics when an *unbounded* admission wait on
+    /// this actor's own full mailbox is attempted from inside one of its own
+    /// handlers or lifecycle hooks. The mailbox's only consumer is the actor's
+    /// runtime loop, which is parked awaiting the very code making this call —
+    /// the wait can never be satisfied and `kill()` cannot interrupt it, so
+    /// this is a guaranteed deadlock, not a heuristic.
+    #[cfg(feature = "deadlock-detection")]
+    fn panic_if_self_send_on_full(&self, operation: &str) {
+        let is_self = crate::CURRENT_ACTOR
+            .try_with(|id| id.id == self.id.id)
+            .unwrap_or(false);
+        if is_self {
+            panic!(
+                "Deadlock detected: {operation} to self on a full mailbox from inside actor {}'s \
+                 own handler or lifecycle hook.\n\
+                 The mailbox's only consumer is this actor's runtime loop, which is parked \
+                 awaiting the current handler, so admission can never succeed and kill() cannot \
+                 interrupt the wait. Use tell_with_timeout, a larger mailbox capacity, or send \
+                 from a spawned task.",
+                self.id
+            );
+        }
     }
 
     /// Sends a message to the actor without awaiting a reply (fire-and-forget) with a timeout.
@@ -468,7 +567,10 @@ impl<T: Actor> ActorRef<T> {
             "Sending tell message with timeout"
         );
 
-        let result = tokio::time::timeout(timeout, self.tell(msg))
+        // `detect_self_deadlock = false`: a full-mailbox self-send through this
+        // method is bounded by `timeout` and resolves as a recoverable
+        // `Error::Timeout`, so it is not a deadlock.
+        let result = tokio::time::timeout(timeout, self.tell_inner(msg, false))
             .await
             .map_err(|_| {
                 crate::dead_letter::record::<M>(
@@ -1025,6 +1127,13 @@ impl<T: Actor> ActorRef<T> {
     /// `deadlock-detection` feature for `ask` cycles, and by isolating blocking work
     /// (e.g. `tokio::task::spawn_blocking` or a separate process).
     ///
+    /// **First signal wins.** If a graceful stop is already in progress — the
+    /// actor has dequeued a [`stop`](Self::stop) signal and is draining /
+    /// running `on_stop(killed = false)` — a `kill()` arriving afterwards is
+    /// enqueued but never observed: the actor completes the graceful stop and
+    /// its result reports `killed: false`. Honoring the late kill would mean
+    /// interrupting or re-running an `on_stop` that is already executing.
+    ///
     /// This method is idempotent: a `Full` or `Closed` terminate channel is treated as
     /// "termination already in flight" — the desired terminal state is met either way.
     /// Both conditions are logged via `tracing::warn!` for diagnostics.
@@ -1038,7 +1147,10 @@ impl<T: Actor> ActorRef<T> {
         // Use the dedicated terminate_sender with try_send
         match self.terminate_sender.try_send(ControlSignal::Terminate) {
             Ok(_) => {
-                info!("Kill signal sent successfully");
+                info!(
+                    "Kill signal enqueued; takes effect when the actor next polls control \
+                     signals (no effect if a graceful stop is already in progress)"
+                );
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // The channel has capacity 1, so Full means a Terminate is already queued.
@@ -1060,21 +1172,47 @@ impl<T: Actor> ActorRef<T> {
     /// The returned future resolves once the stop signal is **enqueued**, not
     /// when the actor has finished stopping. Await the `JoinHandle` from
     /// [`spawn`](crate::spawn) or [`wait_stopped`](Self::wait_stopped) to
-    /// observe completion.
+    /// observe completion. When the mailbox is full, this waits for space like
+    /// [`tell`](Self::tell) does.
     ///
     /// This method is idempotent: a closed mailbox channel is treated as "stop already
     /// in flight" — the desired terminal state is met either way. The condition is
-    /// logged via `tracing::warn!` for diagnostics.
+    /// logged via `tracing::warn!` for diagnostics. Conversely, a [`kill`](Self::kill)
+    /// that arrives *after* the actor has begun this graceful stop is never observed
+    /// (first signal wins; the result reports `killed: false`).
+    ///
+    /// # Deadlock warning (self-stop)
+    ///
+    /// Calling this on the actor's **own** `ActorRef` from inside one of its
+    /// handlers or lifecycle hooks while its mailbox is full is an
+    /// unrecoverable deadlock, identical to a full-mailbox self-[`tell`](Self::tell):
+    /// the loop that would free a slot is parked awaiting that handler, and
+    /// [`kill`](Self::kill) cannot interrupt it. With the `deadlock-detection`
+    /// feature enabled this panics immediately instead of hanging.
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(level = "info", name = "actor_stop", skip(self))
     )]
     pub async fn stop(&self) {
-        match self
-            .sender
-            .send(MailboxMessage::StopGracefully(self.clone()))
-            .await
-        {
+        let stop_msg = MailboxMessage::StopGracefully(self.clone());
+
+        // Deadlock detection: probe admission first; see `tell_inner`. A
+        // `Closed` result falls through to `send().await`, which fails fast on
+        // the standard already-stopped path below.
+        #[cfg(feature = "deadlock-detection")]
+        let stop_msg = match self.sender.try_send(stop_msg) {
+            Ok(()) => {
+                info!(actor_id = %self.identity(), "Actor stop signal sent successfully");
+                return;
+            }
+            Err(mpsc::error::TrySendError::Full(m)) => {
+                self.panic_if_self_send_on_full("stop");
+                m
+            }
+            Err(mpsc::error::TrySendError::Closed(m)) => m,
+        };
+
+        match self.sender.send(stop_msg).await {
             Ok(_) => {
                 info!(actor_id = %self.identity(), "Actor stop signal sent successfully");
             }
@@ -1203,7 +1341,13 @@ impl<T: Actor> ActorRef<T> {
                     details: "Mailbox channel closed",
                 });
             }
-            Err(mpsc::error::TrySendError::Full(env)) => env,
+            Err(mpsc::error::TrySendError::Full(env)) => {
+                // A timeout-less blocking self-send on a full mailbox is the
+                // same unrecoverable deadlock as the async `tell` case.
+                #[cfg(feature = "deadlock-detection")]
+                self.panic_if_self_send_on_full("blocking_tell");
+                env
+            }
         };
 
         // Inside *any* runtime context (a current_thread runtime task, or a
@@ -1592,6 +1736,16 @@ impl<T: Actor> ActorRef<T> {
     /// The [`Error::Join`] variant includes the original [`tokio::task::JoinError`]
     /// which provides detailed information about task failures, such as whether
     /// the task was cancelled or panicked.
+    ///
+    /// # Cancellation safety
+    ///
+    /// Dropping this future mid-flight (e.g. wrapping it in
+    /// [`tokio::time::timeout`]) does **not** abort the task the handler
+    /// spawned: the `JoinHandle` is merely dropped, which detaches the task —
+    /// it runs to completion in the background and its result is discarded.
+    /// If you need the spawned work to stop when the caller gives up, use a
+    /// plain [`ask`](Self::ask) to receive the `JoinHandle` and call
+    /// [`abort`](tokio::task::JoinHandle::abort) on it yourself.
     ///
     /// # Type Safety
     ///

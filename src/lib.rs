@@ -415,6 +415,10 @@ where
         actor_ref: ActorRef<A>,
         reply_channel: Option<oneshot::Sender<Box<dyn std::any::Any + Send>>>,
     ) -> BoxFuture<'_, ()>;
+
+    /// Type name of the erased message, for diagnostics (dead-letter records
+    /// emitted by the shutdown drain, where only the boxed handler remains).
+    fn message_type_name(&self) -> &'static str;
 }
 
 /// A boxed future that is Send and can be stored in collections.
@@ -461,6 +465,10 @@ where
             }
         }
         .boxed()
+    }
+
+    fn message_type_name(&self) -> &'static str {
+        std::any::type_name::<T>()
     }
 }
 
