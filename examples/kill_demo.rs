@@ -88,22 +88,16 @@ async fn main() -> Result<()> {
         rsactor::ActorResult::Completed { actor, killed } => {
             println!("Actor '{}' completed. Killed: {}", actor.name, killed);
         }
-        rsactor::ActorResult::Failed {
-            actor,
-            error,
-            phase,
-            killed,
-            ..
-        } => {
+        rsactor::ActorResult::Failed { failure, killed } => {
             println!(
                 "Actor failed: {}. Phase: {:?}, Killed: {}, Final name: {}",
-                error,
-                phase,
+                failure.error(),
+                failure.phase(),
                 killed,
-                actor
-                    .as_ref()
-                    .map(|a| &a.name)
-                    .unwrap_or(&"Unknown".to_string())
+                failure
+                    .actor()
+                    .map(|a| a.name.as_str())
+                    .unwrap_or("Unknown")
             );
         }
     }

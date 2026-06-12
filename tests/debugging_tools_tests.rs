@@ -26,13 +26,13 @@ fn test_is_retryable_for_all_variants() {
     // All others are NOT retryable
     let send_err = Error::Send {
         identity,
-        details: "channel closed".into(),
+        details: "channel closed",
     };
     assert!(!send_err.is_retryable());
 
     let receive_err = Error::Receive {
         identity,
-        details: "channel closed".into(),
+        details: "channel closed",
     };
     assert!(!receive_err.is_retryable());
 
@@ -63,11 +63,11 @@ fn test_all_errors_have_debugging_tips() {
     let errors: Vec<Error> = vec![
         Error::Send {
             identity,
-            details: "test".into(),
+            details: "test",
         },
         Error::Receive {
             identity,
-            details: "test".into(),
+            details: "test",
         },
         Error::Timeout {
             identity,
@@ -170,11 +170,11 @@ fn test_error_display_all_variants() {
     let errors = vec![
         Error::Send {
             identity,
-            details: "channel closed".into(),
+            details: "channel closed",
         },
         Error::Receive {
             identity,
-            details: "reply dropped".into(),
+            details: "reply dropped",
         },
         Error::Timeout {
             identity,
@@ -785,11 +785,11 @@ fn test_error_source_returns_none_for_non_join() {
     let errors: Vec<Error> = vec![
         Error::Send {
             identity,
-            details: "test".into(),
+            details: "test",
         },
         Error::Receive {
             identity,
-            details: "test".into(),
+            details: "test",
         },
         Error::Timeout {
             identity,

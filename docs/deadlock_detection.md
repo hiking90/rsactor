@@ -235,9 +235,12 @@ let response = rx.await?;
 
 ## Limitations
 
-- **`blocking_ask`**: Runs on a separate thread for non-actor contexts. Not covered by detection since these callers can't form cycles.
-- **Concurrent asks in a handler**: Using `tokio::join!` or `tokio::select!` to send multiple `ask` calls simultaneously may miss some cycles, as the wait-for graph stores one edge per actor.
+- **`blocking_ask` from non-actor contexts**: Runs on a separate thread; not covered by detection since these callers can't form cycles. (Calls made from *inside* an actor's handler **are** tracked — the actor identity is propagated into the dedicated thread, and a cycle panics immediately.)
+- **Concurrent asks in a handler**: Fully tracked — the wait-for graph is a multiset, so `tokio::join!`-style concurrent `ask` calls each register their own edge and are all considered when searching for cycles.
+- **Stored ask futures (false-positive risk)**: An edge means "this `ask` is outstanding", and it lives as long as the ask *future*. If a handler polls an `ask` once and then stores the unresolved future in actor state (e.g. a `FuturesUnordered` driven from `on_idle`), the detector treats the actor as blocked even though it keeps processing messages — a later ask back into it can panic on a phantom cycle in a perfectly healthy system. Don't store ask futures across handler invocations; use `tell` with a callback channel instead.
 - **`tokio::spawn` inside handlers**: New tokio tasks don't inherit the `task_local` actor identity, so `ask` calls from spawned tasks are not tracked.
+
+Besides `ask` cycles, the feature also detects one `tell`-side hazard: a no-timeout `tell`/`stop`/`blocking_tell` issued to the actor's **own full mailbox** from inside one of its handlers panics immediately (the admission wait can never be satisfied — the mailbox's only consumer is parked awaiting that handler — and `kill()` cannot interrupt it). Bounded waits (`tell_with_timeout`, the priority variants) are exempt: they resolve as recoverable timeouts.
 
 ## Performance Impact
 

@@ -8,10 +8,15 @@
 //!
 //! # Background
 //!
-//! Dead letters occur when a message cannot be delivered to an actor, such as:
+//! Dead letters occur when a message cannot be delivered to an actor — or,
+//! for `ask`-family operations, when its **reply** is not observed — such as:
 //! - The actor's mailbox channel has closed (actor stopped)
-//! - A send or ask operation times out
+//! - A send operation times out before admission, or an ask round-trip times
+//!   out before the reply arrives (the message itself may have been delivered
+//!   and processed; see [`DeadLetterReason::Timeout`])
 //! - The reply channel was dropped before responding
+//! - The message was accepted but the actor terminated before processing it
+//!   (see [`DeadLetterReason::DiscardedAtShutdown`])
 //!
 //! # Observability
 //!
@@ -108,10 +113,20 @@ pub enum DeadLetterReason {
 
     /// A send or ask operation exceeded its timeout.
     ///
-    /// When using [`ActorRef::tell_with_timeout`](crate::ActorRef::tell_with_timeout) or
-    /// [`ActorRef::ask_with_timeout`](crate::ActorRef::ask_with_timeout),
-    /// if the message cannot be delivered within the specified duration,
-    /// it becomes a dead letter.
+    /// Recorded by every timeout-carrying API: `tell_with_timeout`,
+    /// `ask_with_timeout`, `tell_priority`, `ask_priority`, and the
+    /// `blocking_*` variants.
+    ///
+    /// **What this means differs by family.** For `tell` operations the
+    /// deadline covers mailbox admission only, so a record means the message
+    /// was never delivered. For `ask` operations the deadline covers the whole
+    /// round-trip (admission + handler execution + reply), so a record means
+    /// **no reply was observed in time** — the message may well have been
+    /// delivered and fully processed, with any side effects applied, and only
+    /// the reply was late. Do not treat an ask-timeout dead letter (or
+    /// [`dead_letter_count`](crate::dead_letter_count)) as proof the handler
+    /// did not run — in particular, do not blindly retry non-idempotent
+    /// operations on it.
     Timeout,
 
     /// The reply channel was dropped before a response could be sent.
@@ -119,6 +134,17 @@ pub enum DeadLetterReason {
     /// When using [`ActorRef::ask`](crate::ActorRef::ask), the handler may fail or the message processing
     /// may be interrupted before sending a reply.
     ReplyDropped,
+
+    /// The message was accepted into the actor's mailbox but the actor
+    /// terminated before processing it.
+    ///
+    /// This covers messages still queued when the actor was killed, and
+    /// messages admitted after a graceful stop signal (which the actor does
+    /// not process). The sender observed a successful send (`Ok`), so this
+    /// receiver-side record is the only trace of the loss. Recording is
+    /// best-effort: a send racing the final shutdown drain can still slip
+    /// through unrecorded.
+    DiscardedAtShutdown,
 }
 
 impl std::fmt::Display for DeadLetterReason {
@@ -127,6 +153,7 @@ impl std::fmt::Display for DeadLetterReason {
             DeadLetterReason::ActorStopped => write!(f, "actor stopped"),
             DeadLetterReason::Timeout => write!(f, "timeout"),
             DeadLetterReason::ReplyDropped => write!(f, "reply dropped"),
+            DeadLetterReason::DiscardedAtShutdown => write!(f, "discarded at shutdown"),
         }
     }
 }
@@ -146,7 +173,10 @@ impl std::fmt::Display for DeadLetterReason {
 ///
 /// * `identity` - The identity of the actor that failed to receive the message
 /// * `reason` - Why the message became a dead letter
-/// * `operation` - The operation that failed ("tell", "ask", "blocking_tell", etc.)
+/// * `operation` - The logical operation that failed ("tell", "ask",
+///   "tell_priority", "ask_priority"). Blocking variants record the same
+///   label as their async counterparts so the same call site aggregates to
+///   one operation regardless of which execution path it took.
 ///
 /// # Type Parameters
 ///
@@ -158,10 +188,20 @@ impl std::fmt::Display for DeadLetterReason {
 /// The `#[cold]` attribute hints to the compiler that this function is rarely
 /// called, allowing better optimization of the hot path (successful message delivery).
 #[cold]
-pub(crate) fn record<M: 'static>(
+pub(crate) fn record<M>(identity: Identity, reason: DeadLetterReason, operation: &'static str) {
+    record_erased(identity, reason, operation, std::any::type_name::<M>());
+}
+
+/// Type-erased variant of [`record`] for call sites that no longer have the
+/// concrete message type — e.g. the shutdown drain, which only holds a
+/// `Box<dyn PayloadHandler>` and obtains the type name through
+/// `PayloadHandler::message_type_name`.
+#[cold]
+pub(crate) fn record_erased(
     identity: Identity,
     reason: DeadLetterReason,
     operation: &'static str,
+    message_type: &'static str,
 ) {
     #[cfg(any(test, feature = "test-utils"))]
     DEAD_LETTER_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -170,7 +210,7 @@ pub(crate) fn record<M: 'static>(
     tracing::warn!(
         actor.id = identity.id,
         actor.type_name = identity.name(),
-        message.type_name = std::any::type_name::<M>(),
+        message.type_name = message_type,
         dead_letter.reason = %reason,
         dead_letter.operation = operation,
         "Dead letter: message could not be delivered"
@@ -185,10 +225,16 @@ pub fn dead_letter_count() -> u64 {
     DEAD_LETTER_COUNT.load(Ordering::Relaxed)
 }
 
-/// Resets the dead letter counter.
+/// Atomically resets the dead letter counter and returns the value it held.
+///
+/// The read-and-reset is a single atomic `swap`, so no increment can be lost
+/// *between* reading and resetting. Dead letters recorded concurrently with
+/// the call still race with it (they land in either the returned value or the
+/// fresh count) — serialize generators against this call when exact
+/// accounting matters.
 ///
 /// This function is only available when the `test-utils` feature is enabled.
 #[cfg(any(test, feature = "test-utils"))]
-pub fn reset_dead_letter_count() {
-    DEAD_LETTER_COUNT.store(0, Ordering::Relaxed);
+pub fn reset_dead_letter_count() -> u64 {
+    DEAD_LETTER_COUNT.swap(0, Ordering::Relaxed)
 }

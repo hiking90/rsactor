@@ -286,10 +286,10 @@ mod metrics;
 pub use metrics::MetricsSnapshot;
 
 mod actor_ref;
-pub use actor_ref::{ActorRef, ActorWeak};
+pub use actor_ref::{ActorRef, ActorWeak, IdleSubscribeError};
 
 mod actor_result;
-pub use actor_result::{ActorResult, FailurePhase};
+pub use actor_result::{ActorFailure, ActorResult, FailurePhase};
 
 mod actor;
 pub use actor::{Actor, Message};
@@ -307,6 +307,16 @@ pub use actor_control::{ActorControl, WeakActorControl};
 mod deadlock;
 #[cfg(feature = "deadlock-detection")]
 pub(crate) use deadlock::{register_ask_edge, CURRENT_ACTOR};
+
+/// Slot type for the deadlock-detection token carried by ask envelopes (see
+/// [`deadlock::AskEdgeToken`]). Defined as `()` when the feature is off so
+/// envelope construction and destructuring read identically in both builds —
+/// `Default::default()` produces the empty slot either way.
+#[cfg(feature = "deadlock-detection")]
+pub(crate) type AskEdgeSlot = Option<deadlock::AskEdgeToken>;
+/// Feature-off stand-in for the deadlock-detection envelope slot.
+#[cfg(not(feature = "deadlock-detection"))]
+pub(crate) type AskEdgeSlot = ();
 
 use futures::FutureExt;
 // Re-export derive macros for convenient access
@@ -342,6 +352,19 @@ use std::{future::Future, sync::atomic::AtomicU64, sync::OnceLock};
 
 use tokio::sync::{mpsc, oneshot};
 
+/// Unique identifier of a spawned actor: a process-wide ID plus the actor's
+/// type name.
+///
+/// # Uniqueness
+///
+/// The `id` of every Identity handed out by the framework comes from a single
+/// process-global counter, so framework-issued identities never collide and
+/// internal subsystems (e.g. the `deadlock-detection` wait-for graph) key on
+/// `id` alone. [`Identity::new`] exists for constructing identities in tests
+/// and in user implementations of [`ActorControl`] — values built with it
+/// carry **no uniqueness guarantee** and can collide (`Eq`/`Hash`) with real
+/// actors; do not mix hand-built identities into maps keyed by framework
+/// identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Identity {
     /// Unique ID of the actor
@@ -352,6 +375,9 @@ pub struct Identity {
 
 impl Identity {
     /// Creates a new `Identity` with the given ID and type name.
+    ///
+    /// Intended for tests and custom [`ActorControl`] implementations. See the
+    /// type-level docs: identities built here carry no uniqueness guarantee.
     pub fn new(id: u64, type_name: &'static str) -> Self {
         Identity { id, type_name }
     }
@@ -389,6 +415,10 @@ where
         actor_ref: ActorRef<A>,
         reply_channel: Option<oneshot::Sender<Box<dyn std::any::Any + Send>>>,
     ) -> BoxFuture<'_, ()>;
+
+    /// Type name of the erased message, for diagnostics (dead-letter records
+    /// emitted by the shutdown drain, where only the boxed handler remains).
+    fn message_type_name(&self) -> &'static str;
 }
 
 /// A boxed future that is Send and can be stored in collections.
@@ -400,7 +430,7 @@ pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a
 
 impl<A, T> PayloadHandler<A> for T
 where
-    A: Actor + Message<T> + 'static,
+    A: Actor + Message<T>,
     T: Send + 'static,
 {
     fn handle_message(
@@ -417,29 +447,28 @@ where
                 // the handler finished (`ask_with_timeout` elapsed, the caller's
                 // future was cancelled, a hedged request lost the race, ...). That
                 // is a normal, caller-driven outcome — not an actor fault — and the
-                // caller side already records a dead letter. So both arms log at
+                // caller side already records a dead letter. So this logs at
                 // `debug`, never `error`, to keep routine timeouts/cancellations
-                // out of error-level monitoring.
-                let send_result = channel.send(Box::new(result));
-                #[cfg(feature = "tracing")]
-                match send_result {
-                    Ok(_) => tracing::debug!(
-                        actor = %actor_ref.identity(),
-                        "Reply sent successfully"
-                    ),
-                    Err(_) => tracing::debug!(
+                // out of error-level monitoring. The success arm is deliberately
+                // silent: every delivered reply paying a tracing event would
+                // contradict the hot-path zero-overhead goal and carries no
+                // diagnostic value.
+                if channel.send(Box::new(result)).is_err() {
+                    tracing::debug!(
                         actor = %actor_ref.identity(),
                         message_type = %std::any::type_name::<T>(),
                         "Reply not delivered - receiver no longer waiting"
-                    ),
+                    );
                 }
-                #[cfg(not(feature = "tracing"))]
-                let _ = send_result;
             } else {
                 <A as Message<T>>::on_tell_result(&result, &actor_ref);
             }
         }
         .boxed()
+    }
+
+    fn message_type_name(&self) -> &'static str {
+        std::any::type_name::<T>()
     }
 }
 
@@ -450,7 +479,7 @@ where
 /// is handled through a separate dedicated channel.
 pub(crate) enum MailboxMessage<T>
 where
-    T: Actor + 'static,
+    T: Actor,
 {
     /// A user-defined message to be processed by the actor.
     Envelope {
@@ -460,6 +489,10 @@ where
         reply_channel: Option<oneshot::Sender<Box<dyn std::any::Any + Send>>>,
         /// The actor reference for potential self-messaging or context.
         actor_ref: ActorRef<T>,
+        /// Deadlock-detection slot: the callee-side edge-removal token for an
+        /// `ask`, dropped by the runtime right after the reply is sent. Empty
+        /// for `tell` envelopes; a plain `()` when the feature is off.
+        ask_edge: AskEdgeSlot,
     },
     /// A signal for the actor to stop gracefully after processing existing messages in its mailbox.
     ///
@@ -500,7 +533,7 @@ pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 /// [`SpawnOptions::with_priority`] for the rationale.
 pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 
-/// Capacity of the idle-subscribe channel used by
+/// Default capacity of the idle-subscribe channel used by
 /// [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle).
 ///
 /// Subscriptions are rare events (typically a handful per actor, established
@@ -514,8 +547,12 @@ pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 ///
 /// `subscribe_idle` uses `try_send` and returns [`Error::ChannelFull`] when the
 /// buffer is full, so the failure mode is a loud, actionable error rather
-/// than a silent hang — callers can batch or raise this constant if it is
-/// ever hit in practice.
+/// than a silent hang. Actors that legitimately need more (e.g. one
+/// subscription per item of a large config list, all registered in
+/// `on_start`) can raise the per-actor capacity with
+/// [`SpawnOptions::with_idle_capacity`], merge sources into one stream
+/// before subscribing (e.g. [`futures::stream::select_all()`]), or batch
+/// subscriptions across separate handler invocations.
 pub const IDLE_SUBSCRIBE_CHANNEL_CAPACITY: usize = 32;
 
 /// Sets the global default buffer size for actor mailboxes.
@@ -585,6 +622,10 @@ pub struct SpawnOptions {
     /// `select!` loop, which the majority of actors (those that never use `on_idle`) would
     /// otherwise pay on every message.
     pub(crate) idle_enabled: bool,
+    /// Capacity of the idle-subscribe channel when it is enabled. Defaults to
+    /// [`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`]. Set via
+    /// [`SpawnOptions::with_idle_capacity`].
+    pub(crate) idle_capacity: usize,
 }
 
 impl SpawnOptions {
@@ -599,6 +640,7 @@ impl SpawnOptions {
             mailbox_capacity: capacity,
             priority_enabled: false,
             idle_enabled: false,
+            idle_capacity: IDLE_SUBSCRIBE_CHANNEL_CAPACITY,
         }
     }
 
@@ -625,6 +667,16 @@ impl SpawnOptions {
     /// channel, so admission resumes immediately at the next select! iteration. Callers
     /// must always pass a [`Duration`](std::time::Duration) so a wedged actor can never
     /// block a sender indefinitely.
+    ///
+    /// # Runtime requirement: time driver
+    ///
+    /// The graceful-stop path of a priority-enabled actor drains the priority
+    /// channel with a short [`tokio::time`] quiet window, so the hosting
+    /// runtime must be built with the time driver enabled (`enable_time()` or
+    /// `enable_all()`; `#[tokio::main]`/`#[tokio::test]` enable it by
+    /// default). On a runtime without timers, stopping such an actor panics
+    /// inside the actor task ("A Tokio 1.x context was found, but timers are
+    /// disabled") instead of completing `on_stop`.
     pub fn with_priority(mut self) -> Self {
         self.priority_enabled = true;
         self
@@ -645,6 +697,28 @@ impl SpawnOptions {
         self.idle_enabled = true;
         self
     }
+
+    /// Enables the idle-event channel with a custom subscribe-buffer capacity
+    /// (implies [`with_idle`](Self::with_idle)).
+    ///
+    /// The buffer must absorb every subscription made before the runtime
+    /// enters its select! loop — in particular all `subscribe_idle` calls
+    /// issued inside `on_start`, which are only drained after `on_start`
+    /// returns. Raise the capacity above the default
+    /// ([`IDLE_SUBSCRIBE_CHANNEL_CAPACITY`]) when an actor legitimately
+    /// fans out more subscriptions than that in one burst; alternatives are
+    /// merging sources into a single stream before subscribing or batching
+    /// subscriptions across separate handler invocations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n == 0`.
+    pub fn with_idle_capacity(mut self, n: usize) -> Self {
+        assert!(n > 0, "Idle-subscribe capacity must be greater than 0");
+        self.idle_enabled = true;
+        self.idle_capacity = n;
+        self
+    }
 }
 
 impl Default for SpawnOptions {
@@ -658,9 +732,11 @@ impl Default for SpawnOptions {
 /// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result as an [`ActorResult<T>`](crate::ActorResult).
-pub fn spawn<T: Actor + 'static>(
-    args: T::Args,
-) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
+///
+/// # Panics
+///
+/// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]).
+pub fn spawn<T: Actor>(args: T::Args) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     spawn_with_options(args, SpawnOptions::new())
 }
 
@@ -670,7 +746,15 @@ pub fn spawn<T: Actor + 'static>(
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
 /// to control the actor's mailbox capacity.
-pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
+///
+/// # Panics
+///
+/// Panics if `mailbox_capacity == 0` (via
+/// [`SpawnOptions::mailbox_capacity`]), or if called outside a Tokio runtime
+/// context. Note the asymmetry with [`set_default_mailbox_capacity`], which
+/// returns an `Err` for `0`: a literal zero capacity at a spawn site is a
+/// programming error, while the global default is runtime configuration.
+pub fn spawn_with_mailbox_capacity<T: Actor>(
     args: T::Args,
     mailbox_capacity: usize,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
@@ -683,10 +767,18 @@ pub fn spawn_with_mailbox_capacity<T: Actor + 'static>(
 /// This is the most general spawn entry point. Use it when you need to enable the
 /// priority channel via [`SpawnOptions::with_priority`] or configure both mailbox
 /// capacity and priority in a single call.
-pub fn spawn_with_options<T: Actor + 'static>(
+///
+/// # Panics
+///
+/// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]).
+pub fn spawn_with_options<T: Actor>(
     args: T::Args,
     opts: SpawnOptions,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
+    // Defensive only: every public path into `SpawnOptions` already rejects 0
+    // (the builder asserts, the global-default setter returns Err), so this
+    // assert is unreachable from the public API and merely guards future
+    // internal construction paths.
     assert!(
         opts.mailbox_capacity > 0,
         "Mailbox capacity must be greater than 0"
@@ -710,7 +802,7 @@ pub fn spawn_with_options<T: Actor + 'static>(
     };
 
     let (idle_subscribe_tx, idle_subscribe_rx) = if opts.idle_enabled {
-        let (tx, rx) = mpsc::channel(IDLE_SUBSCRIBE_CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::channel(opts.idle_capacity);
         (Some(tx), Some(rx))
     } else {
         (None, None)

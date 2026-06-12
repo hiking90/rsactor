@@ -69,6 +69,8 @@ Key components of the `Message<T>` trait implementation:
 *   **`async fn handle(&mut self, msg: T, actor_ref: &ActorRef<Self>) -> Self::Reply`**: This asynchronous method contains the logic for processing the message `msg` of type `T`.
     *   It takes a mutable reference to the actor's state (`&mut self`), allowing it to modify the actor's internal data.
     *   It also receives a reference to the actor's own `ActorRef`, which can be useful for various purposes, such as spawning child actors or sending messages to itself.
+
+        > ⚠️ When sending to itself from inside a handler, prefer `tell_with_timeout` (or send from a spawned task). A no-timeout `tell`/`stop` to the actor's own full mailbox can never be admitted — the loop that would free a slot is parked awaiting that very handler — producing a hang that even `kill()` cannot break. With the `deadlock-detection` feature this panics immediately instead.
     *   It must return a value of type `Self::Reply`.
 
 ### Message Immutability

@@ -503,8 +503,8 @@ async fn main() -> Result<()> {
                     actor.forks
                 );
             }
-            ActorResult::Failed { error, .. } => {
-                eprintln!("Table failed to start: {error:?}");
+            ActorResult::Failed { failure, .. } => {
+                eprintln!("Table failed to start: {:?}", failure.error());
             }
         },
         Err(e) => eprintln!("Error joining table task: {e:?}"),
@@ -519,8 +519,12 @@ async fn main() -> Result<()> {
                     actor.id, actor.name, actor.eat_count
                 );
             }
-            Ok(ActorResult::Failed { error, phase, .. }) => {
-                eprintln!("Philosopher failed to phase({phase}): {error:?}");
+            Ok(ActorResult::Failed { failure, .. }) => {
+                eprintln!(
+                    "Philosopher failed to phase({}): {:?}",
+                    failure.phase(),
+                    failure.error()
+                );
             }
             Err(e) => {
                 eprintln!("Error joining philosopher task: {e:?}");

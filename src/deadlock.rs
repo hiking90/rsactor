@@ -8,14 +8,33 @@
 //! `#[cfg(...)]` and nothing here costs anything in normal builds.
 //!
 //! Every in-flight `ask`/`ask_priority` registers a `caller -> callee` edge in a
-//! process-global wait-for graph via [`register_ask_edge`] and holds a
-//! [`WaitForGuard`] until the reply arrives (or the future is dropped). If a new
-//! edge would close a cycle, registration panics with the cycle path — the
-//! documented behavior of this feature.
+//! process-global wait-for graph via [`register_ask_edge`]. If a new edge would
+//! close a cycle, registration panics with the cycle path — the documented
+//! behavior of this feature.
+//!
+//! # Edge removal — two cooperating sides
+//!
+//! An edge `A -> B` means "A's handler cannot make progress until B replies".
+//! That statement stops being true the moment B *sends* the reply, not when A's
+//! task is next polled. Removing the edge only from the caller side (when the
+//! ask future resumes and drops its guard) leaves a stale-edge window between
+//! reply-send and caller-resume; if B's next handler asks A inside that window,
+//! the stale edge closes a phantom cycle and the detector panics on a perfectly
+//! healthy system. To close the window, every edge is removed by whichever of
+//! two owners fires first (idempotent via an atomic flag on the shared
+//! [`AskEdge`]):
+//!
+//! - [`AskEdgeToken`], carried inside the ask envelope: dropped by the callee's
+//!   runtime right after the reply was sent (or when the envelope itself is
+//!   dropped unprocessed, which also unblocks the caller).
+//! - [`WaitForGuard`], held by the caller's ask future: backstop for the paths
+//!   the token cannot see — timeout, caller-side cancellation, or a send that
+//!   never reached the mailbox.
 
 use crate::Identity;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 tokio::task_local! {
     /// Identity of the actor whose handler is currently running, used as the
@@ -39,19 +58,88 @@ fn wait_for_graph() -> &'static Mutex<HashMap<u64, Vec<Identity>>> {
     WAIT_FOR.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// RAII guard that removes the single wait-for edge it inserted when the
-/// corresponding `ask` future completes (reply received, timed out, or
-/// cancelled).
-pub(crate) struct WaitForGuard {
+/// One registered wait-for edge, shared between the caller-side
+/// [`WaitForGuard`] and the callee-side [`AskEdgeToken`]. The `removed` flag
+/// makes removal idempotent so the two owners cannot double-remove an edge
+/// that a concurrent identical ask re-inserted (the graph is a multiset).
+pub(crate) struct AskEdge {
     caller: u64,
     callee_id: u64,
+    removed: AtomicBool,
+}
+
+impl AskEdge {
+    /// Removes the edge from the global graph exactly once, no matter how many
+    /// owners call this. Recovers a poisoned lock the same way insertion does —
+    /// skipping removal on poison would leak the edge permanently and turn
+    /// every later ask through these actors into a false-positive panic.
+    ///
+    /// Claiming the flag and removing the edge happen together under the graph
+    /// lock. Claiming first (flag swap outside the lock) would let the *other*
+    /// owner observe "already removed" and proceed — e.g. the callee's runtime
+    /// loop dropping its [`AskEdgeToken`] after the reply and moving on to the
+    /// next message — while the edge physically lingers in the graph until the
+    /// claiming thread wins the lock. A registration serialized into that
+    /// window (the callee's next handler asking the original caller) would DFS
+    /// over the stale edge and panic on a phantom cycle in a healthy system.
+    /// Under the lock, whichever owner runs first completes the physical
+    /// removal before returning, so the graph is consistent at every point
+    /// where a registration can observe it.
+    fn remove_once(&self) {
+        // Relaxed pre-check so the second owner's no-op stays lock-free (every
+        // completed ask calls remove_once twice): the flag is only ever set
+        // while holding the graph lock and the physical removal completes
+        // before that lock is released, so observing `true` here means no
+        // registration can see the stale edge.
+        if self.removed.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut graph = wait_for_graph().lock().unwrap_or_else(|e| e.into_inner());
+        // Relaxed: the graph mutex provides all the ordering needed; the flag
+        // is atomic only for the pre-check above and so `AskEdge` is `Sync`.
+        if self.removed.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        remove_edge(&mut graph, self.caller, self.callee_id);
+    }
+}
+
+/// Caller-side RAII guard for a wait-for edge. Removes the edge when the `ask`
+/// future completes or is dropped (reply received, timed out, or cancelled),
+/// unless the callee-side [`AskEdgeToken`] already removed it at reply time.
+pub(crate) struct WaitForGuard {
+    edge: Arc<AskEdge>,
+}
+
+impl WaitForGuard {
+    /// Returns the callee-side token to embed in the ask envelope. The actor
+    /// runtime drops it right after the reply is sent, removing the edge at
+    /// the earliest moment the wait is actually over.
+    pub(crate) fn token(&self) -> AskEdgeToken {
+        AskEdgeToken {
+            edge: self.edge.clone(),
+        }
+    }
 }
 
 impl Drop for WaitForGuard {
     fn drop(&mut self) {
-        if let Ok(mut graph) = wait_for_graph().lock() {
-            remove_edge(&mut graph, self.caller, self.callee_id);
-        }
+        self.edge.remove_once();
+    }
+}
+
+/// Callee-side handle to a wait-for edge, carried inside the ask envelope.
+/// Dropping it removes the edge — the runtime lets it fall out of scope as
+/// soon as the reply has been sent. If the envelope is dropped unprocessed
+/// (actor killed before reaching it), the drop is equally correct: the reply
+/// channel closes at the same time, so the caller is no longer waiting.
+pub(crate) struct AskEdgeToken {
+    edge: Arc<AskEdge>,
+}
+
+impl Drop for AskEdgeToken {
+    fn drop(&mut self) {
+        self.edge.remove_once();
     }
 }
 
@@ -78,10 +166,17 @@ fn remove_edge(graph: &mut HashMap<u64, Vec<Identity>>, caller: u64, callee_id: 
 /// Panics (the documented deadlock-detection behavior) if adding the edge would
 /// close a cycle. Returns `None` when called outside an actor context — there is
 /// no current actor to attribute the wait to, so no cycle can form through it.
+#[must_use = "dropping the guard immediately removes the wait-for edge, disabling detection for this ask"]
 pub(crate) fn register_ask_edge(callee: Identity, operation: &str) -> Option<WaitForGuard> {
     let caller = CURRENT_ACTOR.try_with(|id| *id).ok()?;
     let mut graph = wait_for_graph().lock().unwrap_or_else(|e| e.into_inner());
-    if caller.id == callee.id || has_path(&graph, callee.id, caller.id) {
+    // The `contains_key` pre-check skips the DFS (and its two allocations) in
+    // the common case where the callee is not itself waiting on anyone: with
+    // no outgoing edge from the callee and `caller != callee`, no path back to
+    // the caller can exist.
+    if caller.id == callee.id
+        || (graph.contains_key(&callee.id) && has_path(&graph, callee.id, caller.id))
+    {
         let cycle = format_cycle_path(&graph, caller, callee);
         drop(graph);
         panic!(
@@ -92,8 +187,11 @@ pub(crate) fn register_ask_edge(callee: Identity, operation: &str) -> Option<Wai
     }
     graph.entry(caller.id).or_default().push(callee);
     Some(WaitForGuard {
-        caller: caller.id,
-        callee_id: callee.id,
+        edge: Arc::new(AskEdge {
+            caller: caller.id,
+            callee_id: callee.id,
+            removed: AtomicBool::new(false),
+        }),
     })
 }
 

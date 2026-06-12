@@ -416,9 +416,12 @@ async fn test_actor_fail_on_run() {
     );
 
     match result {
-        rsactor::ActorResult::Failed { actor, error, .. } => {
-            assert!(error.to_string().contains("simulated on_idle failure"));
-            if let Some(actor) = actor {
+        rsactor::ActorResult::Failed { failure, .. } => {
+            assert!(failure
+                .error()
+                .to_string()
+                .contains("simulated on_idle failure"));
+            if let Some(actor) = failure.actor() {
                 assert!(*actor.on_start_attempted.lock().await);
                 assert!(*actor.on_run_attempted.lock().await);
                 // on_stop is now called even when on_run fails (for cleanup)
@@ -953,22 +956,19 @@ async fn test_actor_fail_on_stop_during_graceful_stop() {
     assert!(!result.was_killed(), "Actor should not have been killed");
 
     match result {
-        rsactor::ActorResult::Failed {
-            actor,
-            error,
-            phase,
-            killed,
-            ..
-        } => {
+        rsactor::ActorResult::Failed { failure, killed } => {
             assert_eq!(
-                phase,
+                failure.phase(),
                 rsactor::FailurePhase::OnStop,
                 "Should fail in OnStop phase"
             );
             assert!(!killed, "Should not be marked as killed for graceful stop");
-            assert!(error.to_string().contains("simulated on_stop failure"));
+            assert!(failure
+                .error()
+                .to_string()
+                .contains("simulated on_stop failure"));
 
-            if let Some(actor) = actor {
+            if let Some(actor) = failure.actor() {
                 assert!(
                     *actor.on_start_attempted.lock().await,
                     "on_start should have been called"
@@ -1017,22 +1017,19 @@ async fn test_actor_fail_on_stop_during_kill() {
     assert!(result.was_killed(), "Actor should be marked as killed");
 
     match result {
-        rsactor::ActorResult::Failed {
-            actor,
-            error,
-            phase,
-            killed,
-            ..
-        } => {
+        rsactor::ActorResult::Failed { failure, killed } => {
             assert_eq!(
-                phase,
+                failure.phase(),
                 rsactor::FailurePhase::OnStop,
                 "Should fail in OnStop phase"
             );
             assert!(killed, "Should be marked as killed for kill operation");
-            assert!(error.to_string().contains("simulated on_stop failure"));
+            assert!(failure
+                .error()
+                .to_string()
+                .contains("simulated on_stop failure"));
 
-            if let Some(actor) = actor {
+            if let Some(actor) = failure.actor() {
                 assert!(
                     *actor.on_start_attempted.lock().await,
                     "on_start should have been called"
@@ -1077,15 +1074,9 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
     );
 
     match result {
-        rsactor::ActorResult::Failed {
-            actor,
-            error,
-            phase,
-            killed,
-            ..
-        } => {
+        rsactor::ActorResult::Failed { failure, killed } => {
             assert_eq!(
-                phase,
+                failure.phase(),
                 rsactor::FailurePhase::OnIdleThenOnStop,
                 "Should fail in OnRunThenOnStop phase when both on_run and on_stop fail"
             );
@@ -1094,9 +1085,12 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
                 "Should not be marked as killed for on_run failure scenario"
             );
             // The error should be from on_run, not on_stop
-            assert!(error.to_string().contains("simulated on_idle failure"));
+            assert!(failure
+                .error()
+                .to_string()
+                .contains("simulated on_idle failure"));
 
-            if let Some(actor) = actor {
+            if let Some(actor) = failure.actor() {
                 assert!(
                     *actor.on_start_attempted.lock().await,
                     "on_start should have been called"
@@ -1142,15 +1136,9 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
     );
 
     match result {
-        rsactor::ActorResult::Failed {
-            actor,
-            error,
-            phase,
-            killed,
-            ..
-        } => {
+        rsactor::ActorResult::Failed { failure, killed } => {
             assert_eq!(
-                phase,
+                failure.phase(),
                 rsactor::FailurePhase::OnIdle,
                 "Should fail in OnRun phase"
             );
@@ -1158,9 +1146,12 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
                 !killed,
                 "Should not be marked as killed for on_run failure scenario"
             );
-            assert!(error.to_string().contains("simulated on_idle failure"));
+            assert!(failure
+                .error()
+                .to_string()
+                .contains("simulated on_idle failure"));
 
-            if let Some(actor) = actor {
+            if let Some(actor) = failure.actor() {
                 assert!(
                     *actor.on_start_attempted.lock().await,
                     "on_start should have been called"

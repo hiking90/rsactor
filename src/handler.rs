@@ -80,11 +80,21 @@ pub trait TellHandler<M: Send + 'static>: Send + Sync {
 
     /// Blocking version of tell.
     ///
-    /// # Timeout Behavior
+    /// `timeout: None` blocks indefinitely until the message is admitted;
+    /// `timeout: Some(duration)` guarantees bounded waiting. The execution
+    /// mechanism (and its overhead) depends on the calling context — see
+    /// [`ActorRef::blocking_tell`](crate::ActorRef::blocking_tell) for the
+    /// authoritative "Execution paths" breakdown.
     ///
-    /// - **`timeout: None`**: Uses Tokio's `blocking_send` directly. Most efficient but blocks indefinitely.
-    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary runtime.
-    ///   Has overhead (~50-200μs for thread + ~1-10μs for runtime) but guarantees bounded waiting.
+    /// # Panics
+    ///
+    /// Panics only when the mailbox is full (the `try_send` hot path never
+    /// blocks): from inside a `LocalSet` running on a multi-thread runtime,
+    /// or from an async context that cannot block — a task on a
+    /// `current_thread` runtime or a thread driving a `current_thread`
+    /// runtime's `block_on` (see
+    /// [`ActorRef::blocking_tell`](crate::ActorRef::blocking_tell) for both
+    /// conditions).
     fn blocking_tell(&self, msg: M, timeout: Option<Duration>) -> Result<()>;
 
     /// Clone this handler into a new boxed instance.
@@ -130,11 +140,20 @@ pub trait AskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
 
     /// Blocking version of ask.
     ///
-    /// # Timeout Behavior
+    /// `timeout: None` blocks indefinitely until the reply arrives;
+    /// `timeout: Some(duration)` guarantees bounded waiting. The execution
+    /// mechanism (and its overhead) depends on the calling context — see
+    /// [`ActorRef::blocking_ask`](crate::ActorRef::blocking_ask) for the
+    /// authoritative "Execution paths" breakdown.
     ///
-    /// - **`timeout: None`**: Uses Tokio's `blocking_send`/`blocking_recv` directly. Most efficient but blocks indefinitely.
-    /// - **`timeout: Some(duration)`**: Spawns a separate thread with a temporary runtime.
-    ///   Has overhead (~50-200μs for thread + ~1-10μs for runtime) but guarantees bounded waiting.
+    /// # Panics
+    ///
+    /// Panics when called from inside a `LocalSet` running on a multi-thread
+    /// runtime, and when called from an async context that cannot block — a
+    /// task on a `current_thread` runtime or a thread driving a
+    /// `current_thread` runtime's `block_on` (see
+    /// [`ActorRef::blocking_ask`](crate::ActorRef::blocking_ask) for both
+    /// conditions).
     fn blocking_ask(&self, msg: M, timeout: Option<Duration>) -> Result<R>;
 
     /// Clone this handler into a new boxed instance.
@@ -246,13 +265,18 @@ impl<M: Send + 'static, R: Send + 'static> Clone for Box<dyn AskHandler<M, R>> {
     }
 }
 
-impl<M: Send + 'static> fmt::Debug for Box<dyn TellHandler<M>> {
+// Debug is implemented on the trait objects themselves (not on `Box<dyn ...>`)
+// so that `&dyn`, `Arc<dyn>`, and any other pointer type get Debug too, and
+// `Box<dyn ...>` picks it up through std's blanket `impl Debug for Box<T>`.
+// A manual Box impl would also collide with that blanket impl the moment a
+// dyn-level impl is added — this is the future-proof of the two shapes.
+impl<M: Send + 'static> fmt::Debug for dyn TellHandler<M> + '_ {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.debug_fmt(f)
     }
 }
 
-impl<M: Send + 'static, R: Send + 'static> fmt::Debug for Box<dyn AskHandler<M, R>> {
+impl<M: Send + 'static, R: Send + 'static> fmt::Debug for dyn AskHandler<M, R> + '_ {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.debug_fmt(f)
     }
@@ -271,13 +295,13 @@ impl<M: Send + 'static, R: Send + 'static> Clone for Box<dyn WeakAskHandler<M, R
     }
 }
 
-impl<M: Send + 'static> fmt::Debug for Box<dyn WeakTellHandler<M>> {
+impl<M: Send + 'static> fmt::Debug for dyn WeakTellHandler<M> + '_ {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.debug_fmt(f)
     }
 }
 
-impl<M: Send + 'static, R: Send + 'static> fmt::Debug for Box<dyn WeakAskHandler<M, R>> {
+impl<M: Send + 'static, R: Send + 'static> fmt::Debug for dyn WeakAskHandler<M, R> + '_ {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.debug_fmt(f)
     }
@@ -289,7 +313,7 @@ impl<M: Send + 'static, R: Send + 'static> fmt::Debug for Box<dyn WeakAskHandler
 
 impl<T, M> TellHandler<M> for ActorRef<T>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
 {
     fn tell(&self, msg: M) -> BoxFuture<'_, Result<()>> {
@@ -326,7 +350,7 @@ where
 
 impl<T, M> AskHandler<M, <T as Message<M>>::Reply> for ActorRef<T>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
     <T as Message<M>>::Reply: Send + 'static,
 {
@@ -372,7 +396,7 @@ where
 
 impl<T, M> WeakTellHandler<M> for ActorWeak<T>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
 {
     fn upgrade(&self) -> Option<Box<dyn TellHandler<M>>> {
@@ -397,7 +421,7 @@ where
 
 impl<T, M> WeakAskHandler<M, <T as Message<M>>::Reply> for ActorWeak<T>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
     <T as Message<M>>::Reply: Send + 'static,
 {
@@ -431,7 +455,7 @@ where
 // From ActorRef (ownership transfer) to Box<dyn TellHandler<M>>
 impl<T, M> From<ActorRef<T>> for Box<dyn TellHandler<M>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
 {
     fn from(actor_ref: ActorRef<T>) -> Self {
@@ -442,7 +466,7 @@ where
 // From &ActorRef (clone) to Box<dyn TellHandler<M>>
 impl<T, M> From<&ActorRef<T>> for Box<dyn TellHandler<M>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
 {
     fn from(actor_ref: &ActorRef<T>) -> Self {
@@ -453,7 +477,7 @@ where
 // From ActorRef (ownership transfer) to Box<dyn AskHandler<M, R>>
 impl<T, M> From<ActorRef<T>> for Box<dyn AskHandler<M, <T as Message<M>>::Reply>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
     <T as Message<M>>::Reply: Send + 'static,
 {
@@ -465,7 +489,7 @@ where
 // From &ActorRef (clone) to Box<dyn AskHandler<M, R>>
 impl<T, M> From<&ActorRef<T>> for Box<dyn AskHandler<M, <T as Message<M>>::Reply>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
     <T as Message<M>>::Reply: Send + 'static,
 {
@@ -479,7 +503,7 @@ where
 // From ActorWeak (ownership transfer) to Box<dyn WeakTellHandler<M>>
 impl<T, M> From<ActorWeak<T>> for Box<dyn WeakTellHandler<M>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
 {
     fn from(actor_weak: ActorWeak<T>) -> Self {
@@ -490,7 +514,7 @@ where
 // From &ActorWeak (clone) to Box<dyn WeakTellHandler<M>>
 impl<T, M> From<&ActorWeak<T>> for Box<dyn WeakTellHandler<M>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
 {
     fn from(actor_weak: &ActorWeak<T>) -> Self {
@@ -501,7 +525,7 @@ where
 // From ActorWeak (ownership transfer) to Box<dyn WeakAskHandler<M, R>>
 impl<T, M> From<ActorWeak<T>> for Box<dyn WeakAskHandler<M, <T as Message<M>>::Reply>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
     <T as Message<M>>::Reply: Send + 'static,
 {
@@ -513,7 +537,7 @@ where
 // From &ActorWeak (clone) to Box<dyn WeakAskHandler<M, R>>
 impl<T, M> From<&ActorWeak<T>> for Box<dyn WeakAskHandler<M, <T as Message<M>>::Reply>>
 where
-    T: Actor + Message<M> + 'static,
+    T: Actor + Message<M>,
     M: Send + 'static,
     <T as Message<M>>::Reply: Send + 'static,
 {

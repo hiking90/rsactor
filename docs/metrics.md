@@ -179,7 +179,7 @@ When the `metrics` feature is disabled, all related code is completely excluded 
 
 ### Eventual Consistency
 
-During concurrent reads/writes, individual fields are consistent, but the snapshot as a whole may not reflect exactly the same point in time. This is sufficient for monitoring purposes and is an intentional design choice to maintain lock-free performance.
+During concurrent reads/writes, each underlying counter is read atomically, but the snapshot as a whole may not reflect exactly the same point in time. Derived values (the averages) are computed from two separately-read counters and are clamped to their corresponding maxima so `avg <= max` always holds; the residual skew is bounded by a single message's duration. There is also no ordering guarantee between an `ask` reply and the metrics that recorded it — immediately after `ask().await` resolves, the counters may not yet include that message. This is sufficient for monitoring purposes and is an intentional design choice to maintain lock-free performance.
 
 ### Overflow Protection
 

@@ -281,15 +281,13 @@ async fn main() -> Result<()> {
             );
             actor.task_handle.await.expect("Failed to join task handle");
         }
-        rsactor::ActorResult::Failed {
-            actor,
-            error,
-            phase,
-            killed,
-            ..
-        } => {
-            println!("Actor stop failed: {error}. Phase: {phase}, Killed: {killed}");
-            if let Some(actor) = actor {
+        rsactor::ActorResult::Failed { failure, killed } => {
+            println!(
+                "Actor stop failed: {}. Phase: {}, Killed: {killed}",
+                failure.error(),
+                failure.phase()
+            );
+            if let Some(actor) = failure.actor() {
                 println!(
                     "Final state: factor={:.2}, latest_value={:?}",
                     actor.factor, actor.latest_value

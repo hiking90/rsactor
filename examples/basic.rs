@@ -145,19 +145,13 @@ async fn main() -> Result<()> {
                 actor.count, killed
             );
         }
-        rsactor::ActorResult::Failed {
-            actor,
-            error,
-            phase,
-            killed,
-            ..
-        } => {
+        rsactor::ActorResult::Failed { failure, killed } => {
             println!(
                 "Actor stop failed: {}. Phase: {}, Killed: {}. Final count: {}",
-                error,
-                phase,
+                failure.error(),
+                failure.phase(),
                 killed,
-                actor.as_ref().map(|a| a.count).unwrap_or(0)
+                failure.actor().map(|a| a.count).unwrap_or(0)
             );
         }
     }

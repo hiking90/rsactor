@@ -22,8 +22,9 @@ use super::MetricsSnapshot;
 /// # Overflow Protection
 ///
 /// - Individual durations are capped at `u64::MAX` nanoseconds (~584 years)
-/// - `total_processing_nanos` accumulates with plain atomic add; the summed
-///   total wraps only after ~584 years of processing time
+/// - The `total_*_nanos` counters (regular, priority, idle) accumulate with
+///   plain atomic add; a summed total wraps only after ~584 years of
+///   processing time
 #[derive(Debug)]
 pub(crate) struct MetricsCollector {
     /// Number of messages processed (regular mailbox only — priority messages are
@@ -39,6 +40,12 @@ pub(crate) struct MetricsCollector {
     total_priority_processing_nanos: AtomicU64,
     /// Maximum priority message processing time observed in nanoseconds
     max_priority_processing_nanos: AtomicU64,
+    /// Number of idle events dispatched to `on_idle` (successful returns only).
+    idle_event_count: AtomicU64,
+    /// Cumulative `on_idle` processing time, in nanoseconds
+    total_idle_processing_nanos: AtomicU64,
+    /// Maximum `on_idle` processing time observed in nanoseconds
+    max_idle_processing_nanos: AtomicU64,
     /// Last activity timestamp as milliseconds since UNIX_EPOCH
     last_activity_millis: AtomicU64,
     /// Collector construction time. Used as the uptime baseline until the actor
@@ -60,6 +67,9 @@ impl MetricsCollector {
             priority_message_count: AtomicU64::new(0),
             total_priority_processing_nanos: AtomicU64::new(0),
             max_priority_processing_nanos: AtomicU64::new(0),
+            idle_event_count: AtomicU64::new(0),
+            total_idle_processing_nanos: AtomicU64::new(0),
+            max_idle_processing_nanos: AtomicU64::new(0),
             last_activity_millis: AtomicU64::new(0),
             start_instant: Instant::now(),
             started_at: OnceLock::new(),
@@ -130,6 +140,30 @@ impl MetricsCollector {
         self.update_last_activity();
     }
 
+    /// Records a completed `on_idle` dispatch with its duration.
+    ///
+    /// Idle events do work with the same exclusive access to actor state as
+    /// message handlers; without these counters an actor driven purely by
+    /// subscribed idle streams would look permanently inactive
+    /// (`last_activity == None`) and a slow `on_idle` would be invisible to
+    /// the processing-time metrics.
+    #[inline]
+    pub fn record_idle_event(&self, duration: Duration) {
+        self.idle_event_count.fetch_add(1, Ordering::Relaxed);
+
+        let nanos = duration.as_nanos().min(u64::MAX as u128) as u64;
+
+        // Plain atomic add (single RMW) instead of a fetch_update CAS loop; see
+        // `record_message` for the wraparound rationale.
+        self.total_idle_processing_nanos
+            .fetch_add(nanos, Ordering::Relaxed);
+
+        self.max_idle_processing_nanos
+            .fetch_max(nanos, Ordering::Relaxed);
+
+        self.update_last_activity();
+    }
+
     /// Updates the last activity timestamp to now.
     fn update_last_activity(&self) {
         let millis = SystemTime::now()
@@ -152,32 +186,49 @@ impl MetricsCollector {
 
     /// Creates an immutable snapshot of current metrics.
     ///
-    /// The snapshot is consistent for each individual field but may not
-    /// represent a single point in time across all fields when read
-    /// concurrently with message processing.
+    /// Each individual atomic is read consistently, but the snapshot as a
+    /// whole is not a single point in time: a recording that races this read
+    /// can land between the loads, so *derived* values (the averages, computed
+    /// from two separately-loaded atomics) can transiently disagree with the
+    /// other fields. The averages are clamped to their corresponding maxima so
+    /// the `avg <= max` invariant always holds in the values this returns; the
+    /// residual skew is bounded by a single message's duration.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let count = self.message_count.load(Ordering::Relaxed);
         let total_nanos = self.total_processing_nanos.load(Ordering::Relaxed);
         let priority_count = self.priority_message_count.load(Ordering::Relaxed);
         let total_priority_nanos = self.total_priority_processing_nanos.load(Ordering::Relaxed);
+        let idle_count = self.idle_event_count.load(Ordering::Relaxed);
+        let total_idle_nanos = self.total_idle_processing_nanos.load(Ordering::Relaxed);
+        let max_processing_time =
+            Duration::from_nanos(self.max_processing_nanos.load(Ordering::Relaxed));
+        let max_priority_processing_time =
+            Duration::from_nanos(self.max_priority_processing_nanos.load(Ordering::Relaxed));
+        let max_idle_processing_time =
+            Duration::from_nanos(self.max_idle_processing_nanos.load(Ordering::Relaxed));
 
         MetricsSnapshot {
             message_count: count,
             avg_processing_time: total_nanos
                 .checked_div(count)
                 .map(Duration::from_nanos)
-                .unwrap_or(Duration::ZERO),
-            max_processing_time: Duration::from_nanos(
-                self.max_processing_nanos.load(Ordering::Relaxed),
-            ),
+                .unwrap_or(Duration::ZERO)
+                .min(max_processing_time),
+            max_processing_time,
             priority_message_count: priority_count,
             avg_priority_processing_time: total_priority_nanos
                 .checked_div(priority_count)
                 .map(Duration::from_nanos)
-                .unwrap_or(Duration::ZERO),
-            max_priority_processing_time: Duration::from_nanos(
-                self.max_priority_processing_nanos.load(Ordering::Relaxed),
-            ),
+                .unwrap_or(Duration::ZERO)
+                .min(max_priority_processing_time),
+            max_priority_processing_time,
+            idle_event_count: idle_count,
+            avg_idle_processing_time: total_idle_nanos
+                .checked_div(idle_count)
+                .map(Duration::from_nanos)
+                .unwrap_or(Duration::ZERO)
+                .min(max_idle_processing_time),
+            max_idle_processing_time,
             uptime: self.uptime_baseline().elapsed(),
             last_activity: self.get_last_activity(),
         }
@@ -192,6 +243,10 @@ impl MetricsCollector {
     }
 
     /// Returns the average processing time per message.
+    ///
+    /// Clamped to [`max_processing_time`](Self::max_processing_time) so the
+    /// `avg <= max` invariant holds even when this read races a recording
+    /// (count/total/max are separate atomics).
     #[inline]
     pub fn avg_processing_time(&self) -> Duration {
         let count = self.message_count.load(Ordering::Relaxed);
@@ -200,6 +255,7 @@ impl MetricsCollector {
             .checked_div(count)
             .map(Duration::from_nanos)
             .unwrap_or(Duration::ZERO)
+            .min(self.max_processing_time())
     }
 
     /// Returns the maximum processing time observed.
@@ -215,6 +271,9 @@ impl MetricsCollector {
     }
 
     /// Returns the average priority message processing time.
+    ///
+    /// Clamped to [`max_priority_processing_time`](Self::max_priority_processing_time);
+    /// see [`avg_processing_time`](Self::avg_processing_time).
     #[inline]
     pub fn avg_priority_processing_time(&self) -> Duration {
         let count = self.priority_message_count.load(Ordering::Relaxed);
@@ -223,12 +282,40 @@ impl MetricsCollector {
             .checked_div(count)
             .map(Duration::from_nanos)
             .unwrap_or(Duration::ZERO)
+            .min(self.max_priority_processing_time())
     }
 
     /// Returns the maximum priority message processing time observed.
     #[inline]
     pub fn max_priority_processing_time(&self) -> Duration {
         Duration::from_nanos(self.max_priority_processing_nanos.load(Ordering::Relaxed))
+    }
+
+    /// Returns the total number of idle events dispatched to `on_idle`.
+    #[inline]
+    pub fn idle_event_count(&self) -> u64 {
+        self.idle_event_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns the average `on_idle` processing time.
+    ///
+    /// Clamped to [`max_idle_processing_time`](Self::max_idle_processing_time);
+    /// see [`avg_processing_time`](Self::avg_processing_time).
+    #[inline]
+    pub fn avg_idle_processing_time(&self) -> Duration {
+        let count = self.idle_event_count.load(Ordering::Relaxed);
+        let total_nanos = self.total_idle_processing_nanos.load(Ordering::Relaxed);
+        total_nanos
+            .checked_div(count)
+            .map(Duration::from_nanos)
+            .unwrap_or(Duration::ZERO)
+            .min(self.max_idle_processing_time())
+    }
+
+    /// Returns the maximum `on_idle` processing time observed.
+    #[inline]
+    pub fn max_idle_processing_time(&self) -> Duration {
+        Duration::from_nanos(self.max_idle_processing_nanos.load(Ordering::Relaxed))
     }
 
     /// Returns the uptime since actor start.
@@ -250,78 +337,13 @@ impl Default for MetricsCollector {
     }
 }
 
-/// RAII guard for measuring message processing time.
-///
-/// When this guard is dropped, it automatically records the elapsed time
-/// to the associated `MetricsCollector`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let guard = MessageProcessingGuard::new(&collector);
-/// // ... process message ...
-/// drop(guard); // Automatically records duration
-/// ```
-pub(crate) struct MessageProcessingGuard<'a> {
-    collector: &'a MetricsCollector,
-    start: Instant,
-}
-
-impl<'a> MessageProcessingGuard<'a> {
-    /// Creates a new guard that will record to the given collector.
-    #[inline]
-    pub fn new(collector: &'a MetricsCollector) -> Self {
-        Self {
-            collector,
-            start: Instant::now(),
-        }
-    }
-}
-
-impl Drop for MessageProcessingGuard<'_> {
-    #[inline]
-    fn drop(&mut self) {
-        // Only count a message whose handler returned normally. If the handler
-        // panicked, this guard is dropped while the task unwinds; recording here
-        // would inflate `message_count`, which is documented as the number of
-        // *successfully processed* messages.
-        if std::thread::panicking() {
-            return;
-        }
-        self.collector.record_message(self.start.elapsed());
-    }
-}
-
-/// RAII guard for measuring priority message processing time.
-///
-/// Mirrors [`MessageProcessingGuard`] but records into the priority counters so the two
-/// channels can be observed independently.
-pub(crate) struct PriorityMessageProcessingGuard<'a> {
-    collector: &'a MetricsCollector,
-    start: Instant,
-}
-
-impl<'a> PriorityMessageProcessingGuard<'a> {
-    #[inline]
-    pub fn new(collector: &'a MetricsCollector) -> Self {
-        Self {
-            collector,
-            start: Instant::now(),
-        }
-    }
-}
-
-impl Drop for PriorityMessageProcessingGuard<'_> {
-    #[inline]
-    fn drop(&mut self) {
-        // See `MessageProcessingGuard::drop`: skip recording a handler that
-        // panicked so the priority count reflects only successful processing.
-        if std::thread::panicking() {
-            return;
-        }
-        self.collector.record_priority_message(self.start.elapsed());
-    }
-}
+// NOTE: recording is *not* RAII-based. The runtime calls `record_message` /
+// `record_priority_message` explicitly after the handler future returns
+// normally (see `process_envelope!` in actor.rs). A drop-guard would also fire
+// when the actor task is cancelled mid-handler (`JoinHandle::abort`, runtime
+// shutdown) — a path that is neither a panic nor a success — and would record
+// a partially-processed message against the documented "successfully
+// processed" counters.
 
 #[cfg(test)]
 mod tests {
@@ -353,19 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn test_guard_records_duration() {
-        let collector = MetricsCollector::new();
-
-        {
-            let _guard = MessageProcessingGuard::new(&collector);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        assert_eq!(collector.message_count(), 1);
-        assert!(collector.max_processing_time() >= Duration::from_millis(10));
-    }
-
-    #[test]
     fn test_uptime_increases() {
         let collector = MetricsCollector::new();
         let uptime1 = collector.uptime();
@@ -388,40 +397,6 @@ mod tests {
         assert!(
             after < before,
             "mark_started should reset the uptime baseline (before={before:?}, after={after:?})"
-        );
-    }
-
-    #[test]
-    fn test_guard_skips_record_on_panic() {
-        let collector = MetricsCollector::new();
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = MessageProcessingGuard::new(&collector);
-            panic!("handler panicked");
-        }));
-
-        assert!(result.is_err(), "the closure should have panicked");
-        assert_eq!(
-            collector.message_count(),
-            0,
-            "a panicking handler must not be counted as successfully processed"
-        );
-    }
-
-    #[test]
-    fn test_priority_guard_skips_record_on_panic() {
-        let collector = MetricsCollector::new();
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = PriorityMessageProcessingGuard::new(&collector);
-            panic!("priority handler panicked");
-        }));
-
-        assert!(result.is_err(), "the closure should have panicked");
-        assert_eq!(
-            collector.priority_message_count(),
-            0,
-            "a panicking priority handler must not be counted as successfully processed"
         );
     }
 }

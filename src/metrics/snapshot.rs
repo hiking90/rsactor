@@ -10,9 +10,18 @@ use std::time::{Duration, SystemTime};
 ///
 /// # Consistency Note
 ///
-/// When reading metrics concurrently with message processing, individual fields
-/// are consistent but the snapshot as a whole may reflect different points in time.
-/// This is acceptable for monitoring purposes where exact consistency is not required.
+/// When reading metrics concurrently with message processing, each underlying
+/// counter is read atomically but the snapshot as a whole may reflect
+/// different points in time. Derived fields (the averages) are computed from
+/// two separately-read counters and are clamped to their corresponding maxima
+/// so that `avg <= max` always holds; the residual skew is bounded by a single
+/// message's duration. This is acceptable for monitoring purposes where exact
+/// consistency is not required.
+///
+/// There is also no ordering guarantee between a reply and the metrics that
+/// recorded it: immediately after an `ask().await` resolves, the counters may
+/// not yet include that message (recording happens after the reply is sent).
+/// Tests asserting exact counts right after an `ask` should retry briefly.
 ///
 /// # Example
 ///
@@ -22,10 +31,16 @@ use std::time::{Duration, SystemTime};
 /// println!("Messages processed: {}", metrics.message_count);
 /// println!("Average processing time: {:?}", metrics.avg_processing_time);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct MetricsSnapshot {
-    /// Total number of messages successfully processed by this actor.
+    /// Number of **regular-mailbox** messages successfully processed by this
+    /// actor.
+    ///
+    /// Priority messages are deliberately excluded — they are tracked in
+    /// [`priority_message_count`](Self::priority_message_count) so callers can
+    /// detect priority-channel abuse. Sum the two fields for an all-channel
+    /// total.
     pub message_count: u64,
 
     /// Average time spent processing each message.
@@ -52,33 +67,43 @@ pub struct MetricsSnapshot {
     /// Maximum time spent processing any single priority message.
     pub max_priority_processing_time: Duration,
 
+    /// Number of idle events dispatched to
+    /// [`Actor::on_idle`](crate::Actor::on_idle) (successful returns only).
+    ///
+    /// Idle-driven actors do their work here rather than in message handlers,
+    /// so this is the throughput signal for actors subscribed via
+    /// [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle).
+    pub idle_event_count: u64,
+
+    /// Average time spent in `on_idle` per dispatched event.
+    pub avg_idle_processing_time: Duration,
+
+    /// Maximum time spent in any single `on_idle` dispatch.
+    pub max_idle_processing_time: Duration,
+
     /// Time elapsed since the actor was started.
     ///
     /// This is measured from when the actor's `on_start` completed successfully
     /// (the point the actor enters its message loop). Before `on_start`
     /// completes, the value falls back to the time since the metrics collector
     /// was created at [`spawn`](crate::spawn).
+    ///
+    /// Note: metrics outlive the actor — they remain readable through a
+    /// retained `ActorRef`, or through an `ActorWeak` via
+    /// [`ActorWeak::metrics`](crate::ActorWeak::metrics) (which works even
+    /// after the actor stopped and `upgrade()` fails), for post-mortem
+    /// analysis. `uptime` is wall-clock based — it keeps growing after the
+    /// actor has stopped.
+    /// Combine with `last_activity` or
+    /// [`ActorRef::is_alive`](crate::ActorRef::is_alive) when deciding whether
+    /// the actor is still running.
     pub uptime: Duration,
 
-    /// Timestamp of the last message processing completion.
+    /// Timestamp of the last completed unit of work — a message (regular or
+    /// priority) or an idle event.
     ///
-    /// Returns `None` if no messages have been processed yet.
+    /// Returns `None` if no work has completed yet.
     pub last_activity: Option<SystemTime>,
-}
-
-impl Default for MetricsSnapshot {
-    fn default() -> Self {
-        Self {
-            message_count: 0,
-            avg_processing_time: Duration::ZERO,
-            max_processing_time: Duration::ZERO,
-            priority_message_count: 0,
-            avg_priority_processing_time: Duration::ZERO,
-            max_priority_processing_time: Duration::ZERO,
-            uptime: Duration::ZERO,
-            last_activity: None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -105,6 +130,9 @@ mod tests {
             priority_message_count: 7,
             avg_priority_processing_time: Duration::from_micros(80),
             max_priority_processing_time: Duration::from_millis(2),
+            idle_event_count: 3,
+            avg_idle_processing_time: Duration::from_micros(40),
+            max_idle_processing_time: Duration::from_millis(1),
             uptime: Duration::from_secs(60),
             last_activity: Some(SystemTime::now()),
         };
@@ -123,6 +151,9 @@ mod tests {
             cloned.max_priority_processing_time,
             Duration::from_millis(2)
         );
+        assert_eq!(cloned.idle_event_count, 3);
+        assert_eq!(cloned.avg_idle_processing_time, Duration::from_micros(40));
+        assert_eq!(cloned.max_idle_processing_time, Duration::from_millis(1));
         assert_eq!(cloned.uptime, Duration::from_secs(60));
         assert!(cloned.last_activity.is_some());
     }
