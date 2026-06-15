@@ -7,36 +7,251 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-15
+
+A correctness and API-hardening pass over the runtime, driven by a
+multi-perspective source review and a dedicated concurrency audit of the
+termination paths (each finding empirically reproduced before fixing). The
+headline breaking change reworks `ActorResult::Failed` into a phase-specific
+`ActorFailure` payload that makes the old doc-only invariants unrepresentable;
+the rest tightens the `Error` API, the `blocking_*` execution paths, deadlock
+detection, shutdown accounting, and metrics consistency. Most call sites are
+mechanical to update — the compiler points at each one. See
+[Migrating from 0.16.x to 0.17.0](#migrating-from-016x-to-0170).
+
 ### ⚠️ BREAKING CHANGES
 
-- **`ActorRef::tell_blocking` / `ask_blocking` removed** (deprecated since 0.10.0).
-  Use `blocking_tell` / `blocking_ask`. Note the old methods silently ignored
-  their `timeout` argument; the replacements honor `Option<Duration>`.
+- **`ActorResult::Failed` now carries a phase-specific `ActorFailure<T>`
+  payload.** The variant changed from
+  `Failed { error, phase, secondary_error, .. }` to
+  `Failed { failure: ActorFailure<T>, killed }`. `ActorFailure<T>` has one
+  variant per phase (`OnStart` / `OnIdle` / `OnStop` / `OnIdleThenOnStop`), each
+  carrying exactly the data valid for that phase — only `OnStart` lacks a
+  recovered actor, and only `OnIdleThenOnStop` carries the `on_stop` cleanup
+  `stop_error`. The invariants that were previously documentation-only
+  ("`actor` is `None` only for `OnStart`", "`secondary_error` only for
+  `OnIdleThenOnStop`") are now enforced by the type system. The `ActorResult`
+  accessors are preserved (`error()` / `into_error()`, `actor()` /
+  `into_actor()`, `secondary_error()` / `into_secondary_error()`), and a
+  `phase()` accessor was added.
+- **`ActorResult::to_result()` renamed to `into_result()`** (per C-CONV, since it
+  consumes `self`); its lossiness is now documented.
 - **`Actor::Error` now requires `Display`** in addition to `Debug`
   (`Send + Display + Debug`). This guarantees lifecycle failures surfaced through
   `ActorResult` render as human-readable messages. `std::error::Error` is
   intentionally *not* required, so `type Error = String` still works.
+- **`ActorRef::subscribe_idle` now returns `Result<(), IdleSubscribeError<T>>`**
+  (was `Result<()>`). On rejection the error hands the rejected stream back
+  (`take_stream` / `into_parts`), so a retryable `ChannelFull` failure can reuse
+  the stream instead of dropping it. `IdleSubscribeError<T>` implements
+  `std::error::Error` and `From<IdleSubscribeError<T>> for Error`.
 - **`Error` now derives `Clone`.** To make this possible, `Error::Join.source`
   changed from `tokio::task::JoinError` to `Arc<tokio::task::JoinError>`
   (`JoinError` is not `Clone`). Deref still exposes `is_panic()` / `is_cancelled()`.
-- **Several `Error` fields changed from `String` to `&'static str`**:
-  `Error::Timeout.operation`, `Error::Downcast.expected_type`, and
-  `Error::MailboxCapacity.message` (all are fixed labels — no allocation).
+- **`Error::Runtime` gains a `source` field**, and `blocking_*` failures to build
+  or run their temporary Tokio runtime now return `Error::Runtime` (carrying the
+  underlying `std::io::Error` via `source()`) instead of the semantically-wrong
+  `Error::Send`.
+- **Several `Error` fields changed from `String` to `&'static str`** (every
+  emitter was already a fixed literal — no allocation on these failure paths):
+  `Error::Timeout.operation`, `Error::Downcast.expected_type`,
+  `Error::MailboxCapacity.message`, and `Error::Send.details` /
+  `Error::Receive.details`.
+- **`ActorRef::tell_blocking` / `ask_blocking` removed** (deprecated since
+  0.10.0). Use `blocking_tell` / `blocking_ask`. Note the old methods silently
+  ignored their `timeout` argument; the replacements honor `Option<Duration>`.
+- **`ActorResult::is_stop_failed()` now also returns `true` for
+  `OnIdleThenOnStop`**, mirroring `is_runtime_failed()`'s treatment of the
+  composite phase.
 
-### Fixed
+### Added
 
-- **Deadlock detection now covers `ask_priority` and concurrent asks.** Priority
-  asks register a wait-for edge (a cycle through the priority channel previously
-  went undetected and only resolved by timeout). The wait-for graph is now a
-  multiset keyed per caller, so two concurrent asks from one handler
-  (`tokio::join!(a.ask(..), b.ask(..))`) no longer clobber each other's edges.
+- `ActorRef::wait_stopped()` and `ActorControl::wait_stopped()` — resolve once
+  the actor has *fully* stopped, complementing `stop()`, whose future only
+  guarantees the stop signal was enqueued.
+- `ActorFailure<T>` — the phase-specific failure payload (see breaking changes),
+  with `phase()`, `error()` / `into_error()`, `actor()` / `into_actor()`, and
+  `stop_error()` / `into_stop_error()` accessors. `ActorResult::phase()` returns
+  the failure phase (or `None` when completed).
+- `ActorWeak::metrics()` — post-mortem metrics access after the actor has stopped.
+- `SpawnOptions::with_idle_capacity(n)` — configure the bounded idle-subscribe
+  buffer (default `IDLE_SUBSCRIBE_CHANNEL_CAPACITY` = 32).
+- `IdleSubscribeError<T>` — returned by `subscribe_idle`, carrying the rejected
+  stream back for a retry.
+- The `metrics` feature now counts `on_idle` events.
 
 ### Changed
 
+- `ActorRef::downgrade` is now an inherent `&self` method, so calls no longer hit
+  `E0034` ambiguity when `TellHandler` / `AskHandler` / `ActorControl` are in
+  scope.
+- `reset_dead_letter_count()` (the `test-utils` counter) now atomically swaps and
+  returns the prior count, closing the read-then-store race some tests worked
+  around.
+- `Debug` for the handler / control trait objects moved from `Box<dyn T>` to
+  `dyn T`, so `&dyn` and `Arc<dyn>` are `Debug` for free (and a future coherence
+  clash with std's `Box` blanket impl is avoided). `Box<dyn T>: Debug` still
+  holds.
+- `ActorWeak::is_alive` / `upgrade` now detect a fully stopped actor via channel
+  closure (so they report liveness accurately post-shutdown).
+- All logging is un-gated from the `tracing` feature, per the documented
+  semantics (the feature only controls `#[tracing::instrument]` spans):
+  error / warn paths in send / ask / subscribe are now always compiled. The
+  per-reply "sent successfully" event on the hot path was removed.
 - Deadlock-detection internals moved to a dedicated `deadlock` module (gated by
   the `deadlock-detection` feature); no public API change.
 - Metrics accumulate processing time with a plain atomic `fetch_add` instead of a
   `fetch_update` CAS loop (the total wraps only after ~584 years).
+- Dead-letter and `Error::Timeout` operation labels are unified with the public
+  API actually invoked (e.g. `blocking_tell` no longer mislabels its records as
+  `tell`).
+- Removed redundant `+ 'static` bounds on `T: Actor` crate-wide.
+
+### Fixed
+
+#### Deadlock detection (`deadlock-detection` feature)
+
+- **`ask_priority` and concurrent asks are now tracked.** Priority asks register
+  a wait-for edge (a cycle through the priority channel previously went
+  undetected and only resolved by timeout), and the wait-for graph is now a
+  per-caller multiset, so two concurrent asks from one handler
+  (`tokio::join!(a.ask(..), b.ask(..))`) no longer clobber each other's edges.
+- **No more false-positive cycle panics from the reply window.** Wait-for edges
+  are removed at reply-send time (via an `AskEdgeToken` the runtime drops right
+  after the reply goes out) and ask edges are claimed-and-removed under the graph
+  lock, closing the stale-edge window between a callee replying and the caller's
+  ask future resuming. The caller-side guard remains as the
+  cancellation / timeout backstop, made idempotent against the multiset graph.
+- **`blocking_ask` cycles are detected immediately** instead of hanging until
+  timeout: the current-actor context now propagates into the blocking slow path's
+  dedicated thread / runtime.
+- **Self-send deadlock detection.** A no-timeout `tell` / `stop` / `blocking_tell`
+  to the actor's *own* full mailbox from inside one of its own handlers is a
+  guaranteed, `kill()`-proof hang (the mailbox's only consumer is the loop parked
+  awaiting that very handler). These now panic, matching the feature's
+  panic-on-detection contract. `tell_with_timeout` is exempt — its bounded wait
+  resolves as a recoverable `Error::Timeout`.
+
+#### `blocking_*` execution paths
+
+- `blocking_tell` / `blocking_ask(msg, None)` no longer panic with "Cannot block
+  the current thread from within a runtime" when called from inside an async
+  context — they route through the dedicated-thread slow path, with a `try_send`
+  fast path for the common non-full case.
+- Restored Tokio's genuine "cannot block" panic for the unsupported case (calling
+  a blocking API on a `current_thread` runtime) instead of silently deadlocking.
+- The dedicated worker thread is spawned via `thread::Builder` (named); a spawn
+  failure now maps to `Error::Runtime` instead of panicking, and join panic
+  payloads are preserved in the error details.
+
+#### Shutdown accounting & observability
+
+- **Discarded messages are now recorded.** Every lifecycle exit drains the
+  regular and priority mailboxes and records a `DiscardedAtShutdown` dead letter
+  for each accepted-but-unprocessed `tell` envelope. Previously these vanished
+  silently — the sender had already seen `Ok` and no record existed anywhere,
+  contradicting the dead-letter module's "all failed deliveries are logged"
+  contract. `ask` envelopes are skipped (dropping their reply channel already
+  produces a caller-side `ReplyDropped` record; counting them here would
+  double-count). The drain runs from a drop guard, so handler panics and task
+  aborts still record.
+- **Graceful-stop priority drain uses `recv()`** (bounded by a quiet period)
+  instead of `try_recv`, so `tell_priority` messages from permits acquired just
+  before `close()` are no longer silently dropped (a Tokio lost-wakeup edge).
+- **Idle-subscribe shutdown window closed.** The subscribe channel now closes the
+  moment the actor commits to stopping, so a racing `subscribe_idle` fails fast
+  with `Error::Send` instead of returning `Ok` for a stream that would be
+  silently discarded.
+- **`kill()` during a graceful stop.** First-signal-wins semantics are kept (a
+  `kill()` arriving after the actor dequeued a `stop` signal is not observed),
+  but the misleading "Kill signal sent successfully" log no longer implies the
+  kill took effect.
+
+#### Metrics
+
+- A message whose handler panicked is no longer counted (`message_count` is
+  documented as *successfully processed* messages). Processing is now recorded
+  explicitly after the handler returns, rather than via an RAII guard that also
+  fired when the task was aborted mid-handler — which had counted a cancelled
+  message as processed and polluted max / last-activity.
+- Uptime is measured from `on_start` completion via `mark_started()`, matching
+  the documented contract.
+- `snapshot()` and the average accessors clamp each average to its corresponding
+  maximum, fixing transient `avg > max` readings caused by reading two
+  separately-updated `Relaxed` atomics during a concurrent record.
+
+### Migrating from 0.16.x to 0.17.0
+
+Most of these are mechanical; the compiler flags each affected call site.
+
+- **`ActorResult::Failed` is now an `ActorFailure<T>` payload (the main change).**
+  If you used the accessors, nothing changes. If you matched the struct fields
+  directly, switch to matching `failure`:
+
+  ```rust
+  // Before (0.16.x)
+  match result {
+      ActorResult::Failed { error, phase, secondary_error, killed } => { /* ... */ }
+      ActorResult::Completed { actor, killed } => { /* ... */ }
+  }
+
+  // After (0.17.0) — match the phase-specific ActorFailure, or use accessors
+  match result {
+      ActorResult::Failed { failure, killed } => match failure {
+          ActorFailure::OnStart { error } => { /* no actor here */ }
+          ActorFailure::OnIdle { actor, error } => { /* ... */ }
+          ActorFailure::OnStop { actor, error } => { /* ... */ }
+          ActorFailure::OnIdleThenOnStop { actor, error, stop_error } => { /* ... */ }
+      },
+      ActorResult::Completed { actor, killed } => { /* ... */ }
+  }
+
+  // Or stay accessor-based (unchanged):
+  if let Some(err) = result.error() { /* primary error */ }
+  let secondary = result.secondary_error(); // on_stop cleanup error, if any
+  ```
+
+- **`to_result()` → `into_result()`:**
+
+  ```rust
+  let actor = result.to_result()?;   // before
+  let actor = result.into_result()?; // after
+  ```
+
+- **`Actor::Error` must implement `Display`.** Built-in choices (`String`,
+  `anyhow::Error`, most `thiserror` enums) already do. For a hand-rolled error
+  type, add an `impl std::fmt::Display`.
+
+- **`subscribe_idle` returns `IdleSubscribeError<T>`.** If your `on_start` uses
+  `anyhow::Error` (or any error with a blanket `From<std::error::Error>`), `?`
+  still works. Otherwise convert explicitly and, if you want to retry, recover
+  the stream:
+
+  ```rust
+  // Convert to rsactor::Error (or your own) and propagate:
+  actor_ref.subscribe_idle(stream).map_err(|e| e.error)?;
+
+  // Or recover the rejected stream on a retryable ChannelFull:
+  if let Err(e) = actor_ref.subscribe_idle(stream) {
+      if let (Error::ChannelFull { .. }, Some(stream)) = e.into_parts() {
+          // retry later with `stream`
+      }
+  }
+  ```
+
+- **`tell_blocking` / `ask_blocking` → `blocking_tell` / `blocking_ask`:**
+
+  ```rust
+  actor_ref.tell_blocking(msg, timeout);            // removed
+  actor_ref.blocking_tell(msg, Some(timeout));      // replacement (honors the timeout)
+  actor_ref.blocking_tell(msg, None);               // no timeout
+  ```
+
+- **`Error` matching:** the `&'static str` field changes are source-compatible
+  for read-only matches; only code that *assigned a `String`* into those fields
+  (uncommon — these are framework-emitted) needs updating. `Error` remains
+  `#[non_exhaustive]`, so keep a `_` arm. `Error::Runtime` gained a `source`
+  field — exhaustive struct patterns on it need `..`.
 
 ## [0.16.0] - 2026-06-06
 

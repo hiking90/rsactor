@@ -66,10 +66,10 @@ Unlike broader frameworks like Actix, rsActor specializes exclusively in **local
 
 ```toml
 [dependencies]
-rsactor = "0.16" # Check crates.io for the latest version
+rsactor = "0.17" # Check crates.io for the latest version
 
 # Optional: Enable tracing support for detailed observability
-# rsactor = { version = "0.16", features = ["tracing"] }
+# rsactor = { version = "0.17", features = ["tracing"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
@@ -214,6 +214,7 @@ rsActor comes with several examples that demonstrate various features and use ca
 * **[weak_reference_demo](./examples/weak_reference_demo.rs)** - Working with weak actor references and lifecycle
 * **[handler_demo](./examples/handler_demo.rs)** - Using handler traits for unified actor management
 * **[ask_join_demo](./examples/ask_join_demo.rs)** - Using `ask_join` for CPU/IO-bound operations
+* **[priority_signal](./examples/priority_signal.rs)** - Opt-in priority channel for control-plane messages (health check, pause/resume)
 * **[metrics_demo](./examples/metrics_demo.rs)** - Actor performance monitoring (requires `metrics` feature)
 * **[tracing_demo](./examples/tracing_demo.rs)** - Structured logging and actor lifecycle tracing
 
@@ -242,7 +243,7 @@ To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]
-rsactor = { version = "0.16", features = ["tracing"] }
+rsactor = { version = "0.17", features = ["tracing"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 ```
@@ -282,7 +283,7 @@ Actor B handler: actor_ref_a.ask(msg).await  ← waiting for A's reply
 
 ```toml
 [dependencies]
-rsactor = { version = "0.16", features = ["deadlock-detection"] }
+rsactor = { version = "0.17", features = ["deadlock-detection"] }
 ```
 
 Detected scenarios include self-ask, 2-actor cycles (A → B → A), and indirect chains (A → B → C → A). When a cycle is found, the framework panics with a descriptive message showing the full cycle path, because deadlocks are design errors that should be fixed during development.
