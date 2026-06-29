@@ -32,7 +32,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
@@ -95,7 +95,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
@@ -154,7 +154,7 @@ jobs:
           add-to-path: false
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
@@ -237,7 +237,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
@@ -268,7 +268,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
