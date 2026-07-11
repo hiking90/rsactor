@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-11
+
+A focused API-hardening follow-up from a second source-review pass. It
+future-proofs the `Error` type against field additions, replaces two
+stringly-typed error discriminants with real enums, adds a named accessor for
+the `ActorResult` tuple conversion, and lets `ActorRef` / `ActorWeak` implement
+`Debug` regardless of the actor type. Every breaking change is mechanical — the
+compiler flags each affected match. See
+[Migrating from 0.17.x to 0.18.0](#migrating-from-017x-to-0180).
+
+### ⚠️ BREAKING CHANGES
+
+- **`Error`'s struct variants are now individually `#[non_exhaustive]`.** A match
+  in a downstream crate that binds *every* field of a variant must now add `..`
+  (e.g. `Error::ChannelFull { identity, channel, .. }`). This lets a future
+  release add a field to an existing variant without a breaking change —
+  something the enum-level `#[non_exhaustive]` alone did not permit. Errors are
+  library-generated, so external construction was never part of the contract.
+- **`Error::Timeout.operation` changed from `&'static str` to the new
+  `Operation` enum.** Code that compared it against string literals must match
+  the enum (or call `operation.as_str()`).
+- **`Error::ChannelFull.channel` changed from `&'static str` to the new
+  `Channel` enum.**
+
+### Added
+
+- **`Operation` and `Channel` enums** (both `#[non_exhaustive]`, each with a
+  `const fn as_str()` and `Display`) identify the operation family behind an
+  `Error::Timeout` and the bounded channel behind an `Error::ChannelFull`,
+  replacing the previous doc-maintained string sets with compiler-checked
+  variants.
+- **`ActorResult::into_parts()`** — a named equivalent of the
+  `From<ActorResult<T>>` tuple conversion, since the anonymous
+  `(Option<T>, Option<T::Error>)` tuple does not carry its slot meanings in its
+  type. The `From` impl is retained and now delegates to it.
+
+### Changed
+
+- **`ActorRef<T>` and `ActorWeak<T>` now implement `Debug` for every actor
+  type**, not only those that are themselves `Debug`. A manual impl replaces
+  `#[derive(Debug)]`, dropping the derive's spurious `T: Debug` bound (all
+  fields are unconditionally `Debug`). Purely additive.
+- Deadlock-detection panic messages now route through a single shared prefix
+  constant, so the slow-path re-raise check cannot silently drift from the
+  panic text (internal).
+
+### Documentation
+
+- Install snippets bumped to `0.18`. Doc-comment accuracy fixes for
+  `subscribe_idle`'s wrapped return type, the `blocking_*` panic conditions
+  (timer-disabled multi-thread runtimes), weak-handle `upgrade` semantics after
+  the runtime loop exits, the graceful-stop priority-drain quiet window, and the
+  process-global dead-letter counter's parallel-test caveat.
+
+### Migrating from 0.17.x to 0.18.0
+
+All mechanical; the compiler flags each affected site.
+
+- **`Error` variants are `#[non_exhaustive]` — add `..` when binding all
+  fields:**
+
+  ```rust
+  // Before (0.17.x)
+  if let Error::ChannelFull { identity, channel } = &err { /* ... */ }
+  // After (0.18.0)
+  if let Error::ChannelFull { identity, channel, .. } = &err { /* ... */ }
+  ```
+
+- **`operation` is now an `Operation` enum, not a `&str`:**
+
+  ```rust
+  use rsactor::Operation;
+
+  // Before (0.17.x)
+  match err {
+      Error::Timeout { operation, .. } if operation == "ask" => { /* ... */ }
+      _ => {}
+  }
+  // After (0.18.0) — match the enum, or compare the label
+  match err {
+      Error::Timeout { operation: Operation::Ask, .. } => { /* ... */ }
+      // or: Error::Timeout { operation, .. } if operation.as_str() == "ask" => { /* ... */ }
+      _ => {}
+  }
+  ```
+
+- **Prefer the named accessor over the tuple `From` (the `From` still works):**
+
+  ```rust
+  let (actor, error) = result.into_parts(); // was: let (actor, error) = result.into();
+  ```
+
 ## [0.17.0] - 2026-06-15
 
 A correctness and API-hardening pass over the runtime, driven by a

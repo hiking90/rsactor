@@ -521,7 +521,7 @@ async fn tell_priority_timeout_on_wedged_actor_records_dead_letter() {
         .await
         .unwrap_err();
     match err {
-        Error::Timeout { operation, .. } => assert_eq!(operation, "tell_priority"),
+        Error::Timeout { operation, .. } => assert_eq!(operation.as_str(), "tell_priority"),
         other => panic!("expected Timeout, got {other:?}"),
     }
     assert!(

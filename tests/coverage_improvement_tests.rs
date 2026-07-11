@@ -797,7 +797,7 @@ mod mailbox_capacity_tests {
         assert!(result.is_err(), "Setting capacity to 0 should fail");
 
         match result.unwrap_err() {
-            rsactor::Error::MailboxCapacity { message } => {
+            rsactor::Error::MailboxCapacity { message, .. } => {
                 assert!(message.contains("greater than 0"));
             }
             _ => panic!("Expected MailboxCapacity error"),
@@ -2005,7 +2005,7 @@ mod actual_timeout_tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             rsactor::Error::Timeout { operation, .. } => {
-                assert_eq!(operation, "ask");
+                assert_eq!(operation.as_str(), "ask");
             }
             e => panic!("Expected Timeout error, got: {:?}", e),
         }

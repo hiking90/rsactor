@@ -236,7 +236,9 @@ async fn main() -> Result<()> {
     println!("Client: Sending a task that will panic to demonstrate error handling");
     match worker_ref.ask_join(PanicTask).await {
         Ok(result) => println!("Unexpected success: {}", result),
-        Err(rsactor::Error::Join { identity, source }) => {
+        Err(rsactor::Error::Join {
+            identity, source, ..
+        }) => {
             println!(
                 "✅ Correctly caught join error from actor {}: {}",
                 identity, source

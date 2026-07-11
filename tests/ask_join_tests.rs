@@ -174,7 +174,9 @@ async fn test_ask_join_panicked_task() -> Result<()> {
 
     match result {
         Ok(_) => panic!("Expected join error for panicked task"),
-        Err(Error::Join { identity, source }) => {
+        Err(Error::Join {
+            identity, source, ..
+        }) => {
             assert!(identity.name().contains("TaskSpawnerActor"));
             assert!(source.is_panic());
         }
@@ -196,7 +198,9 @@ async fn test_ask_join_cancelled_task() -> Result<()> {
 
     match result {
         Ok(_) => panic!("Expected join error for cancelled task"),
-        Err(Error::Join { identity, source }) => {
+        Err(Error::Join {
+            identity, source, ..
+        }) => {
             assert!(identity.name().contains("TaskSpawnerActor"));
             assert!(source.is_cancelled());
         }
@@ -305,15 +309,11 @@ async fn test_ask_join_error_source() -> Result<()> {
     let result = actor_ref.ask_join(PanicTask { delay_ms: 10 }).await;
 
     match result {
-        Err(Error::Join { source, .. }) => {
-            // Test that we can access the source error properly
-            assert!(source.is_panic());
-
-            // Test that the error chain works
-            let error_as_std_error: &dyn std::error::Error = &Error::Join {
-                identity: actor_ref.identity(),
-                source,
-            };
+        Err(e) if matches!(e, Error::Join { .. }) => {
+            if let Error::Join { source, .. } = &e {
+                assert!(source.is_panic());
+            }
+            let error_as_std_error: &dyn std::error::Error = &e;
             assert!(error_as_std_error.source().is_some());
         }
         _ => panic!("Expected Join error"),

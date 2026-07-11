@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::actor::IdleEventStream;
-use crate::error::{Error, Result};
+use crate::error::{Channel, Error, Operation, Result};
 use crate::Identity;
 use crate::{Actor, ControlSignal, MailboxMessage, MailboxSender, Message};
 use futures::stream::{BoxStream, Stream, StreamExt};
@@ -138,7 +138,7 @@ where
         #[cfg(feature = "deadlock-detection")]
         if panic_text
             .as_deref()
-            .is_some_and(|m| m.starts_with("Deadlock detected"))
+            .is_some_and(|m| m.starts_with(crate::DEADLOCK_PANIC_PREFIX))
         {
             std::panic::resume_unwind(payload);
         }
@@ -209,7 +209,6 @@ use std::sync::Arc;
 /// - When you know the actor type at compile time
 /// - When you want compile-time message validation
 /// - When working with strongly-typed actor systems
-#[derive(Debug)]
 pub struct ActorRef<T: Actor> {
     /// The unique identifier for this actor instance
     id: Identity,
@@ -228,6 +227,24 @@ pub struct ActorRef<T: Actor> {
     /// Per-actor metrics collector (when metrics feature is enabled)
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Arc<MetricsCollector>,
+}
+
+// Manual `Debug` rather than `#[derive(Debug)]`: every field is unconditionally
+// `Debug` (tokio's `Sender`/`WeakSender` are `Debug` for all `T`), so the derive's
+// implicit `T: Debug` bound would needlessly deny `Debug` to `ActorRef<T>` for
+// actor types that are not themselves `Debug`.
+impl<T: Actor> fmt::Debug for ActorRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut s = f.debug_struct("ActorRef");
+        s.field("id", &self.id)
+            .field("sender", &self.sender)
+            .field("priority_sender", &self.priority_sender)
+            .field("terminate_sender", &self.terminate_sender)
+            .field("idle_subscribe_sender", &self.idle_subscribe_sender);
+        #[cfg(feature = "metrics")]
+        s.field("metrics", &self.metrics);
+        s.finish()
+    }
 }
 
 impl<T: Actor> ActorRef<T> {
@@ -459,7 +476,7 @@ impl<T: Actor> ActorRef<T> {
             mpsc::error::TrySendError::Full(stream) => IdleSubscribeError::new(
                 Error::ChannelFull {
                     identity: self.identity(),
-                    channel: "idle_subscribe",
+                    channel: Channel::IdleSubscribe,
                 },
                 stream,
             ),
@@ -590,8 +607,9 @@ impl<T: Actor> ActorRef<T> {
             .try_with(|id| id.id == self.id.id)
             .unwrap_or(false);
         if is_self {
+            let prefix = crate::DEADLOCK_PANIC_PREFIX;
             panic!(
-                "Deadlock detected: {operation} to self on a full mailbox from inside actor {}'s \
+                "{prefix}: {operation} to self on a full mailbox from inside actor {}'s \
                  own handler or lifecycle hook.\n\
                  The mailbox's only consumer is this actor's runtime loop, which is parked \
                  awaiting the current handler, so admission can never succeed and kill() cannot \
@@ -642,7 +660,7 @@ impl<T: Actor> ActorRef<T> {
                 Error::Timeout {
                     identity: self.identity(),
                     timeout,
-                    operation: "tell",
+                    operation: Operation::Tell,
                 }
             })?;
 
@@ -677,19 +695,24 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
-        self.ask_inner(msg, "ask").await
+        self.ask_inner(msg, Operation::Ask).await
     }
 
     /// Shared implementation of [`ask`](Self::ask) and the `blocking_ask`
     /// fast path. `operation` labels dead letters, deadlock-detection edges,
     /// and [`Error::Timeout`] so the reported operation always matches the
     /// public API the caller actually invoked, regardless of execution path.
-    async fn ask_inner<M>(&self, msg: M, operation: &'static str) -> Result<T::Reply>
+    async fn ask_inner<M>(&self, msg: M, operation: Operation) -> Result<T::Reply>
     where
         T: Message<M>,
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
+        // `operation` only labels the deadlock-detection edge and dead-letter
+        // records here (this helper never builds `Error::Timeout`), so reduce
+        // it to its string form once.
+        let operation = operation.as_str();
+
         // Deadlock detection: register this `ask` as a wait-for edge and hold
         // the guard until the reply is received (or this future is dropped).
         // Panics if it would close an ask cycle. The envelope carries a token
@@ -787,7 +810,7 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
-        self.ask_timeout_inner(msg, timeout, "ask").await
+        self.ask_timeout_inner(msg, timeout, Operation::Ask).await
     }
 
     /// Shared implementation of [`ask_with_timeout`](Self::ask_with_timeout)
@@ -797,7 +820,7 @@ impl<T: Actor> ActorRef<T> {
         &self,
         msg: M,
         timeout: Duration,
-        operation: &'static str,
+        operation: Operation,
     ) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -815,7 +838,7 @@ impl<T: Actor> ActorRef<T> {
                 crate::dead_letter::record::<M>(
                     self.identity(),
                     crate::dead_letter::DeadLetterReason::Timeout,
-                    operation,
+                    operation.as_str(),
                 );
                 Error::Timeout {
                     identity: self.identity(),
@@ -909,7 +932,7 @@ impl<T: Actor> ActorRef<T> {
                 Err(Error::Timeout {
                     identity: self.identity(),
                     timeout,
-                    operation: "tell_priority",
+                    operation: Operation::TellPriority,
                 })
             }
         };
@@ -957,7 +980,8 @@ impl<T: Actor> ActorRef<T> {
         M: Send + 'static,
         T::Reply: Send + 'static,
     {
-        self.ask_priority_inner(msg, timeout, "ask_priority").await
+        self.ask_priority_inner(msg, timeout, Operation::AskPriority)
+            .await
     }
 
     /// Shared implementation of [`ask_priority`](Self::ask_priority) and
@@ -969,7 +993,7 @@ impl<T: Actor> ActorRef<T> {
         &self,
         msg: M,
         timeout: Duration,
-        operation: &'static str,
+        operation: Operation,
     ) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -983,13 +1007,17 @@ impl<T: Actor> ActorRef<T> {
             });
         };
 
+        // String label for the deadlock-detection edge and dead-letter records;
+        // the typed `operation` is kept for the `Error::Timeout` below.
+        let operation_label = operation.as_str();
+
         // Deadlock detection: a priority ask still parks the calling actor's
         // message loop while it awaits the reply, so a cycle through the priority
         // channel stalls just like a regular `ask` (here bounded by `timeout`).
         // Register the edge before sending and hold the guard across the wait so
         // the cycle is detected immediately instead of only timing out.
         #[cfg(feature = "deadlock-detection")]
-        let _guard = crate::register_ask_edge(self.identity(), operation);
+        let _guard = crate::register_ask_edge(self.identity(), operation_label);
         #[cfg(feature = "deadlock-detection")]
         let ask_edge = _guard.as_ref().map(|g| g.token());
         #[cfg(not(feature = "deadlock-detection"))]
@@ -1008,7 +1036,7 @@ impl<T: Actor> ActorRef<T> {
                 crate::dead_letter::record::<M>(
                     self.identity(),
                     crate::dead_letter::DeadLetterReason::ActorStopped,
-                    operation,
+                    operation_label,
                 );
                 return Err(Error::Send {
                     identity: self.identity(),
@@ -1028,7 +1056,7 @@ impl<T: Actor> ActorRef<T> {
                     crate::dead_letter::record::<M>(
                         self.identity(),
                         crate::dead_letter::DeadLetterReason::ReplyDropped,
-                        operation,
+                        operation_label,
                     );
                     Err(Error::Receive {
                         identity: self.identity(),
@@ -1045,7 +1073,7 @@ impl<T: Actor> ActorRef<T> {
                 crate::dead_letter::record::<M>(
                     self.identity(),
                     crate::dead_letter::DeadLetterReason::Timeout,
-                    operation,
+                    operation_label,
                 );
                 Err(Error::Timeout {
                     identity: self.identity(),
@@ -1083,7 +1111,7 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Panics
     ///
-    /// Both conditions below require a full priority slot — the `try_send`
+    /// The conditions below require a full priority slot — the `try_send`
     /// hot path never blocks, so it never panics.
     ///
     /// - When called from inside a [`LocalSet`](https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html)
@@ -1099,6 +1127,11 @@ impl<T: Actor> ActorRef<T> {
     ///   timeout; the loud panic surfaces the bug instead. Call from a
     ///   [`spawn_blocking`](tokio::task::spawn_blocking) thread, or use the
     ///   async [`tell_priority`](Self::tell_priority), instead.
+    /// - When the caller's own multi-thread runtime was built **without a time
+    ///   driver** (no `enable_time()` / `enable_all()`): the fast path awaits
+    ///   the admission timeout on that runtime, so `tokio::time::timeout`
+    ///   panics because no timer is available. The slow-path temporary runtime
+    ///   always enables timers, so only the caller's own runtime is affected.
     ///
     /// # Deadlock warning
     ///
@@ -1184,7 +1217,7 @@ impl<T: Actor> ActorRef<T> {
                     Err(Error::Timeout {
                         identity,
                         timeout,
-                        operation: "blocking_tell_priority",
+                        operation: Operation::BlockingTellPriority,
                     })
                 }
             }
@@ -1268,7 +1301,7 @@ impl<T: Actor> ActorRef<T> {
         if let Some(handle) = current_multi_thread_handle() {
             return block_on_current_runtime(
                 handle,
-                self.ask_priority_inner(msg, timeout, "blocking_ask_priority"),
+                self.ask_priority_inner(msg, timeout, Operation::BlockingAskPriority),
             );
         }
 
@@ -1278,7 +1311,7 @@ impl<T: Actor> ActorRef<T> {
             "Priority blocking thread terminated unexpectedly",
             async move {
                 self_clone
-                    .ask_priority_inner(msg, timeout, "blocking_ask_priority")
+                    .ask_priority_inner(msg, timeout, Operation::BlockingAskPriority)
                     .await
             },
         )
@@ -1445,7 +1478,7 @@ impl<T: Actor> ActorRef<T> {
     ///
     /// # Panics
     ///
-    /// Both conditions below require a full mailbox — the `try_send` hot path
+    /// The conditions below require a full mailbox — the `try_send` hot path
     /// never blocks, so it never panics.
     ///
     /// - When called from inside a [`LocalSet`](https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html)
@@ -1463,6 +1496,12 @@ impl<T: Actor> ActorRef<T> {
     ///   the bug instead. Call from a
     ///   [`spawn_blocking`](tokio::task::spawn_blocking) thread, or use the
     ///   async [`tell`](Self::tell), instead.
+    /// - When a timeout is supplied and the caller's own multi-thread runtime
+    ///   was built **without a time driver** (no `enable_time()` /
+    ///   `enable_all()`): the fast path awaits the admission timeout on that
+    ///   runtime, so `tokio::time::timeout` panics because no timer is
+    ///   available. The timeout-less path and the slow-path temporary runtime
+    ///   are unaffected.
     ///
     /// # Deadlock warning
     ///
@@ -1568,7 +1607,7 @@ impl<T: Actor> ActorRef<T> {
                             Err(Error::Timeout {
                                 identity,
                                 timeout,
-                                operation: "blocking_tell",
+                                operation: Operation::BlockingTell,
                             })
                         }
                     }
@@ -1687,6 +1726,11 @@ impl<T: Actor> ActorRef<T> {
     ///   the bug instead. Call from a
     ///   [`spawn_blocking`](tokio::task::spawn_blocking) thread, or use the
     ///   async [`ask`](Self::ask), instead.
+    /// - When the caller's own multi-thread runtime was built **without a time
+    ///   driver** (no `enable_time()` / `enable_all()`): the fast path awaits
+    ///   the admission timeout on that runtime, so `tokio::time::timeout`
+    ///   panics because no timer is available. The slow-path temporary runtime
+    ///   always enables timers, so only the caller's own runtime is affected.
     ///
     /// # Deadlock warning
     ///
@@ -1721,8 +1765,8 @@ impl<T: Actor> ActorRef<T> {
         if let Some(handle) = current_multi_thread_handle() {
             return block_on_current_runtime(handle, async {
                 match timeout {
-                    Some(t) => self.ask_timeout_inner(msg, t, "blocking_ask").await,
-                    None => self.ask_inner(msg, "blocking_ask").await,
+                    Some(t) => self.ask_timeout_inner(msg, t, Operation::BlockingAsk).await,
+                    None => self.ask_inner(msg, Operation::BlockingAsk).await,
                 }
             });
         }
@@ -1825,7 +1869,7 @@ impl<T: Actor> ActorRef<T> {
             "Timeout thread terminated unexpectedly",
             async move {
                 self_clone
-                    .ask_timeout_inner(msg, timeout, "blocking_ask")
+                    .ask_timeout_inner(msg, timeout, Operation::BlockingAsk)
                     .await
             },
         )
@@ -2190,7 +2234,6 @@ impl<T: Actor> From<IdleSubscribeError<T>> for Error {
 ///     // Actor is no longer alive
 /// }
 /// ```
-#[derive(Debug)]
 pub struct ActorWeak<T: Actor> {
     /// The unique identifier for this actor instance
     id: Identity,
@@ -2206,6 +2249,22 @@ pub struct ActorWeak<T: Actor> {
     /// Strong reference to metrics (survives actor drop for post-mortem analysis)
     #[cfg(feature = "metrics")]
     metrics: Arc<MetricsCollector>,
+}
+
+// Manual `Debug` for the same reason as [`ActorRef`]: avoid the derive's
+// spurious `T: Debug` bound on an actor type that need not be `Debug`.
+impl<T: Actor> fmt::Debug for ActorWeak<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut s = f.debug_struct("ActorWeak");
+        s.field("id", &self.id)
+            .field("sender", &self.sender)
+            .field("priority_sender", &self.priority_sender)
+            .field("terminate_sender", &self.terminate_sender)
+            .field("idle_subscribe_sender", &self.idle_subscribe_sender);
+        #[cfg(feature = "metrics")]
+        s.field("metrics", &self.metrics);
+        s.finish()
+    }
 }
 
 impl<T: Actor> ActorWeak<T> {

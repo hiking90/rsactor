@@ -440,7 +440,7 @@ async fn test_set_default_mailbox_capacity_to_zero() {
     let err = result.unwrap_err();
     assert!(format!("{err}").contains("Mailbox capacity error:"));
     assert!(
-        matches!(err, Error::MailboxCapacity { message } if message == "Global default mailbox capacity must be greater than 0"),
+        matches!(err, Error::MailboxCapacity { message, .. } if message == "Global default mailbox capacity must be greater than 0"),
         "Error message for zero capacity didn't match"
     );
 }
@@ -458,7 +458,7 @@ async fn test_set_default_mailbox_capacity_already_set() {
     // If another test has already set it, this will fail with "already been set" error
     if first_result.is_err() {
         assert!(
-            matches!(first_result, Err(Error::MailboxCapacity { message }) if message == "Global default mailbox capacity has already been set"),
+            matches!(first_result, Err(Error::MailboxCapacity { message, .. }) if message == "Global default mailbox capacity has already been set"),
             "Error message didn't match"
         );
 
@@ -471,7 +471,7 @@ async fn test_set_default_mailbox_capacity_already_set() {
     assert!(second_result.is_err(), "Expected second call to fail");
 
     assert!(
-        matches!(second_result, Err(Error::MailboxCapacity { message }) if message == "Global default mailbox capacity has already been set"),
+        matches!(second_result, Err(Error::MailboxCapacity { message, .. }) if message == "Global default mailbox capacity has already been set"),
         "Error message for second attempt didn't match"
     );
 }
