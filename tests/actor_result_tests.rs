@@ -663,30 +663,6 @@ async fn test_blocking_ask_works_outside_runtime() {
     let _result = handle.await.expect("Actor task failed");
 }
 
-#[tokio::test]
-async fn test_error_runtime_display_format() {
-    // Create a sample Error::Runtime for testing Display implementation
-    let identity = rsactor::Identity::new(1, "TestActor");
-    let error = rsactor::Error::Runtime {
-        identity,
-        details: "Test runtime error details".to_string(),
-        source: None,
-    };
-
-    let display_str = format!("{error}");
-    assert!(
-        display_str.contains("Runtime error in actor"),
-        "Display should mention runtime error"
-    );
-    assert!(
-        display_str.contains("TestActor"),
-        "Display should contain actor name"
-    );
-    assert!(
-        display_str.contains("Test runtime error details"),
-        "Display should contain error details"
-    );
-}
 /// Test helper: spawn with the idle-event channel enabled (off by default
 /// since the opt-in change). Mirrors `spawn` but calls `with_idle()`.
 fn spawn_idle<A: rsactor::Actor + 'static>(

@@ -19,10 +19,15 @@ pub(crate) type IdleEventStream<T> = BoxStream<'static, <T as Actor>::IdleEvent>
 /// `recv()` rather than `try_recv()` to observe sends from permits acquired
 /// before `close()`, but a bare `recv().await` can suffer a lost wakeup when a
 /// racing send is cancelled around `close()` (its briefly-held permit is
-/// released without a receiver wake). One full quiet window with no delivery
-/// means no sender is mid-send — a granted permit is pushed synchronously in
-/// the same poll — so concluding the drain after it cannot drop a deliverable
-/// message. The window is paid at most once per graceful stop, and only when
+/// released without a receiver wake). Under prompt scheduling, one full quiet
+/// window with no delivery means no sender is mid-send: a granted permit is
+/// pushed synchronously in the same poll of its sender task, so a window that
+/// stays quiet has seen every deliverable message. The exception is a sender
+/// that holds a granted permit but is stalled past the window (e.g. blocking
+/// its worker) — its later push falls back to the best-effort dead-letter
+/// drain (see [`discard_queued_messages`]), matching that drain's documented
+/// "a send racing past the drain on an already-granted permit is missed"
+/// contract. The window is paid at most once per graceful stop, and only when
 /// the channel is already quiet or wedged by that race.
 const PRIORITY_DRAIN_QUIET_PERIOD: std::time::Duration = std::time::Duration::from_millis(10);
 

@@ -36,6 +36,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Shared prefix for every deadlock-detection panic message.
+///
+/// The slow-path blocking helper (`run_blocking_with_runtime` in
+/// [`crate::actor_ref`]) re-raises a deadlock panic across its dedicated-thread
+/// boundary by matching the caught panic text against this prefix. That match
+/// and every `panic!` that must satisfy it are therefore a single contract:
+/// route them all through this constant so editing one message can never
+/// silently downgrade the immediate-panic guarantee to an `Error::Runtime`.
+pub(crate) const DEADLOCK_PANIC_PREFIX: &str = "Deadlock detected";
+
 tokio::task_local! {
     /// Identity of the actor whose handler is currently running, used as the
     /// `caller` when it issues an `ask`. Unset outside an actor context.
@@ -180,7 +190,7 @@ pub(crate) fn register_ask_edge(callee: Identity, operation: &str) -> Option<Wai
         let cycle = format_cycle_path(&graph, caller, callee);
         drop(graph);
         panic!(
-            "Deadlock detected: {operation} cycle {cycle}\n\
+            "{DEADLOCK_PANIC_PREFIX}: {operation} cycle {cycle}\n\
              This is a design error. Use `tell` to break the cycle, \
              or restructure actor dependencies."
         );

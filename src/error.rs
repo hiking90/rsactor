@@ -4,6 +4,88 @@
 use crate::Identity;
 use std::time::Duration;
 
+/// Identifies the operation family that produced an [`Error::Timeout`].
+///
+/// Each async and blocking send/ask method reports its own name here, so a
+/// caller inspecting a timeout can tell which API it invoked regardless of
+/// which internal execution path served it. Marked `#[non_exhaustive]` so new
+/// operations can be added without breaking exhaustive matches — include a `_`
+/// arm when matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Operation {
+    /// [`tell`](crate::ActorRef::tell) / [`tell_with_timeout`](crate::ActorRef::tell_with_timeout).
+    Tell,
+    /// [`ask`](crate::ActorRef::ask) / [`ask_with_timeout`](crate::ActorRef::ask_with_timeout).
+    Ask,
+    /// [`tell_priority`](crate::ActorRef::tell_priority).
+    TellPriority,
+    /// [`ask_priority`](crate::ActorRef::ask_priority).
+    AskPriority,
+    /// [`blocking_tell`](crate::ActorRef::blocking_tell).
+    BlockingTell,
+    /// [`blocking_tell_priority`](crate::ActorRef::blocking_tell_priority).
+    BlockingTellPriority,
+    /// [`blocking_ask`](crate::ActorRef::blocking_ask).
+    BlockingAsk,
+    /// [`blocking_ask_priority`](crate::ActorRef::blocking_ask_priority).
+    BlockingAskPriority,
+}
+
+impl Operation {
+    /// Returns the stable string label for this operation (e.g. `"tell"`).
+    ///
+    /// The value matches the public method name and is what the dead-letter
+    /// and deadlock-detection subsystems log.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Operation::Tell => "tell",
+            Operation::Ask => "ask",
+            Operation::TellPriority => "tell_priority",
+            Operation::AskPriority => "ask_priority",
+            Operation::BlockingTell => "blocking_tell",
+            Operation::BlockingTellPriority => "blocking_tell_priority",
+            Operation::BlockingAsk => "blocking_ask",
+            Operation::BlockingAskPriority => "blocking_ask_priority",
+        }
+    }
+}
+
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Identifies which bounded channel produced an [`Error::ChannelFull`].
+///
+/// Marked `#[non_exhaustive]` so new bounded channels can report a full-buffer
+/// error without breaking exhaustive matches — include a `_` arm when matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Channel {
+    /// The per-actor idle-subscribe buffer used by
+    /// [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle).
+    IdleSubscribe,
+}
+
+impl Channel {
+    /// Returns the stable string label for this channel (e.g. `"idle_subscribe"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Channel::IdleSubscribe => "idle_subscribe",
+        }
+    }
+}
+
+impl std::fmt::Display for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 /// Represents errors that can occur in the rsactor framework.
@@ -20,6 +102,7 @@ pub enum Error {
     /// (the actor is no longer alive).
     ///
     /// For "channel full" failures see [`Error::ChannelFull`].
+    #[non_exhaustive]
     Send {
         /// ID of the actor that failed to receive the message
         identity: Identity,
@@ -55,14 +138,15 @@ pub enum Error {
     /// [`SpawnOptions::with_idle_capacity`](crate::SpawnOptions::with_idle_capacity))
     /// is saturated; the rejected stream is handed back via
     /// [`IdleSubscribeError`](crate::IdleSubscribeError) so a retry can reuse it.
+    #[non_exhaustive]
     ChannelFull {
         /// ID of the actor whose channel was full
         identity: Identity,
-        /// Static label identifying which bounded channel was full
-        /// (e.g. `"idle_subscribe"`).
-        channel: &'static str,
+        /// Which bounded channel was full.
+        channel: Channel,
     },
     /// Error when receiving a response from an actor
+    #[non_exhaustive]
     Receive {
         /// ID of the actor that failed to send a response
         identity: Identity,
@@ -73,22 +157,22 @@ pub enum Error {
         details: &'static str,
     },
     /// Error when a request times out
+    #[non_exhaustive]
     Timeout {
         /// ID of the actor that timed out
         identity: Identity,
         /// The duration after which the request timed out
         timeout: Duration,
-        /// The operation family whose deadline was missed. One of `"tell"`,
-        /// `"ask"`, `"tell_priority"`, `"ask_priority"`, `"blocking_tell"`,
-        /// `"blocking_tell_priority"`, `"blocking_ask"`, or
-        /// `"blocking_ask_priority"`: [`tell_with_timeout`](crate::ActorRef::tell_with_timeout)
-        /// reports `"tell"` and [`ask_with_timeout`](crate::ActorRef::ask_with_timeout)
-        /// reports `"ask"` (the async `tell`/`ask` themselves carry no
-        /// deadline); the `*_priority` and `blocking_*` methods report their
-        /// own names, regardless of which execution path served them.
-        operation: &'static str,
+        /// The operation family whose deadline was missed. See [`Operation`]:
+        /// [`tell_with_timeout`](crate::ActorRef::tell_with_timeout) reports
+        /// [`Operation::Tell`] and [`ask_with_timeout`](crate::ActorRef::ask_with_timeout)
+        /// reports [`Operation::Ask`] (the async `tell`/`ask` themselves carry
+        /// no deadline); the `*_priority` and `blocking_*` methods report their
+        /// own operation, regardless of which execution path served them.
+        operation: Operation,
     },
     /// Error when downcasting a reply to the expected type
+    #[non_exhaustive]
     Downcast {
         /// ID of the actor that sent the incompatible reply
         identity: Identity,
@@ -104,6 +188,7 @@ pub enum Error {
     /// `on_stop`) are **not** reported here — they surface through
     /// [`ActorResult::Failed`](crate::ActorResult) carrying the actor's own
     /// error type.
+    #[non_exhaustive]
     Runtime {
         /// ID of the actor where the runtime error occurred
         identity: Identity,
@@ -116,6 +201,7 @@ pub enum Error {
         source: Option<std::sync::Arc<dyn std::error::Error + Send + Sync>>,
     },
     /// Error related to mailbox capacity configuration
+    #[non_exhaustive]
     MailboxCapacity {
         /// Static label describing the mailbox capacity issue.
         ///
@@ -124,6 +210,7 @@ pub enum Error {
         message: &'static str,
     },
     /// Error when awaiting a JoinHandle fails
+    #[non_exhaustive]
     Join {
         /// ID of the actor that spawned the task
         identity: Identity,
@@ -140,6 +227,7 @@ pub enum Error {
     /// This is a configuration error (not a delivery failure) and is therefore
     /// not recorded as a dead letter. Callers can guard against this with
     /// [`ActorRef::has_priority_channel`](crate::ActorRef::has_priority_channel).
+    #[non_exhaustive]
     PriorityChannelNotEnabled {
         /// ID of the actor that does not have a priority channel.
         identity: Identity,
@@ -151,6 +239,7 @@ pub enum Error {
     /// This is a configuration error (not a delivery failure) and is therefore
     /// not recorded as a dead letter. Callers can guard against this with
     /// [`ActorRef::has_idle_channel`](crate::ActorRef::has_idle_channel).
+    #[non_exhaustive]
     IdleChannelNotEnabled {
         /// ID of the actor that does not have an idle channel.
         identity: Identity,
@@ -400,3 +489,374 @@ impl Error {
 /// }
 /// ```
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    // These exercise `Error`'s own `Display` / `debugging_tips` / `source` /
+    // `is_retryable` by constructing variants directly. They live here as unit
+    // tests (not in `tests/`) because the variants are `#[non_exhaustive]` and
+    // therefore cannot be constructed from an external integration-test crate.
+    use super::*;
+    use crate::Identity;
+    use std::error::Error as StdError;
+    use std::time::Duration;
+
+    #[test]
+    fn operation_and_channel_labels_round_trip() {
+        // `as_str` and `Display` must agree, and the labels are the stable
+        // strings the dead-letter and deadlock subsystems log.
+        for (op, label) in [
+            (Operation::Tell, "tell"),
+            (Operation::Ask, "ask"),
+            (Operation::TellPriority, "tell_priority"),
+            (Operation::AskPriority, "ask_priority"),
+            (Operation::BlockingTell, "blocking_tell"),
+            (Operation::BlockingTellPriority, "blocking_tell_priority"),
+            (Operation::BlockingAsk, "blocking_ask"),
+            (Operation::BlockingAskPriority, "blocking_ask_priority"),
+        ] {
+            assert_eq!(op.as_str(), label);
+            assert_eq!(op.to_string(), label);
+        }
+        assert_eq!(Channel::IdleSubscribe.as_str(), "idle_subscribe");
+        assert_eq!(Channel::IdleSubscribe.to_string(), "idle_subscribe");
+    }
+
+    #[test]
+    fn is_retryable_for_all_variants() {
+        let identity = Identity::new(1, "TestActor");
+
+        // Timeout and ChannelFull are the transient (retryable) variants.
+        let timeout_err = Error::Timeout {
+            identity,
+            timeout: Duration::from_secs(1),
+            operation: Operation::Ask,
+        };
+        assert!(timeout_err.is_retryable());
+
+        let channel_full = Error::ChannelFull {
+            identity,
+            channel: Channel::IdleSubscribe,
+        };
+        assert!(channel_full.is_retryable());
+
+        // All others are NOT retryable.
+        let send_err = Error::Send {
+            identity,
+            details: "channel closed",
+        };
+        assert!(!send_err.is_retryable());
+
+        let receive_err = Error::Receive {
+            identity,
+            details: "channel closed",
+        };
+        assert!(!receive_err.is_retryable());
+
+        let downcast_err = Error::Downcast {
+            identity,
+            expected_type: "String",
+        };
+        assert!(!downcast_err.is_retryable());
+
+        let runtime_err = Error::Runtime {
+            identity,
+            details: "test error".into(),
+            source: None,
+        };
+        assert!(!runtime_err.is_retryable());
+
+        let mailbox_err = Error::MailboxCapacity {
+            message: "invalid capacity",
+        };
+        assert!(!mailbox_err.is_retryable());
+    }
+
+    #[test]
+    fn all_errors_have_debugging_tips() {
+        let identity = Identity::new(1, "TestActor");
+
+        let errors: Vec<Error> = vec![
+            Error::Send {
+                identity,
+                details: "test",
+            },
+            Error::Receive {
+                identity,
+                details: "test",
+            },
+            Error::Timeout {
+                identity,
+                timeout: Duration::from_secs(1),
+                operation: Operation::Ask,
+            },
+            Error::Downcast {
+                identity,
+                expected_type: "String",
+            },
+            Error::Runtime {
+                identity,
+                details: "test".into(),
+                source: None,
+            },
+            Error::MailboxCapacity { message: "test" },
+        ];
+
+        for err in &errors {
+            let tips = err.debugging_tips();
+            assert!(!tips.is_empty(), "Missing tips for: {:?}", err);
+            for tip in tips {
+                assert!(tip.len() > 10, "Tip too short to be useful: {}", tip);
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_error_tips_are_specific() {
+        let identity = Identity::new(1, "TestActor");
+        let err = Error::Runtime {
+            identity,
+            details: "test".into(),
+            source: None,
+        };
+        let tips = err.debugging_tips();
+
+        let tips_text = tips.join(" ");
+        assert!(
+            tips_text.contains("blocking"),
+            "Runtime tips should mention the blocking_* runtime source"
+        );
+        assert!(
+            tips_text.contains("source"),
+            "Runtime tips should point at the chainable source"
+        );
+    }
+
+    #[test]
+    fn downcast_error_debugging_tips() {
+        let identity = Identity::new(1, "TestActor");
+        let err = Error::Downcast {
+            identity,
+            expected_type: "String",
+        };
+
+        let tips = err.debugging_tips();
+        assert!(!tips.is_empty(), "Downcast error should have tips");
+
+        let tips_text = tips.join(" ");
+        assert!(
+            tips_text.contains("Message") || tips_text.contains("handler"),
+            "Downcast tips should mention Message trait or handler"
+        );
+    }
+
+    #[test]
+    fn mailbox_capacity_error_tips() {
+        let err = Error::MailboxCapacity {
+            message: "capacity must be greater than 0",
+        };
+
+        let tips = err.debugging_tips();
+        assert!(
+            !tips.is_empty(),
+            "MailboxCapacity should have debugging tips"
+        );
+
+        let tips_text = tips.join(" ");
+        assert!(
+            tips_text.contains("greater than 0") || tips_text.contains("capacity"),
+            "Tips should mention capacity requirements"
+        );
+        assert!(
+            tips_text.contains("set_default_mailbox_capacity") || tips_text.contains("once"),
+            "Tips should mention set_default_mailbox_capacity behavior"
+        );
+    }
+
+    #[test]
+    fn error_display_all_variants() {
+        let identity = Identity::new(1, "TestActor");
+
+        let errors = vec![
+            Error::Send {
+                identity,
+                details: "channel closed",
+            },
+            Error::Receive {
+                identity,
+                details: "reply dropped",
+            },
+            Error::Timeout {
+                identity,
+                timeout: Duration::from_secs(5),
+                operation: Operation::Ask,
+            },
+            Error::Downcast {
+                identity,
+                expected_type: "String",
+            },
+            Error::Runtime {
+                identity,
+                details: "panic in handler".into(),
+                source: None,
+            },
+            Error::MailboxCapacity {
+                message: "capacity must be > 0",
+            },
+            Error::ChannelFull {
+                identity,
+                channel: Channel::IdleSubscribe,
+            },
+        ];
+
+        for err in &errors {
+            let display = format!("{}", err);
+            assert!(!display.is_empty(), "Display should not be empty");
+            assert!(display.len() > 5, "Display should be descriptive");
+        }
+    }
+
+    #[test]
+    fn runtime_error_display_format() {
+        let identity = Identity::new(1, "TestActor");
+        let error = Error::Runtime {
+            identity,
+            details: "Test runtime error details".to_string(),
+            source: None,
+        };
+
+        let display_str = format!("{error}");
+        assert!(
+            display_str.contains("Runtime error in actor"),
+            "Display should mention runtime error"
+        );
+        assert!(
+            display_str.contains("TestActor"),
+            "Display should contain actor name"
+        );
+        assert!(
+            display_str.contains("Test runtime error details"),
+            "Display should contain error details"
+        );
+    }
+
+    #[test]
+    fn error_source_returns_none_for_non_join() {
+        let identity = Identity::new(1, "TestActor");
+
+        let errors: Vec<Error> = vec![
+            Error::Send {
+                identity,
+                details: "test",
+            },
+            Error::Receive {
+                identity,
+                details: "test",
+            },
+            Error::Timeout {
+                identity,
+                timeout: Duration::from_secs(1),
+                operation: Operation::Ask,
+            },
+            Error::Downcast {
+                identity,
+                expected_type: "String",
+            },
+            Error::Runtime {
+                identity,
+                details: "test".into(),
+                source: None,
+            },
+            Error::MailboxCapacity { message: "test" },
+        ];
+
+        for err in &errors {
+            assert!(
+                err.source().is_none(),
+                "Non-Join error {:?} should have no source",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_error_with_source_exposes_source() {
+        let identity = Identity::new(1, "TestActor");
+        let io_err = std::io::Error::other("boom");
+        let err = Error::Runtime {
+            identity,
+            details: "Failed to build blocking runtime".into(),
+            source: Some(std::sync::Arc::new(io_err)),
+        };
+
+        let source = err
+            .source()
+            .expect("Runtime error with a cause should expose source()");
+        assert!(
+            source.to_string().contains("boom"),
+            "source() should surface the underlying io::Error message"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_join_display() {
+        let handle = tokio::spawn(async {
+            panic!("test panic for JoinError");
+        });
+        let join_error = handle.await.unwrap_err();
+        let identity = Identity::new(1, "TestActor");
+
+        let error = Error::Join {
+            identity,
+            source: std::sync::Arc::new(join_error),
+        };
+
+        let display = format!("{}", error);
+        assert!(display.contains("Failed to join"));
+        assert!(display.contains("TestActor"));
+        assert!(error.source().is_some(), "Join error should have a source");
+    }
+
+    #[tokio::test]
+    async fn error_join_debugging_tips() {
+        let handle = tokio::spawn(async {
+            panic!("test panic for debugging tips");
+        });
+        let join_error = handle.await.unwrap_err();
+        let identity = Identity::new(1, "TestActor");
+
+        let error = Error::Join {
+            identity,
+            source: std::sync::Arc::new(join_error),
+        };
+
+        let tips = error.debugging_tips();
+        assert!(!tips.is_empty(), "Join error should have debugging tips");
+
+        let tips_text = tips.join(" ");
+        assert!(
+            tips_text.contains("panic") || tips_text.contains("cancelled"),
+            "Join tips should mention panic or cancellation"
+        );
+        assert!(
+            tips_text.contains("RUST_BACKTRACE"),
+            "Join tips should mention RUST_BACKTRACE"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_join_is_not_retryable() {
+        let handle = tokio::spawn(async {
+            panic!("test panic for retryable check");
+        });
+        let join_error = handle.await.unwrap_err();
+        let identity = Identity::new(1, "TestActor");
+
+        let error = Error::Join {
+            identity,
+            source: std::sync::Arc::new(join_error),
+        };
+
+        assert!(!error.is_retryable(), "Join error should not be retryable");
+    }
+}

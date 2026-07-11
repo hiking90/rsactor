@@ -227,7 +227,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! rsactor = { version = "0.16", features = ["tracing"] }
+//! rsactor = { version = "0.18", features = ["tracing"] }
 //! tracing = "0.1"
 //! tracing-subscriber = "0.3"
 //! ```
@@ -271,7 +271,7 @@
 //! documentation.
 
 mod error;
-pub use error::{Error, Result};
+pub use error::{Channel, Error, Operation, Result};
 
 mod dead_letter;
 pub use dead_letter::DeadLetterReason;
@@ -306,7 +306,7 @@ pub use actor_control::{ActorControl, WeakActorControl};
 #[cfg(feature = "deadlock-detection")]
 mod deadlock;
 #[cfg(feature = "deadlock-detection")]
-pub(crate) use deadlock::{register_ask_edge, CURRENT_ACTOR};
+pub(crate) use deadlock::{register_ask_edge, CURRENT_ACTOR, DEADLOCK_PANIC_PREFIX};
 
 /// Slot type for the deadlock-detection token carried by ask envelopes (see
 /// [`deadlock::AskEdgeToken`]). Defined as `()` when the feature is off so
@@ -545,9 +545,11 @@ pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 /// 32 leaves comfortable headroom for fan-out patterns (e.g. one subscription
 /// per item in a small config list) without resorting to an unbounded channel.
 ///
-/// `subscribe_idle` uses `try_send` and returns [`Error::ChannelFull`] when the
-/// buffer is full, so the failure mode is a loud, actionable error rather
-/// than a silent hang. Actors that legitimately need more (e.g. one
+/// `subscribe_idle` uses `try_send` and fails with an
+/// [`IdleSubscribeError`] carrying
+/// [`Error::ChannelFull`] when the buffer is full, so the failure mode is a
+/// loud, actionable error rather than a silent hang. Actors that legitimately
+/// need more (e.g. one
 /// subscription per item of a large config list, all registered in
 /// `on_start`) can raise the per-actor capacity with
 /// [`SpawnOptions::with_idle_capacity`], merge sources into one stream
@@ -615,7 +617,8 @@ pub struct SpawnOptions {
     pub(crate) priority_enabled: bool,
     /// Whether to enable the idle-event channel. When `false` (default) no idle-subscribe
     /// channel is created: [`Actor::on_idle`](crate::Actor::on_idle) is never driven and any
-    /// call to [`subscribe_idle`](crate::ActorRef::subscribe_idle) returns
+    /// call to [`subscribe_idle`](crate::ActorRef::subscribe_idle) fails with an
+    /// [`IdleSubscribeError`](crate::IdleSubscribeError) carrying
     /// [`Error::IdleChannelNotEnabled`]. Toggled via [`SpawnOptions::with_idle`].
     ///
     /// Disabling it by default removes one always-active branch from the actor's runtime

@@ -196,7 +196,10 @@ pub trait AskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
 /// ```
 pub trait WeakTellHandler<M: Send + 'static>: Send + Sync {
     /// Attempts to upgrade to a strong handler.
-    /// Returns `None` if the actor has been dropped.
+    /// Returns `None` if the actor has been dropped, or if its runtime loop has
+    /// already exited (graceful stop, kill, or lifecycle failure) even while
+    /// strong references still linger elsewhere — see
+    /// [`ActorWeak::upgrade`](crate::ActorWeak::upgrade).
     fn upgrade(&self) -> Option<Box<dyn TellHandler<M>>>;
 
     /// Clone this handler into a new boxed instance.
@@ -233,7 +236,10 @@ pub trait WeakTellHandler<M: Send + 'static>: Send + Sync {
 /// ```
 pub trait WeakAskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     /// Attempts to upgrade to a strong handler.
-    /// Returns `None` if the actor has been dropped.
+    /// Returns `None` if the actor has been dropped, or if its runtime loop has
+    /// already exited (graceful stop, kill, or lifecycle failure) even while
+    /// strong references still linger elsewhere — see
+    /// [`ActorWeak::upgrade`](crate::ActorWeak::upgrade).
     fn upgrade(&self) -> Option<Box<dyn AskHandler<M, R>>>;
 
     /// Clone this handler into a new boxed instance.

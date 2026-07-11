@@ -280,35 +280,17 @@ pub enum ActorResult<T: Actor> {
 
 /// Conversion from ActorResult to a tuple of (`Option<Actor>`, `Option<Error>`)
 ///
-/// This allows extracting both the actor instance and error (if any) in a single operation.
-/// Useful for pattern matching and destructuring in supervision contexts.
+/// **Prefer [`ActorResult::into_parts`]**, which is identical but names the
+/// two slots so their meaning is not lost in the anonymous tuple type. This
+/// `From` impl is retained for `.into()` call sites and delegates to it.
 ///
 /// **Lossy**: this conversion discards the failure phase, the `killed` flag,
 /// and — for [`FailurePhase::OnIdleThenOnStop`] — the secondary `on_stop`
 /// cleanup error. Use the accessors on [`ActorResult`] / [`ActorFailure`] when
 /// any of those matter.
-///
-/// # Example
-/// ```ignore
-/// let (maybe_actor, maybe_error) = actor_result.into();
-/// if let Some(actor) = maybe_actor {
-///     // The actor is available (either completed or recovered after failure)
-/// }
-/// if let Some(error) = maybe_error {
-///     // An error occurred
-/// }
-/// ```
 impl<T: Actor> From<ActorResult<T>> for (Option<T>, Option<T::Error>) {
     fn from(result: ActorResult<T>) -> Self {
-        match result {
-            ActorResult::Completed { actor, .. } => (Some(actor), None),
-            ActorResult::Failed { failure, .. } => match failure {
-                ActorFailure::OnStart { error } => (None, Some(error)),
-                ActorFailure::OnIdle { actor, error }
-                | ActorFailure::OnStop { actor, error }
-                | ActorFailure::OnIdleThenOnStop { actor, error, .. } => (Some(actor), Some(error)),
-            },
-        }
+        result.into_parts()
     }
 }
 
@@ -568,6 +550,40 @@ impl<T: Actor> ActorResult<T> {
         match self {
             ActorResult::Completed { actor, .. } => Ok(actor),
             ActorResult::Failed { failure, .. } => Err(failure.into_error()),
+        }
+    }
+
+    /// Splits the result into its actor instance and error, if each is present.
+    ///
+    /// - `(Some(actor), None)` — completed successfully.
+    /// - `(Some(actor), Some(error))` — a post-start hook (`on_idle` / `on_stop`)
+    ///   failed but the actor instance was recovered.
+    /// - `(None, Some(error))` — `on_start` failed, so no actor exists.
+    ///
+    /// This is the named equivalent of the `From<ActorResult<T>>` tuple
+    /// conversion; prefer it, since the tuple's slot meanings are not carried in
+    /// its type.
+    ///
+    /// **Lossy**: discards the failure phase, the `killed` flag, and — for
+    /// [`FailurePhase::OnIdleThenOnStop`] — the secondary `on_stop` cleanup
+    /// error. Use [`actor`](Self::actor), [`error`](Self::error),
+    /// [`was_killed`](Self::was_killed), [`phase`](Self::phase), and the
+    /// `is_*_failed` predicates when any of those matter.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let (maybe_actor, maybe_error) = actor_result.into_parts();
+    /// ```
+    #[must_use]
+    pub fn into_parts(self) -> (Option<T>, Option<T::Error>) {
+        match self {
+            ActorResult::Completed { actor, .. } => (Some(actor), None),
+            ActorResult::Failed { failure, .. } => match failure {
+                ActorFailure::OnStart { error } => (None, Some(error)),
+                ActorFailure::OnIdle { actor, error }
+                | ActorFailure::OnStop { actor, error }
+                | ActorFailure::OnIdleThenOnStop { actor, error, .. } => (Some(actor), Some(error)),
+            },
         }
     }
 }

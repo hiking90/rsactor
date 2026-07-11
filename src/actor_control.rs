@@ -66,7 +66,9 @@ pub trait ActorControl: Send + Sync {
     /// Returns the unique identity of the actor.
     fn identity(&self) -> Identity;
 
-    /// Checks if the actor is still alive.
+    /// Checks if the actor is still alive (heuristic, point-in-time; a `true`
+    /// result does not guarantee that a subsequent send will succeed — see
+    /// [`ActorRef::is_alive`](crate::ActorRef::is_alive)).
     fn is_alive(&self) -> bool;
 
     /// Gracefully stops the actor.
@@ -149,7 +151,10 @@ pub trait WeakActorControl: Send + Sync {
     fn is_alive(&self) -> bool;
 
     /// Attempts to upgrade to a strong control reference.
-    /// Returns `None` if the actor has been dropped.
+    /// Returns `None` if the actor has been dropped, or if its runtime loop has
+    /// already exited (graceful stop, kill, or lifecycle failure) even while
+    /// strong references still linger elsewhere — see
+    /// [`ActorWeak::upgrade`](crate::ActorWeak::upgrade).
     fn upgrade(&self) -> Option<Box<dyn ActorControl>>;
 
     /// Clone this control into a new boxed instance.

@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "rsactor"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "rsactor-derive"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "proc-macro2",
  "quote",

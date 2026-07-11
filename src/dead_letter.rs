@@ -53,6 +53,13 @@
 //! the number of dead letters for verification purposes. Use `dead_letter_count()`
 //! and `reset_dead_letter_count()` to inspect and reset this counter.
 //!
+//! The counter is **process-global**, so under `cargo test`'s default parallel
+//! execution dead letters from other tests land in it too, and another test's
+//! `reset_dead_letter_count()` can clear your count mid-assertion. Tests that
+//! assert an exact value must serialize against every other dead-letter
+//! producer (e.g. with `serial_test`); a delta-based check (reset, then assert
+//! the relative increase) is only reliable when nothing else runs concurrently.
+//!
 //! ```toml
 //! [dev-dependencies]
 //! rsactor = { version = "...", features = ["test-utils"] }
