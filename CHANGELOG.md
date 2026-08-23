@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A follow-up review pass over `src/`. Almost every finding was a documentation
+contract that disagreed with the implementation — this crate specifies panic
+conditions, deadlock-vs-stall semantics and dead-letter labels in rustdoc, and
+none of that is checked by `fmt`/`clippy`/`rustdoc`/tests. Two enums gain
+`#[non_exhaustive]`; the rest is prose brought back in line with the code, plus
+one internal type change that makes a doc promise compiler-enforced.
+
+### ⚠️ BREAKING CHANGES
+
+- **`FailurePhase` and `ActorFailure` are now `#[non_exhaustive]`.** A match in
+  a downstream crate must add a `_` arm. This lets a future release report a new
+  lifecycle phase without a breaking change. Note the attribute is applied at the
+  *enum* level only: unlike `Error`, these variants stay externally constructible
+  so downstream tests can still build an `ActorResult` by hand.
+- **`Error::Join`'s `Display` no longer embeds its own source.** It now reads
+  `Failed to join spawned task from actor Worker(#3)`; the `JoinError` (and the
+  panic message inside it) is reachable only through `source()`. A `Display` that
+  repeats its source makes chain-walking reporters print it twice. Code that
+  logged `{err}` and relied on seeing the panic text must walk the chain — see
+  the updated example on `Error::debugging_tips`.
+- **`Operation`, `Channel` and `FailurePhase` `Display` now honor format
+  specifiers.** They pad and align as expected (`{:>24}`), but a *precision*
+  now truncates (`{:.10}` renders both `BlockingAsk` and `BlockingAskPriority`
+  as `blocking_a`). Use `as_str()` where an unabridged label is required.
+
+### Added
+
+- **`FailurePhase::as_str()`** — the stable label, replacing the previous
+  delegation to the derived `Debug` as the single source of truth.
+
+### Changed
+
+- `Cargo.toml` now sets `exclude`, so developer tooling and working notes
+  (`plan/`, `book/`, `skills/`, `.github/`, `.claude/`, `.vscode/`) no longer
+  ship in the published `.crate`.
+- The dead-letter recorder takes a typed `Operation` instead of a `&'static str`,
+  so the emitted label and `Error::Timeout`'s operation can no longer drift.
+  Internal only — `record` is `pub(crate)`.
+
+### Fixed
+
+- **`ask` / `ask_with_timeout` documented no self-ask hazard at all**, while
+  every sibling API did. A self-`ask` deadlocks even on an empty mailbox (the
+  runtime loop that would produce the reply is parked awaiting the caller), and
+  panics under `deadlock-detection` — neither was documented. `ask_with_timeout`
+  is a bounded stall rather than a deadlock, and it can panic on a runtime built
+  without a time driver; both are now stated.
+- **`blocking_ask` and `blocking_ask_priority` rendered their `# Panics` twice**,
+  with the two copies contradicting each other, and one copy claimed
+  `blocking_ask(msg, None)` panics on a timerless runtime (it does not — the
+  timeout-less path never arms a timer).
+- **`blocking_*` panic conditions are now single-sourced** via
+  `include_str!`, having drifted across three of the six methods. The shared text
+  distinguishes a bounded stall (mandatory `timeout`) from an unbounded hang
+  (`timeout: None`), which the unified wording had previously flattened.
+- **`Actor::on_stop`'s contract was wrong**: a message handler returning `Err`
+  does *not* terminate the actor, so `on_stop` still runs. Task cancellation,
+  which does skip `on_stop`, was missing from the list.
+- **The dead-letter `operation` contract ignored the shutdown drain**, which
+  cannot know the sending API and records `"tell"`/`"ask"` for everything —
+  including messages enqueued by `blocking_tell`.
+- **`register_ask_edge` claimed no cycle can form outside an actor context.** It
+  is a detection blind spot, not a proof: `tokio::spawn`, `spawn_blocking` (the
+  pattern `blocking_ask` itself recommends) and hand-rolled threads do not
+  inherit the task-local, so even a self-`ask` from there hangs silently.
+- **`MetricsCollector` reported an active actor as idle** when the wall clock sat
+  at or before `UNIX_EPOCH`: `0` doubled as the "no activity yet" sentinel.
+  Timestamps are now stored biased by one, keeping the type's all-`Relaxed`
+  contract intact.
+- The `ActorResult` supervision example discarded the `on_stop` cleanup error and
+  restarted the actor, because `is_runtime_failed()` matches the composite
+  `OnIdleThenOnStop` phase before `is_stop_failed()` can see it.
+- `BoxFuture`'s rationale claimed it keeps `futures` out of the public API;
+  `subscribe_idle` and `IdleSubscribeError` already expose `futures` types, so a
+  semver-breaking `futures` release is breaking for this crate too.
+- `error_display_all_variants` asserted only that messages were non-empty, and
+  skipped `PriorityChannelNotEnabled`/`IdleChannelNotEnabled` entirely — two
+  near-identical messages where a copy-paste swap was undetectable.
+
 ## [0.18.0] - 2026-07-11
 
 A focused API-hardening follow-up from a second source-review pass. It

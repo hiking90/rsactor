@@ -36,6 +36,18 @@ homepage.workspace = true
 license.workspace = true
 readme.workspace = true
 keywords.workspace = true
+# Keep the published .crate to the library and its reference docs. These are
+# developer tooling / scratch space and would otherwise ship to crates.io —
+# `plan/` in particular is working notes, not documentation.
+# NOTE: `src/doc/` must stay included; `include_str!` pulls it into rustdoc.
+exclude = [
+    "/.claude",
+    "/.github",
+    "/.vscode",
+    "/book",
+    "/plan",
+    "/skills",
+]
 
 [features]
 default = []

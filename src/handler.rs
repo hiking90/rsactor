@@ -88,13 +88,12 @@ pub trait TellHandler<M: Send + 'static>: Send + Sync {
     ///
     /// # Panics
     ///
-    /// Panics only when the mailbox is full (the `try_send` hot path never
-    /// blocks): from inside a `LocalSet` running on a multi-thread runtime,
-    /// or from an async context that cannot block — a task on a
-    /// `current_thread` runtime or a thread driving a `current_thread`
-    /// runtime's `block_on` (see
-    /// [`ActorRef::blocking_tell`](crate::ActorRef::blocking_tell) for both
-    /// conditions).
+    /// Panics only when the mailbox is full — the `try_send` hot path never
+    /// blocks. See
+    /// [`ActorRef::blocking_tell`](crate::ActorRef::blocking_tell) for the
+    /// execution paths these conditions map onto.
+    ///
+    #[doc = include_str!("doc/blocking_panics.md")]
     fn blocking_tell(&self, msg: M, timeout: Option<Duration>) -> Result<()>;
 
     /// Clone this handler into a new boxed instance.
@@ -148,12 +147,12 @@ pub trait AskHandler<M: Send + 'static, R: Send + 'static>: Send + Sync {
     ///
     /// # Panics
     ///
-    /// Panics when called from inside a `LocalSet` running on a multi-thread
-    /// runtime, and when called from an async context that cannot block — a
-    /// task on a `current_thread` runtime or a thread driving a
-    /// `current_thread` runtime's `block_on` (see
-    /// [`ActorRef::blocking_ask`](crate::ActorRef::blocking_ask) for both
-    /// conditions).
+    /// These apply even when the mailbox has room — unlike `blocking_tell`
+    /// there is no non-blocking fast path, because the reply must always be
+    /// awaited. See [`ActorRef::blocking_ask`](crate::ActorRef::blocking_ask)
+    /// for the execution paths these conditions map onto.
+    ///
+    #[doc = include_str!("doc/blocking_panics.md")]
     fn blocking_ask(&self, msg: M, timeout: Option<Duration>) -> Result<R>;
 
     /// Clone this handler into a new boxed instance.
