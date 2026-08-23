@@ -9,7 +9,11 @@ use std::fmt::Debug;
 /// This enum is used to identify which lifecycle method of an actor
 /// caused a failure, enabling more precise error handling and debugging.
 /// Each phase corresponds to a specific method in the [`Actor`](crate::Actor) trait.
+///
+/// Marked `#[non_exhaustive]` so a future lifecycle phase can be reported
+/// without breaking exhaustive matches — include a `_` arm when matching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FailurePhase {
     /// Actor failed during the [`on_start`](crate::Actor::on_start) lifecycle hook.
     OnStart,
@@ -24,13 +28,28 @@ pub enum FailurePhase {
     OnIdleThenOnStop,
 }
 
+impl FailurePhase {
+    /// Returns the stable string label for this phase (e.g. `"OnStart"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            FailurePhase::OnStart => "OnStart",
+            FailurePhase::OnIdle => "OnIdle",
+            FailurePhase::OnStop => "OnStop",
+            FailurePhase::OnIdleThenOnStop => "OnIdleThenOnStop",
+        }
+    }
+}
+
 /// Implements Display for FailurePhase to provide human-readable error messages.
 ///
-/// The human-readable form is the variant name, so this delegates to the
-/// derived `Debug` impl — one source of truth when variants are added.
+/// Goes through [`Formatter::pad`](std::fmt::Formatter::pad) rather than
+/// delegating to `Debug`: the derived `Debug` writes unit variants with
+/// `write_str`, which silently ignores width/alignment/fill specifiers, so
+/// `{:>20}` on a phase would not pad.
 impl std::fmt::Display for FailurePhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self, f)
+        f.pad(self.as_str())
     }
 }
 
@@ -48,7 +67,12 @@ impl std::fmt::Display for FailurePhase {
 /// Use the accessors ([`phase`](Self::phase), [`error`](Self::error),
 /// [`actor`](Self::actor), [`stop_error`](Self::stop_error)) for uniform access
 /// across variants, or match directly when handling a specific phase.
+///
+/// Marked `#[non_exhaustive]` (like [`FailurePhase`]) so a future lifecycle
+/// phase can be reported without breaking exhaustive matches — prefer the
+/// accessors above, or include a `_` arm when matching.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ActorFailure<T: Actor> {
     /// [`on_start`](crate::Actor::on_start) returned an error; the actor was
     /// never constructed, so no instance is available.
@@ -228,6 +252,15 @@ impl<T: Actor> ActorFailure<T> {
 ///         // Actor failed to start - may need different initialization
 ///         eprintln!("Startup failed, checking configuration...");
 ///     }
+///     result if result.is_cleanup_failed() => {
+///         // on_idle failed AND the on_stop cleanup then failed too. Handled
+///         // before is_runtime_failed(), which also matches this phase and
+///         // would otherwise restart the actor while discarding the cleanup
+///         // error - leaving resources (flushes, connections, files) unreleased
+///         // with no warning.
+///         eprintln!("Runtime failure: {}", result.error().unwrap());
+///         eprintln!("Cleanup also failed: {}", result.secondary_error().unwrap());
+///     }
 ///     result if result.is_runtime_failed() => {
 ///         // Runtime failure - restart the actor
 ///         if let Some(actor) = result.into_actor() {
@@ -236,8 +269,8 @@ impl<T: Actor> ActorFailure<T> {
 ///         }
 ///     }
 ///     result if result.is_stop_failed() => {
-///         // Stopped (or killed), but on_stop cleanup failed - resources may
-///         // not have been released (flushes, connections, files)
+///         // Only `OnStop` reaches here - `OnIdleThenOnStop` is handled above -
+///         // so `error()` is the on_stop cleanup error.
 ///         eprintln!("Cleanup failed: {}", result.error().unwrap());
 ///     }
 ///     result if result.was_killed() => {
@@ -584,6 +617,52 @@ impl<T: Actor> ActorResult<T> {
                 | ActorFailure::OnStop { actor, error }
                 | ActorFailure::OnIdleThenOnStop { actor, error, .. } => (Some(actor), Some(error)),
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_phase_display_honors_format_specifiers() {
+        // Delegating to the derived `Debug` wrote unit variants via
+        // `Formatter::write_str`, which silently ignores width/alignment/fill.
+        // `Display` now pads, so phases line up in tabular log output.
+        assert_eq!(format!("{}", FailurePhase::OnStart), "OnStart");
+        assert_eq!(format!("{:>10}|", FailurePhase::OnStart), "   OnStart|");
+        assert_eq!(format!("{:<10}|", FailurePhase::OnStart), "OnStart   |");
+        assert_eq!(
+            format!("{:>20}|", FailurePhase::OnIdleThenOnStop),
+            "    OnIdleThenOnStop|"
+        );
+    }
+
+    #[test]
+    fn failure_phase_as_str_matches_debug() {
+        // Tripwire: adding a variant breaks this match, forcing the array
+        // below to grow. Without it a new variant with a typo'd label would
+        // slip through, since the array is hand-written.
+        fn _all_covered(p: FailurePhase) {
+            match p {
+                FailurePhase::OnStart
+                | FailurePhase::OnIdle
+                | FailurePhase::OnStop
+                | FailurePhase::OnIdleThenOnStop => {}
+            }
+        }
+
+        // `as_str` replaced the `Debug` delegation as the source of truth for
+        // the human-readable name; keep the two spellings in lockstep.
+        for phase in [
+            FailurePhase::OnStart,
+            FailurePhase::OnIdle,
+            FailurePhase::OnStop,
+            FailurePhase::OnIdleThenOnStop,
+        ] {
+            assert_eq!(phase.as_str(), format!("{phase:?}"));
+            assert_eq!(phase.to_string(), format!("{phase:?}"));
         }
     }
 }

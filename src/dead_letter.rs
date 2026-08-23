@@ -96,7 +96,7 @@
 //!
 //! For production observability, rely on the structured `tracing::warn!` logs instead.
 
-use crate::Identity;
+use crate::{Identity, Operation};
 
 #[cfg(any(test, feature = "test-utils"))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -180,10 +180,30 @@ impl std::fmt::Display for DeadLetterReason {
 ///
 /// * `identity` - The identity of the actor that failed to receive the message
 /// * `reason` - Why the message became a dead letter
-/// * `operation` - The logical operation that failed ("tell", "ask",
-///   "tell_priority", "ask_priority"). Blocking variants record the same
-///   label as their async counterparts so the same call site aggregates to
-///   one operation regardless of which execution path it took.
+/// * `operation` - Which operation the record is attributed to. Logged as
+///   [`Operation::as_str`](crate::Operation::as_str), so the emitted label and
+///   the [`Error::Timeout`](crate::Error::Timeout) variant can never drift.
+///
+///   **Caller-side records** ([`DeadLetterReason::ActorStopped`],
+///   [`DeadLetterReason::Timeout`], [`DeadLetterReason::ReplyDropped`]) name
+///   the exact public API that failed, so the `blocking_*` variants keep their
+///   own labels instead of folding into their async counterparts and a
+///   dashboard can tell a blocking call site from an async one; a query that
+///   wants both must match either spelling. The `*_with_timeout` methods carry
+///   no separate label — they aggregate under their base operation
+///   (`tell_with_timeout` records [`Operation::Tell`](crate::Operation::Tell)),
+///   because the deadline is a parameter of the same API, not a different one.
+///
+///   **Receiver-side [`DeadLetterReason::DiscardedAtShutdown`] records are the
+///   exception.** The shutdown drain runs after the sender is long gone and
+///   sees only which mailbox the envelope sat in and whether it carried a reply
+///   channel, so it can only report [`Operation::Tell`](crate::Operation::Tell) /
+///   [`Operation::Ask`](crate::Operation::Ask) for the regular mailbox and
+///   [`Operation::TellPriority`](crate::Operation::TellPriority) /
+///   [`Operation::AskPriority`](crate::Operation::AskPriority) for the priority
+///   channel. A message enqueued by `blocking_tell` is recorded as
+///   `"tell"` there — filtering shutdown records by a `blocking_*` label finds
+///   nothing.
 ///
 /// # Type Parameters
 ///
@@ -195,7 +215,7 @@ impl std::fmt::Display for DeadLetterReason {
 /// The `#[cold]` attribute hints to the compiler that this function is rarely
 /// called, allowing better optimization of the hot path (successful message delivery).
 #[cold]
-pub(crate) fn record<M>(identity: Identity, reason: DeadLetterReason, operation: &'static str) {
+pub(crate) fn record<M>(identity: Identity, reason: DeadLetterReason, operation: Operation) {
     record_erased(identity, reason, operation, std::any::type_name::<M>());
 }
 
@@ -207,7 +227,7 @@ pub(crate) fn record<M>(identity: Identity, reason: DeadLetterReason, operation:
 pub(crate) fn record_erased(
     identity: Identity,
     reason: DeadLetterReason,
-    operation: &'static str,
+    operation: Operation,
     message_type: &'static str,
 ) {
     #[cfg(any(test, feature = "test-utils"))]
@@ -219,7 +239,7 @@ pub(crate) fn record_erased(
         actor.type_name = identity.name(),
         message.type_name = message_type,
         dead_letter.reason = %reason,
-        dead_letter.operation = operation,
+        dead_letter.operation = operation.as_str(),
         "Dead letter: message could not be delivered"
     );
 }

@@ -46,7 +46,15 @@ pub(crate) struct MetricsCollector {
     total_idle_processing_nanos: AtomicU64,
     /// Maximum `on_idle` processing time observed in nanoseconds
     max_idle_processing_nanos: AtomicU64,
-    /// Last activity timestamp as milliseconds since UNIX_EPOCH
+    /// Last activity timestamp, stored **biased by one**: `0` means "no work
+    /// has completed yet", and any other value is `millis_since_epoch + 1`.
+    ///
+    /// The bias exists because a raw `0` is a legitimate timestamp whenever the
+    /// wall clock is at or before `UNIX_EPOCH` (an embedded board before NTP
+    /// sync); using it as the "never" sentinel would report a busy actor as
+    /// having done no work. Biasing keeps that distinction in a single atomic,
+    /// so this field needs no ordering relationship with any other. The `+ 1`
+    /// cannot overflow: wall-clock milliseconds are ~2^44, far below `u64::MAX`.
     last_activity_millis: AtomicU64,
     /// Collector construction time. Used as the uptime baseline until the actor
     /// finishes `on_start` (see `started_at`).
@@ -171,17 +179,18 @@ impl MetricsCollector {
             .unwrap_or(Duration::ZERO)
             .as_millis()
             .min(u64::MAX as u128) as u64;
-        self.last_activity_millis.store(millis, Ordering::Relaxed);
+        // Stored biased by one so `0` stays reserved for "never". Saturating is
+        // unreachable (see the field docs) but costs nothing on this cold path.
+        self.last_activity_millis
+            .store(millis.saturating_add(1), Ordering::Relaxed);
     }
 
     /// Converts the last activity timestamp to SystemTime.
     fn get_last_activity(&self) -> Option<SystemTime> {
-        let millis = self.last_activity_millis.load(Ordering::Relaxed);
-        if millis == 0 {
-            None
-        } else {
-            SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(millis))
-        }
+        // `0` is the "never" sentinel; every stored value is biased by one.
+        let biased = self.last_activity_millis.load(Ordering::Relaxed);
+        let millis = biased.checked_sub(1)?;
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(millis))
     }
 
     /// Creates an immutable snapshot of current metrics.
@@ -359,6 +368,30 @@ mod tests {
         assert_eq!(snapshot.avg_processing_time, Duration::ZERO);
         assert_eq!(snapshot.max_processing_time, Duration::ZERO);
         assert!(snapshot.last_activity.is_none());
+    }
+
+    #[test]
+    fn last_activity_zero_timestamp_is_not_read_as_never() {
+        let collector = MetricsCollector::new();
+        assert!(
+            collector.get_last_activity().is_none(),
+            "a fresh collector has no activity"
+        );
+
+        // Simulate a wall clock at (or before) UNIX_EPOCH, where
+        // `update_last_activity` computes 0 millis. Without the +1 bias, 0
+        // doubled as the "never" sentinel and this reported None for an actor
+        // that had actually done work.
+        collector.record_message(Duration::from_millis(1));
+        // Biased encoding of a raw timestamp of 0.
+        collector.last_activity_millis.store(1, Ordering::Relaxed);
+
+        assert_eq!(
+            collector.get_last_activity(),
+            Some(SystemTime::UNIX_EPOCH),
+            "a recorded timestamp of 0 must still report as activity"
+        );
+        assert_eq!(collector.snapshot().message_count, 1);
     }
 
     #[test]

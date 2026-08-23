@@ -53,8 +53,14 @@ impl Operation {
 }
 
 impl std::fmt::Display for Operation {
+    /// Uses [`Formatter::pad`](std::fmt::Formatter::pad) rather than `write_str` so
+    /// format specifiers are honored, for downstream tabular logging where
+    /// `{:>24}` must actually pad. Note `pad` also treats a **precision** as a
+    /// maximum length, so `{:.10}` truncates — enough to make `BlockingAsk` and
+    /// `BlockingAskPriority` render identically. Use [`as_str`](Self::as_str)
+    /// when an unabridged, stable label is required.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.pad(self.as_str())
     }
 }
 
@@ -81,8 +87,9 @@ impl Channel {
 }
 
 impl std::fmt::Display for Channel {
+    /// Pads like [`Operation`]'s impl — see its note on `Formatter::pad`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.pad(self.as_str())
     }
 }
 
@@ -294,11 +301,19 @@ impl std::fmt::Display for Error {
             Error::MailboxCapacity { message } => {
                 write!(f, "Mailbox capacity error: {message}")
             }
-            Error::Join { identity, source } => {
-                write!(
-                    f,
-                    "Failed to join spawned task from actor {identity}: {source}"
-                )
+            // The `JoinError` is deliberately NOT interpolated here: it is
+            // returned from `source()` below, and a `Display` that repeats its
+            // own source makes a chain-walking reporter (anyhow, eyre, or the
+            // manual loop in `debugging_tips`' example) print the same text
+            // twice. Matches how `Error::Runtime` drops its `source` from the
+            // message.
+            //
+            // Note this means `{}` alone no longer shows the panic message —
+            // `std::error::Error` has no alternate-flag chain walking, so
+            // `{:#}` does not add it either. Callers that want the cause must
+            // walk `source()`; see the example on `debugging_tips`.
+            Error::Join { identity, .. } => {
+                write!(f, "Failed to join spawned task from actor {identity}")
             }
             Error::PriorityChannelNotEnabled { identity } => {
                 write!(
@@ -401,9 +416,16 @@ impl Error {
     /// use rsactor::Error;
     ///
     /// fn log_error(err: &Error) {
-    ///     eprintln!("Error: {}", err);
+    ///     eprintln!("Error: {err}");
+    ///     // `Display` never repeats `source()`, so walk the chain explicitly —
+    ///     // this is where an `Error::Join`'s panic message lives.
+    ///     let mut cause = std::error::Error::source(err);
+    ///     while let Some(e) = cause {
+    ///         eprintln!("  caused by: {e}");
+    ///         cause = e.source();
+    ///     }
     ///     for tip in err.debugging_tips() {
-    ///         eprintln!("  - {}", tip);
+    ///         eprintln!("  - {tip}");
     ///     }
     /// }
     /// ```
@@ -674,45 +696,119 @@ mod tests {
     }
 
     #[test]
+    fn operation_and_channel_display_honor_format_specifiers() {
+        // `Formatter::write_str` silently ignores width/alignment/fill; these
+        // labels are meant for tabular log output, so `Display` must go through
+        // `Formatter::pad`.
+        assert_eq!(format!("{}", Operation::Ask), "ask");
+        assert_eq!(format!("{:>8}|", Operation::Ask), "     ask|");
+        assert_eq!(format!("{:<8}|", Operation::Ask), "ask     |");
+        assert_eq!(format!("{:*^9}|", Operation::Ask), "***ask***|");
+        assert_eq!(
+            format!("{:>24}|", Operation::BlockingAskPriority),
+            "   blocking_ask_priority|"
+        );
+
+        assert_eq!(format!("{}", Channel::IdleSubscribe), "idle_subscribe");
+        assert_eq!(
+            format!("{:>16}|", Channel::IdleSubscribe),
+            "  idle_subscribe|"
+        );
+    }
+
+    #[test]
     fn error_display_all_variants() {
         let identity = Identity::new(1, "TestActor");
 
-        let errors = vec![
-            Error::Send {
-                identity,
-                details: "channel closed",
-            },
-            Error::Receive {
-                identity,
-                details: "reply dropped",
-            },
-            Error::Timeout {
-                identity,
-                timeout: Duration::from_secs(5),
-                operation: Operation::Ask,
-            },
-            Error::Downcast {
-                identity,
-                expected_type: "String",
-            },
-            Error::Runtime {
-                identity,
-                details: "panic in handler".into(),
-                source: None,
-            },
-            Error::MailboxCapacity {
-                message: "capacity must be > 0",
-            },
-            Error::ChannelFull {
-                identity,
-                channel: Channel::IdleSubscribe,
-            },
+        // Each case pins the variant-specific wording. Asserting only on
+        // "non-empty" would let a `Display` that collapsed every variant to one
+        // generic string pass, i.e. the test would survive deletion of the
+        // behavior it exists to check.
+        let cases: Vec<(Error, &[&str])> = vec![
+            (
+                Error::Send {
+                    identity,
+                    details: "channel closed",
+                },
+                &["Failed to send message to actor", "channel closed"],
+            ),
+            (
+                Error::Receive {
+                    identity,
+                    details: "reply dropped",
+                },
+                &["Failed to receive reply from actor", "reply dropped"],
+            ),
+            (
+                Error::Timeout {
+                    identity,
+                    timeout: Duration::from_secs(5),
+                    operation: Operation::Ask,
+                },
+                &["ask", "timed out after", "5s"],
+            ),
+            (
+                Error::Downcast {
+                    identity,
+                    expected_type: "String",
+                },
+                &["Failed to downcast reply", "String"],
+            ),
+            (
+                Error::Runtime {
+                    identity,
+                    details: "panic in handler".into(),
+                    source: None,
+                },
+                &["Runtime error in actor", "panic in handler"],
+            ),
+            (
+                Error::MailboxCapacity {
+                    message: "capacity must be > 0",
+                },
+                &["Mailbox capacity error", "capacity must be > 0"],
+            ),
+            (
+                Error::ChannelFull {
+                    identity,
+                    channel: Channel::IdleSubscribe,
+                },
+                &["idle_subscribe", "at capacity"],
+            ),
+            // These two differ only by their trailing suffix, so a copy-paste
+            // swap between them is the realistic failure mode; pin both.
+            (
+                Error::PriorityChannelNotEnabled { identity },
+                &["Priority channel is not enabled", "with_priority()"],
+            ),
+            (
+                Error::IdleChannelNotEnabled { identity },
+                &["Idle channel is not enabled", "with_idle()"],
+            ),
         ];
 
-        for err in &errors {
-            let display = format!("{}", err);
-            assert!(!display.is_empty(), "Display should not be empty");
-            assert!(display.len() > 5, "Display should be descriptive");
+        for (err, expected) in &cases {
+            let display = format!("{err}");
+            for needle in *expected {
+                assert!(
+                    display.contains(needle),
+                    "Display for {err:?} is {display:?}, missing {needle:?}"
+                );
+            }
+        }
+
+        // Every identity-carrying case above must name the actor;
+        // MailboxCapacity is the only one of them with no identity to report.
+        // (`Error::Join` is covered separately by `error_join_display`.)
+        for (err, _) in &cases {
+            if matches!(err, Error::MailboxCapacity { .. }) {
+                continue;
+            }
+            let display = format!("{err}");
+            assert!(
+                display.contains("TestActor"),
+                "Display for {err:?} is {display:?}, missing the actor identity"
+            );
         }
     }
 
@@ -815,6 +911,14 @@ mod tests {
         assert!(display.contains("Failed to join"));
         assert!(display.contains("TestActor"));
         assert!(error.source().is_some(), "Join error should have a source");
+
+        // Regression guard: `Display` must not repeat what `source()` reports,
+        // or chain-walking reporters print the panic message twice.
+        let source_text = error.source().unwrap().to_string();
+        assert!(
+            !display.contains(&source_text),
+            "Display {display:?} must not embed its own source {source_text:?}"
+        );
     }
 
     #[tokio::test]

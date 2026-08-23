@@ -424,8 +424,17 @@ where
 /// A boxed future that is Send and can be stored in collections.
 ///
 /// This type alias is used throughout the handler traits for object-safe async methods.
-/// Identical to `futures::future::BoxFuture` but defined locally to avoid exposing
-/// the `futures` crate in the public API surface.
+/// Identical to `futures::future::BoxFuture`, but spelled out locally so the public
+/// signatures name a plain `Pin<Box<dyn Future + Send>>` instead of a `futures` path.
+///
+/// This is a naming choice only — it does **not** keep `futures` out of the public API
+/// surface, which already carries it: [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle)
+/// bounds its parameter on `futures::stream::Stream`, and
+/// [`IdleSubscribeError::take_stream`](crate::IdleSubscribeError::take_stream) /
+/// [`into_parts`](crate::IdleSubscribeError::into_parts) return
+/// `futures::stream::BoxStream`. A semver-breaking `futures` release is therefore a
+/// breaking change for this crate; genuinely encapsulating it would require wrapping the
+/// idle-stream types as well.
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 impl<A, T> PayloadHandler<A> for T

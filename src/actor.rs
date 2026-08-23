@@ -67,8 +67,8 @@ fn discard_queued_messages<T: Actor>(
     fn drain_one<T: Actor>(
         actor_id: crate::Identity,
         rx: &mut mpsc::Receiver<MailboxMessage<T>>,
-        tell_op: &'static str,
-        ask_op: &'static str,
+        tell_op: crate::Operation,
+        ask_op: crate::Operation,
     ) {
         rx.close();
         while let Ok(msg) = rx.try_recv() {
@@ -95,9 +95,19 @@ fn discard_queued_messages<T: Actor>(
         }
     }
 
-    drain_one(actor_id, receiver, "tell", "ask");
+    drain_one(
+        actor_id,
+        receiver,
+        crate::Operation::Tell,
+        crate::Operation::Ask,
+    );
     if let Some(rx) = priority_receiver {
-        drain_one(actor_id, rx, "tell_priority", "ask_priority");
+        drain_one(
+            actor_id,
+            rx,
+            crate::Operation::TellPriority,
+            crate::Operation::AskPriority,
+        );
     }
     if let Some(rx) = idle_subscribe_receiver {
         rx.close();
@@ -495,7 +505,19 @@ pub trait Actor: Sized + Send + 'static {
     ///   dropped (treated as graceful termination, so `killed = false`)
     /// - Cleanup after an [`on_idle`](Actor::on_idle) error
     ///
-    /// It is **not** called if the actor fails during message processing (handler panic/error).
+    /// It is **not** called when the actor task unwinds out of a message handler or
+    /// lifecycle hook (a panic), nor when the task itself is cancelled
+    /// ([`JoinHandle::abort`](tokio::task::JoinHandle::abort), runtime shutdown) and the
+    /// future is dropped at an `.await`.
+    ///
+    /// A **message** handler that merely *returns* `Err` does **not** terminate the
+    /// actor: the error is surfaced through the `ask` reply, or through
+    /// [`Message::on_tell_result`](crate::Message::on_tell_result) for a `tell`, and the
+    /// runtime loop continues to the next message — so `on_stop` still runs at the
+    /// eventual stop/kill. This does **not** extend to
+    /// [`on_idle`](Actor::on_idle), whose `Err` does stop the actor (and then runs
+    /// `on_stop`, reported as [`FailurePhase::OnIdle`](crate::FailurePhase::OnIdle)).
+    ///
     /// The result of this method affects the final [`ActorResult`](crate::ActorResult) returned when awaiting the join handle.
     ///
     /// The `killed` parameter indicates how the actor is being stopped:

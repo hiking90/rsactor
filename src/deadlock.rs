@@ -174,8 +174,22 @@ fn remove_edge(graph: &mut HashMap<u64, Vec<Identity>>, caller: u64, callee_id: 
 /// returns a guard that removes it on drop.
 ///
 /// Panics (the documented deadlock-detection behavior) if adding the edge would
-/// close a cycle. Returns `None` when called outside an actor context — there is
-/// no current actor to attribute the wait to, so no cycle can form through it.
+/// close a cycle.
+///
+/// Returns `None` when called outside an actor context — there is no current
+/// actor to attribute the wait to, so the edge cannot be placed in the graph.
+/// This includes any code that runs *off* the actor's task, because tokio
+/// task-locals are not inherited: a task created by `tokio::spawn` inside a
+/// handler, a [`tokio::task::spawn_blocking`] closure (including the
+/// `blocking_ask` pattern that
+/// [`ActorRef::blocking_ask`](crate::ActorRef::blocking_ask) itself recommends),
+/// and any hand-rolled thread. In all of them [`CURRENT_ACTOR`] is unset, so
+/// even an `ask` an actor makes to *itself* from there hangs silently instead of
+/// panicking.
+///
+/// Such an `ask` is left untracked, which is a known **detection blind spot**,
+/// not a proof that no cycle exists. See `docs/deadlock_detection.md`
+/// ("Limitations").
 #[must_use = "dropping the guard immediately removes the wait-for edge, disabling detection for this ask"]
 pub(crate) fn register_ask_edge(callee: Identity, operation: &str) -> Option<WaitForGuard> {
     let caller = CURRENT_ACTOR.try_with(|id| *id).ok()?;
