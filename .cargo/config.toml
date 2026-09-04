@@ -1,0 +1,16 @@
+# Resolve dependencies against the workspace MSRV instead of always taking the
+# newest release.
+#
+# Cargo's default resolver picks maximum versions with no awareness of
+# `rust-version`, so `cargo update` can pull a transitive dependency that
+# silently raises the required compiler; the breakage then surfaces only in the
+# separate MSRV workflow, after the lockfile has already been committed. With
+# `fallback`, Cargo prefers versions compatible with the workspace
+# `rust-version` and reaches past it only when no compatible version exists.
+#
+# Honoured by Cargo 1.84+. Older toolchains -- including the MSRV build itself
+# -- ignore the key, so this setting cannot break an MSRV build. Keep it in
+# sync with `rust-version` in Cargo.toml: the value is read from there, not
+# duplicated here.
+[resolver]
+incompatible-rust-versions = "fallback"
