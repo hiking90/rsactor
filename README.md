@@ -209,6 +209,7 @@ rsActor comes with several examples that demonstrate various features and use ca
 * **[basic](./examples/basic.rs)** - Simple counter actor demonstrating core concepts with `#[message_handlers]` macro
 * **[actor_with_timeout](./examples/actor_with_timeout.rs)** - Using timeouts for actor communication
 * **[actor_async_worker](./examples/actor_async_worker.rs)** - Inter-actor communication with async tasks
+* **[actor_task](./examples/actor_task.rs)** - Spawning an async background task from `on_start` and exchanging data with it over an mpsc channel
 * **[actor_blocking_task](./examples/actor_blocking_task.rs)** - Using blocking APIs with actors
 * **[dining_philosophers](./examples/dining_philosophers.rs)** - Classic concurrency problem implementation
 * **[weak_reference_demo](./examples/weak_reference_demo.rs)** - Working with weak actor references and lifecycle
