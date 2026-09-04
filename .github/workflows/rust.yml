@@ -49,6 +49,9 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Check example headers
+        run: python3 scripts/check_example_headers.py
+
   # Security audit
   security:
     name: Security Audit
