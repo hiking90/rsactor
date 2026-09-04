@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `cargo fmt --check` - Check formatting without modifying files (CI validation)
 - `cargo clippy --all-targets --all-features -- -D warnings` - Lint with clippy (CI configuration)
 - `cargo check --all-features` - Type check without building
+- `python3 scripts/check_example_headers.py` - Verify that APIs named in an example's `//!` header are actually used by that example (CI validation)
 
 **Before committing:** Always run `cargo fmt` and `cargo clippy --all-targets --all-features -- -D warnings` to ensure CI passes.
 

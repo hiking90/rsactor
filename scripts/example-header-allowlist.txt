@@ -1,0 +1,7 @@
+# Paths an example's `//!` header names on purpose without using them, one
+# '<example file> <path>' pair per line. Keep each entry justified by a comment:
+# an unexplained entry is indistinguishable from the drift this lint exists to catch.
+
+# The header warns that the blocking API must NOT be used from threads created
+# this way, so naming it without using it is the point.
+examples/actor_blocking_task.rs std::thread::spawn
