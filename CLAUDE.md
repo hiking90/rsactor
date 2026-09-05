@@ -25,6 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Security and Dependencies
 - `cargo audit` - Run security audit (requires cargo-audit installation)
+- `cargo update` - Resolves against the workspace MSRV: `.cargo/config.toml` enables MSRV-aware resolution, so dependency versions requiring a newer compiler than `rust-version` are not selected (needs cargo 1.84+; older toolchains ignore the setting)
 
 ## Repository Architecture
 
