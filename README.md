@@ -44,7 +44,7 @@ Supports **graceful termination** (`stop()`) and **immediate termination** (`kil
 - **Only `Send` Required**: Actor structs only need `Send` trait (not `Sync`), enabling interior mutability types like `std::cell::Cell`
 
 ### Observability
-- **Optional Tracing**: Built-in support via `tracing` feature flag for actor lifecycle events, message handling, and performance metrics
+- **Always-On Logging**: lifecycle errors, dead letters and handler errors are emitted through `tracing` with no feature flag; the `tracing` feature adds instrumentation spans and timing, the `log` feature forwards events to the `log` crate
 - **Metrics Support**: Optional `metrics` feature for monitoring message counts, processing times, and actor uptime
 
 ## Why rsActor?
@@ -68,8 +68,11 @@ Unlike broader frameworks like Actix, rsActor specializes exclusively in **local
 [dependencies]
 rsactor = "0.18" # Check crates.io for the latest version
 
-# Optional: Enable tracing support for detailed observability
+# Optional: instrumentation spans and per-message timing
 # rsactor = { version = "0.18", features = ["tracing"] }
+
+# Optional: route rsactor's logs to the `log` crate (env_logger, fern, ...)
+# rsactor = { version = "0.18", features = ["log"] }
 ```
 
 For using the derive macros, you'll also need the `message_handlers` attribute macro which is included by default.
@@ -224,23 +227,57 @@ Run any example with:
 cargo run --example <example_name>
 ```
 
-All examples support tracing when enabled with the `tracing` feature:
+Every example installs a `tracing` subscriber, so `RUST_LOG` alone shows the
+framework's logs. Add the `tracing` feature to also get instrumentation spans
+and per-message timing:
 ```bash
+RUST_LOG=debug cargo run --example <example_name>
 RUST_LOG=debug cargo run --example <example_name> --features tracing
 ```
 
 ## Optional Features
 
-### Tracing Support
+### Logging (no feature required)
 
-rsActor provides optional tracing support for comprehensive observability into actor behavior. When enabled, the framework emits structured trace events for:
+`tracing` is a required dependency, so rsActor always emits its diagnostics:
+
+- `on_start` / `on_idle` / `on_stop` failures
+- Dead letters — messages never delivered, or accepted but never processed
+- Handler errors surfaced through the default `Message::on_tell_result`
+
+Install a `tracing` subscriber to see them; nothing else is needed.
+
+### `log` Feature — Bridge to the `log` Crate
+
+Applications that use `log` and `env_logger` and have no `tracing` dependency
+see none of the above by default: an actor can fail its `on_start` and leave no
+record. The `log` feature enables tracing's `log` bridge, which emits a `log`
+record for every event **while no `tracing` subscriber is installed**. Adding a
+subscriber later turns the bridge back off, so events are never duplicated.
+
+```toml
+[dependencies]
+rsactor = { version = "0.18", features = ["log"] }
+env_logger = "0.11"
+```
+
+```rust,ignore
+fn main() {
+    env_logger::init();
+    // rsactor's warn!/error! events now arrive as log records.
+}
+```
+
+### Tracing Feature — Instrumentation Spans
+
+The `tracing` **feature** is narrower than the crate of the same name. It adds
+`#[tracing::instrument]` spans around the lifecycle and message-dispatch paths,
+and the per-message timing those spans report:
 
 - Actor lifecycle events (start, stop, termination scenarios)
 - Message sending and handling with timing information
 - Reply processing and error handling
 - Performance metrics (message processing duration)
-
-To enable tracing support, add the `tracing` feature to your dependencies:
 
 ```toml
 [dependencies]

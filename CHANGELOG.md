@@ -34,20 +34,35 @@ one internal type change that makes a doc promise compiler-enforced.
 
 ### Added
 
+- **`log` feature** — forwards rsActor's `tracing` events to the
+  [`log`](https://crates.io/crates/log) crate. Applications built on `log` and
+  `env_logger` with no `tracing` dependency previously saw none of the crate's
+  diagnostics: an actor could fail its `on_start`, drop messages to dead
+  letters, or return a handler error, and leave no record anywhere. The feature
+  enables tracing's own `log` bridge (not `log-always`), so a record is emitted
+  only while no `tracing` subscriber is installed and an application that later
+  adds one is never fed both forms of the same event.
 - **`FailurePhase::as_str()`** — the stable label, replacing the previous
   delegation to the derived `Debug` as the single source of truth.
 
 ### Changed
 
 - `Cargo.toml` now sets `exclude`, so developer tooling and working notes
-  (`plan/`, `book/`, `skills/`, `.github/`, `.claude/`, `.vscode/`) no longer
-  ship in the published `.crate`.
+  (`plan/`, `plans/`, `book/`, `skills/`, `.github/`, `.claude/`, `.vscode/`)
+  no longer ship in the published `.crate`.
 - The dead-letter recorder takes a typed `Operation` instead of a `&'static str`,
   so the emitted label and `Error::Timeout`'s operation can no longer drift.
   Internal only — `record` is `pub(crate)`.
 
 ### Fixed
 
+- **The `tracing` feature's documentation contradicted its implementation.**
+  The crate docs and README described it as the switch that turns logging on,
+  while `Cargo.toml` and `Message::on_tell_result` stated the opposite: the
+  `tracing` *crate* is a required dependency and always logs, and the *feature*
+  only adds `#[tracing::instrument]` spans and the per-message timing they
+  report. The docs now say so, and the logging and instrumentation sections are
+  separate.
 - **`ask` / `ask_with_timeout` documented no self-ask hazard at all**, while
   every sibling API did. A self-`ask` deadlocks even on an empty mailbox (the
   runtime loop that would produce the reply is parked awaiting the caller), and

@@ -23,6 +23,7 @@ quote = "1.0"
 syn = { version = "2.0", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+log = "0.4"
 
 [package]
 name = "rsactor"
@@ -46,6 +47,7 @@ exclude = [
     "/.vscode",
     "/book",
     "/plan",
+    "/plans",
     "/skills",
 ]
 
@@ -54,6 +56,12 @@ default = []
 # `tracing` feature now ONLY controls #[tracing::instrument] attributes.
 # The tracing crate itself is ALWAYS available for logging (warn!, error!, etc.)
 tracing = []
+# Forward every `tracing` event to the `log` crate when NO tracing subscriber is
+# installed. This is tracing's own `log` feature, not `log-always`: with a
+# subscriber active the bridge stays off, so applications that use tracing never
+# see duplicated records. Lets `log` + env_logger applications observe dead
+# letters and lifecycle errors without depending on tracing themselves.
+log = ["tracing/log"]
 metrics = []     # Actor performance metrics (message count, processing time, etc.)
 test-utils = []  # Enable dead letter counter for integration tests
                  # WARNING: Never enable in production builds!
@@ -68,9 +76,16 @@ futures = "0.3"
 [dev-dependencies]
 anyhow.workspace = true
 futures.workspace = true
+log.workspace = true  # Only for the capturing logger in tests/log_bridge_tests.rs
 rand.workspace = true
 tokio-stream.workspace = true
 tracing-subscriber.workspace = true
+
+[[test]]
+name = "log_bridge_tests"
+# Its own binary so the process-global `log` logger and the (deliberately
+# absent) tracing subscriber are not shared with any other test file.
+required-features = ["log"]
 
 [[test]]
 name = "debugging_tools_tests"
