@@ -561,11 +561,14 @@ pub(crate) type MailboxSender<T> = mpsc::Sender<MailboxMessage<T>>;
 
 /// Global configuration for the default mailbox capacity.
 ///
-/// This value can be set once using `set_default_mailbox_capacity()` and will be used
-/// by the `spawn()` function when no specific capacity is provided.
+/// Set once via `set_default_mailbox_capacity()`. Read at spawn time, and only
+/// for actors that neither the spawn site nor
+/// [`Actor::MAILBOX_CAPACITY`] gave a capacity.
 static CONFIGURED_DEFAULT_MAILBOX_CAPACITY: OnceLock<usize> = OnceLock::new();
 
-/// The default mailbox capacity for actors.
+/// The mailbox capacity used when neither the spawn site, the actor type's
+/// [`Actor::MAILBOX_CAPACITY`], nor
+/// [`set_default_mailbox_capacity`] specified one.
 pub const DEFAULT_MAILBOX_CAPACITY: usize = 32;
 
 /// The fixed capacity of the priority channel when it is enabled.
@@ -600,11 +603,17 @@ pub(crate) const PRIORITY_CHANNEL_CAPACITY: usize = 1;
 /// subscriptions across separate handler invocations.
 pub const IDLE_SUBSCRIBE_CHANNEL_CAPACITY: usize = 32;
 
-/// Sets the global default buffer size for actor mailboxes.
+/// Sets the process-wide default buffer size for actor mailboxes.
 ///
-/// This function can only be called successfully once. Subsequent calls
-/// will return an error. This configured value is used by the `spawn` function
-/// if no specific capacity is provided to `spawn_with_mailbox_capacity`.
+/// This function can only be called successfully once; subsequent calls return
+/// an error.
+///
+/// It is the **third** step of the resolution order documented on
+/// [`Actor::MAILBOX_CAPACITY`]: a value set
+/// here applies only to actors whose spawn site passed no capacity *and* whose
+/// type left `MAILBOX_CAPACITY` at `None`. Prefer the trait constant for a
+/// capacity that belongs to one actor type; this setter is for shifting the
+/// baseline of a whole process at once.
 pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
     if size == 0 {
         return Err(Error::MailboxCapacity {
@@ -621,9 +630,15 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 
 /// Configuration options for spawning an actor.
 ///
-/// `SpawnOptions` is a builder used by [`spawn_with_options`] to control aspects of the
-/// actor's runtime that are not part of the actor's own definition: mailbox capacity and
-/// optional activation of the priority channel.
+/// `SpawnOptions` is a builder used by [`spawn_with_options`] to configure one
+/// spawn: the optional priority and idle channels, and a mailbox capacity for
+/// this actor instance.
+///
+/// A capacity set here overrides the actor type's own
+/// [`Actor::MAILBOX_CAPACITY`]. Use it when
+/// *this* spawn differs from the type's usual profile; when every instance of a
+/// type wants the same capacity, declare it on the type instead, where the
+/// rationale can sit next to the handlers that justify it.
 ///
 /// # Examples
 ///
@@ -650,9 +665,14 @@ pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SpawnOptions {
-    /// Capacity of the regular mailbox channel. Must be greater than 0.
+    /// Explicit capacity for the regular mailbox channel, or `None` when the
+    /// spawn site expressed no preference. Must be greater than 0 when set.
     /// Set via [`SpawnOptions::mailbox_capacity`].
-    pub(crate) mailbox_capacity: usize,
+    ///
+    /// Deliberately unresolved until [`spawn_with_options`]: only there is the
+    /// actor type known, and [`Actor::MAILBOX_CAPACITY`] sits between this
+    /// field and the process-wide default in the resolution order.
+    pub(crate) mailbox_capacity: Option<usize>,
     /// Whether to enable the priority channel. When `false` (default) no priority channel
     /// is created and any call to [`tell_priority`](crate::ActorRef::tell_priority) etc.
     /// returns [`Error::PriorityChannelNotEnabled`]. Toggled via
@@ -675,29 +695,31 @@ pub struct SpawnOptions {
 }
 
 impl SpawnOptions {
-    /// Creates a new `SpawnOptions` with default mailbox capacity and the priority channel
-    /// disabled.
+    /// Creates a new `SpawnOptions` with no mailbox-capacity override and the
+    /// priority channel disabled.
+    ///
+    /// The mailbox capacity is left unset here rather than filled in with the
+    /// process-wide default, so that [`Actor::MAILBOX_CAPACITY`] can still take
+    /// effect when this `SpawnOptions` reaches [`spawn_with_options`].
     pub fn new() -> Self {
-        let capacity = CONFIGURED_DEFAULT_MAILBOX_CAPACITY
-            .get()
-            .copied()
-            .unwrap_or(DEFAULT_MAILBOX_CAPACITY);
         Self {
-            mailbox_capacity: capacity,
+            mailbox_capacity: None,
             priority_enabled: false,
             idle_enabled: false,
             idle_capacity: IDLE_SUBSCRIBE_CHANNEL_CAPACITY,
         }
     }
 
-    /// Sets the mailbox capacity. Must be greater than 0.
+    /// Sets the mailbox capacity for this spawn, overriding both
+    /// [`Actor::MAILBOX_CAPACITY`] and the process-wide default. Must be
+    /// greater than 0.
     ///
     /// # Panics
     ///
     /// Panics if `n == 0`.
     pub fn mailbox_capacity(mut self, n: usize) -> Self {
         assert!(n > 0, "Mailbox capacity must be greater than 0");
-        self.mailbox_capacity = n;
+        self.mailbox_capacity = Some(n);
         self
     }
 
@@ -779,9 +801,14 @@ impl Default for SpawnOptions {
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
 /// the actor result as an [`ActorResult<T>`](crate::ActorResult).
 ///
+/// The mailbox capacity comes from [`Actor::MAILBOX_CAPACITY`],
+/// falling back to [`set_default_mailbox_capacity`] and then
+/// [`DEFAULT_MAILBOX_CAPACITY`].
+///
 /// # Panics
 ///
-/// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]).
+/// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]),
+/// or if `T::MAILBOX_CAPACITY` is `Some(0)`.
 pub fn spawn<T: Actor>(args: T::Args) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     spawn_with_options(args, SpawnOptions::new())
 }
@@ -790,8 +817,9 @@ pub fn spawn<T: Actor>(args: T::Args) -> (ActorRef<T>, tokio::task::JoinHandle<A
 ///
 /// Takes initialization arguments that will be passed to the actor's [`on_start`](crate::Actor::on_start) method.
 /// The `JoinHandle` can be used to await the actor's termination and retrieve
-/// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when you need
-/// to control the actor's mailbox capacity.
+/// the actor result as an [`ActorResult<T>`](crate::ActorResult). Use this version when this
+/// particular spawn needs a capacity other than the actor type's own
+/// [`Actor::MAILBOX_CAPACITY`], which this argument overrides.
 ///
 /// # Panics
 ///
@@ -814,20 +842,34 @@ pub fn spawn_with_mailbox_capacity<T: Actor>(
 /// priority channel via [`SpawnOptions::with_priority`] or configure both mailbox
 /// capacity and priority in a single call.
 ///
+/// The mailbox capacity is resolved here, in the order documented on
+/// [`Actor::MAILBOX_CAPACITY`]: `opts`, then the
+/// actor type's constant, then [`set_default_mailbox_capacity`], then
+/// [`DEFAULT_MAILBOX_CAPACITY`].
+///
 /// # Panics
 ///
-/// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]).
+/// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]),
+/// or if the resolved capacity is 0, which only `T::MAILBOX_CAPACITY = Some(0)`
+/// can produce — every other path rejects 0 before reaching here.
 pub fn spawn_with_options<T: Actor>(
     args: T::Args,
     opts: SpawnOptions,
 ) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
-    // Defensive only: every public path into `SpawnOptions` already rejects 0
-    // (the builder asserts, the global-default setter returns Err), so this
-    // assert is unreachable from the public API and merely guards future
-    // internal construction paths.
+    // Resolve the mailbox capacity here, where `T` is known. See
+    // `Actor::MAILBOX_CAPACITY` for the documented order; the only step that
+    // cannot reject 0 up front is the trait constant, since a `const` in a
+    // trait impl is not checked until it is read.
+    let mailbox_capacity = opts
+        .mailbox_capacity
+        .or(T::MAILBOX_CAPACITY)
+        .or_else(|| CONFIGURED_DEFAULT_MAILBOX_CAPACITY.get().copied())
+        .unwrap_or(DEFAULT_MAILBOX_CAPACITY);
+
     assert!(
-        opts.mailbox_capacity > 0,
-        "Mailbox capacity must be greater than 0"
+        mailbox_capacity > 0,
+        "Mailbox capacity must be greater than 0 (check {}::MAILBOX_CAPACITY)",
+        std::any::type_name::<T>()
     );
 
     static ACTOR_IDS: AtomicU64 = AtomicU64::new(1);
@@ -837,7 +879,7 @@ pub fn spawn_with_options<T: Actor>(
         std::any::type_name::<T>(),
     );
 
-    let (mailbox_tx, mailbox_rx) = mpsc::channel(opts.mailbox_capacity);
+    let (mailbox_tx, mailbox_rx) = mpsc::channel(mailbox_capacity);
     let (terminate_tx, terminate_rx) = mpsc::channel::<ControlSignal>(1);
 
     let (priority_tx, priority_rx) = if opts.priority_enabled {

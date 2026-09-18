@@ -181,6 +181,9 @@ use syn::{
 /// - Only works on structs and enums (not unions)
 /// - Generates a very basic implementation - for complex initialization logic,
 ///   implement the Actor trait manually
+/// - Leaves `MAILBOX_CAPACITY` at its `None` default, so a derived actor takes
+///   the process-wide default capacity. To declare a capacity on the type,
+///   implement `Actor` manually and set the constant there
 #[proc_macro_derive(Actor)]
 pub fn derive_actor(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
