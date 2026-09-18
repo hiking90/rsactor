@@ -20,7 +20,10 @@
 //!
 //! # Observability
 //!
-//! Dead letters are always logged with structured fields via `tracing`:
+//! Dead letters are always logged with structured fields via `tracing` (the
+//! crate is a required dependency; no cargo feature gates this). With the
+//! `log` feature enabled and no `tracing` subscriber installed, the same event
+//! also reaches a [`log`](https://crates.io/crates/log) logger:
 //!
 //! ```text
 //! WARN dead_letter: Dead letter: message could not be delivered
@@ -40,6 +43,7 @@
 //! | Successful message delivery (hot path) | **Zero** - no code executes |
 //! | Dead letter, no tracing subscriber | ~5-50 ns (fast check + early return) |
 //! | Dead letter, subscriber active | ~1-10 μs (logging + serialization) |
+//! | Dead letter, `log` feature, no subscriber, logger installed | ~1-10 μs (the early return above is replaced by formatting a `log` record) |
 //!
 //! Key optimizations:
 //! - `#[cold]` attribute hints compiler to optimize hot path

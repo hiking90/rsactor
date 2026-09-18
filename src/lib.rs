@@ -37,10 +37,13 @@
 //! - **Macro for Message Handling**:
 //!   - [`message_handlers`] attribute macro with `#[handler]` method attributes for automatic message handling (recommended)
 //! - **Type Safety Features**: [`ActorRef<T>`] provides compile-time type safety with zero runtime overhead
-//! - **Optional Tracing Support**: Built-in observability using the [`tracing`](https://crates.io/crates/tracing) crate (enable with `tracing` feature):
-//!   - Actor lifecycle event tracing (start, stop, different termination scenarios)
-//!   - Message handling with timing and performance metrics
-//!   - Reply processing and error handling tracing
+//! - **Built-in Observability**: logging through the [`tracing`](https://crates.io/crates/tracing)
+//!   crate is always compiled in — lifecycle errors, dead letters and handler
+//!   errors are emitted whether or not any cargo feature is enabled:
+//!   - The `tracing` feature adds [`#[tracing::instrument]`](macro@tracing::instrument)
+//!     spans and per-message timing on top
+//!   - The `log` feature forwards those events to the [`log`](https://crates.io/crates/log)
+//!     crate when no `tracing` subscriber is installed
 //!   - Structured, non-redundant logs for easier debugging and monitoring
 //! - **Dead Letter Tracking**: Automatic logging of undelivered messages via [`DeadLetterReason`]:
 //!   - All failed message deliveries are logged with actor and message type information
@@ -221,30 +224,24 @@
 //! }
 //! ```
 //!
-//! ## Tracing Support
+//! ## Logging
 //!
-//! rsActor provides optional tracing support for comprehensive observability. Enable it with the `tracing` feature:
+//! The `tracing` crate is a required dependency, so rsActor always emits its
+//! diagnostics — no cargo feature gates them:
 //!
-//! ```toml
-//! [dependencies]
-//! rsactor = { version = "0.18", features = ["tracing"] }
-//! tracing = "0.1"
-//! tracing-subscriber = "0.3"
-//! ```
+//! - `on_start` / `on_idle` / `on_stop` failures (`error!`)
+//! - Dead letters, i.e. messages that were never delivered or never processed
+//!   (`warn!`, see [`DeadLetterReason`])
+//! - Handler errors surfaced through the default
+//!   [`Message::on_tell_result`] (`error!`)
 //!
-//! When enabled, rsActor emits structured trace events for:
-//! - Actor lifecycle events (start, stop, termination scenarios)
-//! - Message sending and handling with timing information
-//! - Reply processing and error handling
-//! - Performance metrics (message processing duration)
+//! What differs between applications is who consumes those events.
 //!
-//! All examples support tracing. Here's the integration pattern:
+//! ### With a `tracing` subscriber
 //!
 //! ```rust,no_run
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Initialize tracing subscriber to see logs
-//!     // The `tracing` crate is always available for logging
 //!     tracing_subscriber::fmt()
 //!         .with_max_level(tracing::Level::DEBUG)
 //!         .with_target(false)
@@ -256,12 +253,49 @@
 //! }
 //! ```
 //!
-//! Run any example with debug logging:
 //! ```bash
 //! RUST_LOG=debug cargo run --example basic
 //! ```
 //!
-//! Enable instrumentation spans with the `tracing` feature:
+//! ### With a `log` logger (the `log` feature)
+//!
+//! Applications built on [`log`](https://crates.io/crates/log) (`env_logger`,
+//! `fern`, …) and with no `tracing` dependency of their own would otherwise see
+//! nothing — an actor can fail its `on_start` and leave no record. The `log`
+//! feature enables tracing's own `log` bridge, which emits a `log` record for
+//! every event **as long as no `tracing` subscriber is installed**:
+//!
+//! ```toml
+//! [dependencies]
+//! rsactor = { version = "0.18", features = ["log"] }
+//! env_logger = "0.11"
+//! ```
+//!
+//! ```rust,ignore
+//! fn main() {
+//!     env_logger::init();
+//!     // rsactor's warn!/error! events now arrive as log records.
+//! }
+//! ```
+//!
+//! The bridge is tracing's `log` feature, not `log-always`: installing a
+//! `tracing` subscriber turns it back off, so an application is never fed both
+//! forms of the same event.
+//!
+//! ## Instrumentation spans
+//!
+//! The `tracing` **feature** is narrower than the crate of the same name. It
+//! only adds [`#[tracing::instrument]`](macro@tracing::instrument) spans around the
+//! lifecycle and message-dispatch paths, plus the per-message timing those
+//! spans report. Logging works without it.
+//!
+//! ```toml
+//! [dependencies]
+//! rsactor = { version = "0.18", features = ["tracing"] }
+//! tracing = "0.1"
+//! tracing-subscriber = "0.3"
+//! ```
+//!
 //! ```bash
 //! RUST_LOG=debug cargo run --example basic --features tracing
 //! ```
