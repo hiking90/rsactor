@@ -93,5 +93,9 @@ name = "shutdown_discard_tests"
 required-features = ["test-utils"]
 
 [[test]]
+name = "panic_diagnostics_tests"
+required-features = ["test-utils"]
+
+[[test]]
 name = "metrics_consistency_tests"
 required-features = ["metrics"]

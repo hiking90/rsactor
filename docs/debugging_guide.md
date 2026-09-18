@@ -259,7 +259,7 @@ fn main() {
 
 | Level | What's Logged |
 |-------|---------------|
-| `ERROR` | Critical failures (panic recovery, lifecycle errors) |
+| `ERROR` | Lifecycle errors; an actor task ending by a panic (the runtime does not recover from panics) |
 | `WARN` | Dead letters, timeout events |
 | `INFO` | Actor lifecycle events (when `tracing` feature enabled) |
 | `DEBUG` | Message send/receive details (when `tracing` feature enabled) |
