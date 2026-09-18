@@ -21,7 +21,7 @@
 //! // Strong reference handlers (keeps actors alive)
 //! let handlers: Vec<Box<dyn TellHandler<PingMsg>>> = vec![
 //!     (&actor_a).into(),  // From<&ActorRef<T>> - clones the reference
-//!     actor_b.into(),     // From<ActorRef<T>> - moves ownership
+//!     actor_b.clone().into(), // From<ActorRef<T>> - moves ownership
 //! ];
 //!
 //! for handler in &handlers {

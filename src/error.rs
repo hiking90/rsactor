@@ -359,11 +359,21 @@ impl Error {
     /// **Best Practice:** Always use fresh error instances for retry decisions.
     /// Do not cache error instances for later retry logic.
     ///
+    /// It also does **not** account for whether the original message was delivered.
+    /// A `Timeout` whose `operation` is an ask variant ([`Operation::Ask`],
+    /// [`Operation::AskPriority`], [`Operation::BlockingAsk`],
+    /// [`Operation::BlockingAskPriority`]) only ends the caller's wait: if the
+    /// deadline passed after the message was admitted, the actor still processes
+    /// it, and may be doing so or have finished already. Retrying such a timeout
+    /// runs the handler again, so retry it only for idempotent messages. A
+    /// `Timeout` from a tell variant means the message was never admitted, so
+    /// resending it cannot run the handler twice.
+    ///
     /// # Retryable Errors
     ///
     /// | Error Type | Retryable | Reason |
     /// |------------|-----------|--------|
-    /// | `Timeout` | ✓ Yes | Transient; may succeed with longer timeout |
+    /// | `Timeout` | ✓ Yes | Transient; may succeed with longer timeout. For ask variants the original message may still be processed — retry only idempotent messages |
     /// | `ChannelFull` | ✓ Yes | Transient; bounded buffer drains as actor makes progress |
     /// | `Send` | ✗ No | Actor stopped; channel permanently closed |
     /// | `Receive` | ✗ No | Reply channel dropped; cannot recover |
@@ -391,8 +401,9 @@ impl Error {
     /// {
     ///     let mut attempts = 0;
     ///     loop {
-    ///         // Always get a fresh error from the current attempt
-    ///         match actor.tell(msg.clone()).await {
+    ///         // Always get a fresh error from the current attempt. A tell `Timeout`
+    ///         // means the message was not admitted, so resending cannot duplicate it.
+    ///         match actor.tell_with_timeout(msg.clone(), Duration::from_millis(50)).await {
     ///             Ok(()) => return Ok(()),
     ///             Err(e) if e.is_retryable() && attempts < max_attempts => {
     ///                 attempts += 1;
@@ -452,10 +463,23 @@ impl Error {
                 "Check if the message handler panicked or returned early",
                 "Verify the handler correctly awaits async operations",
             ],
+            Error::Timeout {
+                operation:
+                    Operation::Tell
+                    | Operation::TellPriority
+                    | Operation::BlockingTell
+                    | Operation::BlockingTellPriority,
+                ..
+            } => &[
+                "The message was not admitted: the target mailbox (or priority slot) stayed full for the whole timeout",
+                "Check whether the actor processes messages slower than they are sent",
+                "Consider a larger mailbox capacity or a longer timeout",
+            ],
             Error::Timeout { .. } => &[
                 "Consider increasing the timeout duration",
                 "Check if the actor is processing a slow operation",
                 "Verify there's no deadlock in the message handler",
+                "The message may still be processed after the timeout - retry only idempotent messages",
                 "Use `tell` instead if you don't need a response",
             ],
             Error::Downcast { .. } => &[
