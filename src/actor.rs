@@ -175,8 +175,8 @@ impl<T: Actor> Drop for LifecycleChannels<T> {
             let actor_id = self.actor_id;
             let _ = std::panic::catch_unwind(|| {
                 error!(
-                    "Actor {actor_id} task is ending during a panic unwind: \
-                     on_stop is not called and queued messages are discarded"
+                    "Actor {actor_id} task is ending during a panic unwind; \
+                     queued messages are discarded"
                 );
             });
             let _ = std::panic::catch_unwind(drain);
