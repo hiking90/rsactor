@@ -203,16 +203,16 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
         Data::Struct(_) | Data::Enum(_) => {
             // Generate the Actor implementation with proper generic support
             let expanded = quote! {
-                impl #impl_generics rsactor::Actor for #name #ty_generics #where_clause {
+                impl #impl_generics ::rsactor::Actor for #name #ty_generics #where_clause {
                     type Args = Self;
-                    type Error = std::convert::Infallible;
+                    type Error = ::core::convert::Infallible;
                     type IdleEvent = ();
 
                     async fn on_start(
                         args: Self::Args,
-                        _actor_ref: &rsactor::ActorRef<Self>,
-                    ) -> std::result::Result<Self, Self::Error> {
-                        Ok(args)
+                        _actor_ref: &::rsactor::ActorRef<Self>,
+                    ) -> ::core::result::Result<Self, Self::Error> {
+                        ::core::result::Result::Ok(args)
                     }
                 }
             };
@@ -451,7 +451,13 @@ fn generate_message_impl(
     }
 
     // Validate first parameter (&mut self)
-    if !matches!(&inputs[0], FnArg::Receiver(receiver) if receiver.mutability.is_some()) {
+    // Judge by the receiver's type, not `receiver.mutability`: that flag is also
+    // set for by-value `mut self`, and unset for the valid `self: &mut Self`.
+    if !matches!(
+        &inputs[0],
+        FnArg::Receiver(receiver)
+            if matches!(receiver.ty.as_ref(), Type::Reference(r) if r.mutability.is_some())
+    ) {
         return Err(syn::Error::new_spanned(
             &inputs[0],
             "First parameter must be '&mut self'",
@@ -533,11 +539,11 @@ fn generate_message_impl(
 
     let on_tell_result_impl = if should_generate_on_tell_result {
         quote! {
-            fn on_tell_result(result: &Self::Reply, actor_ref: &rsactor::ActorRef<Self>) {
-                if let Err(ref e) = result {
-                    rsactor::__log_handler_error(
+            fn on_tell_result(result: &Self::Reply, actor_ref: &::rsactor::ActorRef<Self>) {
+                if let ::core::result::Result::Err(e) = result {
+                    ::rsactor::__log_handler_error(
                         &actor_ref.identity(),
-                        std::any::type_name::<#message_type>(),
+                        ::core::any::type_name::<#message_type>(),
                         e
                     );
                 }
@@ -549,13 +555,13 @@ fn generate_message_impl(
 
     // Generate the Message trait implementation
     let impl_tokens = quote! {
-        impl #impl_generics rsactor::Message<#message_type> for #actor_type #where_clause {
+        impl #impl_generics ::rsactor::Message<#message_type> for #actor_type #where_clause {
             type Reply = #return_type;
 
             async fn handle(
                 &mut self,
                 msg: #message_type,
-                actor_ref: &rsactor::ActorRef<Self>,
+                actor_ref: &::rsactor::ActorRef<Self>,
             ) -> Self::Reply {
                 self.#method_name(msg, actor_ref).await
             }

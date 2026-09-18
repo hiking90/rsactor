@@ -352,7 +352,8 @@ impl<T: Actor> ActorRef<T> {
     }
 
     /// Resolves once the actor has fully stopped — its runtime loop has exited
-    /// (after `on_stop` ran) and the mailbox channel has closed.
+    /// (after `on_stop` ran, if it was reached — not on `on_start` failure or a
+    /// panic unwind) and the mailbox channel has closed.
     ///
     /// Unlike awaiting the `JoinHandle` returned by [`spawn`](crate::spawn),
     /// this works from any clone of the `ActorRef` and is type-erasable (see
@@ -360,11 +361,11 @@ impl<T: Actor> ActorRef<T> {
     /// it only signals completion — it cannot return the
     /// [`ActorResult`](crate::ActorResult).
     ///
-    /// Returns immediately if the actor has already stopped. Note that holding
-    /// this `ActorRef` does not keep the actor alive forever: an actor also
-    /// stops when every *other* strong ref is dropped only if this one is
-    /// dropped too, so pair this with [`stop`](Self::stop) / [`kill`](Self::kill)
-    /// rather than waiting for ref-drop termination from a live ref.
+    /// Returns immediately if the actor has already stopped. Holding this
+    /// `ActorRef` (including the `&self` borrowed by this call) keeps the actor
+    /// alive against ref-drop termination, so pair this with
+    /// [`stop`](Self::stop) / [`kill`](Self::kill) rather than waiting for
+    /// ref-drop termination from a live ref.
     pub async fn wait_stopped(&self) {
         self.sender.closed().await
     }
@@ -807,6 +808,11 @@ impl<T: Actor> ActorRef<T> {
     /// the actor to process the message and send a reply, or timeout if the reply
     /// doesn't arrive within the specified duration.
     ///
+    /// The timeout only ends the caller's wait. If the deadline passes after the
+    /// message was admitted to the mailbox, the actor still processes it and the
+    /// reply is discarded, so retrying on [`Error::Timeout`] runs the handler
+    /// again — retry only idempotent messages.
+    ///
     /// # Self-ask stalls for the whole timeout
     ///
     /// Calling this on the actor's **own** `ActorRef` from inside one of its
@@ -996,6 +1002,11 @@ impl<T: Actor> ActorRef<T> {
     /// message does not block another `ask_priority` from issuing a fresh request as
     /// soon as the actor pulls the previous one off the channel.
     ///
+    /// The timeout only ends the caller's wait. If the deadline passes after the
+    /// message was admitted to the priority channel, the actor still processes it
+    /// and the reply is discarded, so retrying on [`Error::Timeout`] runs the
+    /// handler again — retry only idempotent messages.
+    ///
     /// # Errors
     ///
     /// - [`Error::PriorityChannelNotEnabled`] if the actor was spawned without the
@@ -1161,9 +1172,10 @@ impl<T: Actor> ActorRef<T> {
     /// Never call this (or any `blocking_*` method) from inside the actor's own
     /// message handler — directly on `self`, or transitively via a cycle that
     /// routes back into this actor. If the priority slot is full, the call parks
-    /// the actor's message loop synchronously while waiting for admission that
-    /// only that same loop could make room for — an unrecoverable hang that
-    /// `kill()` cannot interrupt (note that `deadlock-detection` only tracks
+    /// the actor's message loop synchronously for the whole `timeout` while
+    /// waiting for admission that only that same loop could make room for; the
+    /// call then fails with [`Error::Timeout`] and the loop resumes. `kill()` is
+    /// not observed until then (note that `deadlock-detection` only tracks
     /// `ask` cycles, not `tell`). Prefer the async
     /// [`tell_priority`](Self::tell_priority) from handler code.
     pub fn blocking_tell_priority<M>(&self, msg: M, timeout: Duration) -> Result<()>
@@ -1296,11 +1308,12 @@ impl<T: Actor> ActorRef<T> {
     /// Never call this (or any `blocking_*` method) from inside the actor's own
     /// message handler — directly on `self`, or transitively via a cycle that
     /// asks back into this actor. The call parks the actor's message loop
-    /// synchronously while waiting for a reply that only that same loop could
-    /// produce — an unrecoverable hang that `kill()` cannot interrupt. Enable
-    /// the `deadlock-detection` feature to turn such a cycle into an immediate
-    /// panic instead, or use the async [`ask_priority`](Self::ask_priority) from
-    /// handler code.
+    /// synchronously for the whole `timeout` while waiting for a reply that only
+    /// that same loop could produce; the call then fails with
+    /// [`Error::Timeout`] and the loop resumes. `kill()` is not observed until
+    /// then. Enable the `deadlock-detection` feature to turn such a cycle into
+    /// an immediate panic instead, or use the async
+    /// [`ask_priority`](Self::ask_priority) from handler code.
     pub fn blocking_ask_priority<M>(&self, msg: M, timeout: Duration) -> Result<T::Reply>
     where
         T: Message<M>,
@@ -1506,8 +1519,9 @@ impl<T: Actor> ActorRef<T> {
     /// message handler — directly on `self`, or transitively via a cycle that
     /// routes back into this actor. If the target mailbox is full, the call
     /// parks the actor's message loop synchronously while waiting for admission
-    /// that only that same loop could make room for — an unrecoverable hang that
-    /// `kill()` cannot interrupt (note that `deadlock-detection` only tracks
+    /// that only that same loop could make room for — with `timeout: None`, an
+    /// unrecoverable hang that `kill()` cannot interrupt; with `Some(timeout)`,
+    /// a stall for the whole timeout that ends in [`Error::Timeout`] (note that `deadlock-detection` only tracks
     /// `ask` cycles, not `tell`; with that feature enabled, a timeout-less
     /// blocking self-send on a full mailbox panics instead of hanging). Prefer
     /// the async [`tell`](Self::tell) from handler code.
@@ -1720,7 +1734,9 @@ impl<T: Actor> ActorRef<T> {
     /// message handler — directly on `self`, or transitively via a cycle that
     /// asks back into this actor. The call parks the actor's message loop
     /// synchronously while waiting for a reply that only that same loop could
-    /// produce — an unrecoverable hang that `kill()` cannot interrupt. Enable
+    /// produce — with `timeout: None`, an unrecoverable hang that `kill()`
+    /// cannot interrupt; with `Some(timeout)`, a stall for the whole timeout
+    /// that ends in [`Error::Timeout`]. Enable
     /// the `deadlock-detection` feature to turn such a cycle into an immediate
     /// panic instead, or use the async [`ask`](Self::ask) from handler code.
     #[cfg_attr(feature = "tracing", tracing::instrument(
