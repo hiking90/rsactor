@@ -57,6 +57,14 @@ one internal type change that makes a doc promise compiler-enforced.
   `#[derive(Actor)]`.
 - **`FailurePhase::as_str()`** — the stable label, replacing the previous
   delegation to the derived `Debug` as the single source of truth.
+- **An `error!` record naming the actor when its task ends during a panic
+  unwind** — in `on_start`, a message handler, `on_idle` or `on_stop`. The
+  standard panic hook prints the thread and source location but not the actor,
+  and bypasses `tracing`, so an application that drops the `JoinHandle` had no
+  record of which actor ended. Panics are still not caught: the `JoinHandle`
+  resolves to `Err(JoinError)` as before. The record is emitted under its own
+  `catch_unwind`, so a subscriber that panics on it neither skips the
+  dead-letter drain nor aborts the process. Task cancellation emits nothing.
 
 ### Changed
 
@@ -121,6 +129,25 @@ one internal type change that makes a doc promise compiler-enforced.
 - `error_display_all_variants` asserted only that messages were non-empty, and
   skipped `PriorityChannelNotEnabled`/`IdleChannelNotEnabled` entirely — two
   near-identical messages where a copy-paste swap was undetectable.
+- **The FAQ supervision example (Q17) did not compile against the API** — it
+  matched `ActorResult::Failed { error, .. }`, a field that does not exist — and
+  labelled every `JoinError` "panicked", which also covers cancellation. It now
+  splits `is_panic()` from cancellation and reads the payload with
+  `JoinError::into_panic()`; `tests/panic_diagnostics_tests.rs` runs the same
+  match.
+- **The FAQ described `ActorResult::Failed` by fields it no longer has**
+  (`actor`, `error`, `secondary_error`, `phase`) in Q11, Q12, Q13 and Q22. It
+  now describes `Failed { failure, killed }` with a table of the
+  `ActorFailure` variants, the accessors, and the `on_stop` error case Q13
+  omitted. Q11 no longer says the actor is destroyed after `on_stop`; the
+  instance is returned in the `ActorResult`.
+- **What happens on a panic was documented only in part.** The `Actor` trait
+  docs, `on_stop` and FAQ Q13 now state it in one place: `on_stop` is not
+  called, the actor struct is dropped, queued `tell`s become
+  `DiscardedAtShutdown` dead letters, an in-flight `ask` gets `Error::Receive`,
+  and under `panic = "abort"` none of it runs. Those drain and `Drop` behaviours
+  had no test; they now do. The debugging guide no longer lists
+  "panic recovery", which the runtime does not do.
 
 ## [0.18.0] - 2026-07-11
 

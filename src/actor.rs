@@ -132,6 +132,10 @@ fn discard_queued_messages<T: Actor>(
 /// buffered envelopes silently — violating the `DiscardedAtShutdown`
 /// guarantee that accepted-but-unprocessed `tell` messages leave a
 /// receiver-side dead-letter record (their senders already observed `Ok`).
+///
+/// On the unwind path it also emits the only runtime record that names the
+/// actor whose task is ending by a panic: the standard panic hook prints the
+/// thread and location, not the actor, and does not go through `tracing`.
 struct LifecycleChannels<T: Actor> {
     actor_id: crate::Identity,
     receiver: mpsc::Receiver<MailboxMessage<T>>,
@@ -155,11 +159,26 @@ impl<T: Actor> Drop for LifecycleChannels<T> {
             )
         });
         if std::thread::panicking() {
-            // The drain calls into the global tracing subscriber (dead-letter
-            // warn! records) — user code that may itself panic. During a
-            // handler-panic unwind a second panic escaping this Drop would
-            // abort the process; swallow it so the original panic surfaces
-            // through the JoinHandle instead.
+            // Name the actor. `thread::panicking()` is true for any unwind in
+            // progress on this thread — including a runtime dropped while some
+            // other panic unwinds, which drops every live actor task with it —
+            // so the record says the task is ending during an unwind, not that
+            // this actor's own code panicked. Under `panic = "abort"` there is
+            // no unwind, this Drop never runs, and nothing is recorded.
+            //
+            // Both the record and the drain call into the global tracing
+            // subscriber, which is user code that may itself panic. A second
+            // panic escaping this Drop would abort the process, so each gets
+            // its own catch_unwind: a subscriber that panics on this record
+            // must not skip the drain below, and the original panic still
+            // surfaces through the JoinHandle.
+            let actor_id = self.actor_id;
+            let _ = std::panic::catch_unwind(|| {
+                error!(
+                    "Actor {actor_id} task is ending during a panic unwind: \
+                     on_stop is not called and queued messages are discarded"
+                );
+            });
             let _ = std::panic::catch_unwind(drain);
         } else {
             drain.0();
@@ -271,6 +290,26 @@ macro_rules! process_envelope {
 /// - If the actor instance is available ([`has_actor`](crate::ActorResult::has_actor) returns true),
 ///   you can recover it using [`actor`](crate::ActorResult::actor) or
 ///   [`into_actor`](crate::ActorResult::into_actor) for further processing
+///
+/// ## Panics
+///
+/// A panic is not converted into an [`ActorResult`]. A panic in
+/// [`on_start`](Actor::on_start), a message handler, [`on_idle`](Actor::on_idle)
+/// or [`on_stop`](Actor::on_stop) unwinds out of the actor task, and the
+/// `JoinHandle` resolves to `Err(JoinError)` with `is_panic() == true`;
+/// [`JoinError::into_panic`](tokio::task::JoinError::into_panic) returns the
+/// payload. During that unwind:
+///
+/// - [`on_stop`](Actor::on_stop) is not called. The actor struct, once
+///   `on_start` has returned it, is dropped, so cleanup that must always
+///   happen belongs in its `Drop` impl.
+/// - `tell` messages still queued are recorded as dead letters with reason
+///   `DiscardedAtShutdown`.
+/// - An `ask` whose handler panicked, or that was still queued, fails with
+///   [`Error::Receive`](crate::Error::Receive).
+/// - The runtime emits one `error!` record naming the actor.
+///
+/// Under `panic = "abort"` the process ends at the panic and none of this runs.
 ///
 /// Implementors of this trait must also be `Send + 'static`.
 pub trait Actor: Sized + Send + 'static {
@@ -562,7 +601,8 @@ pub trait Actor: Sized + Send + 'static {
     /// It is **not** called when the actor task unwinds out of a message handler or
     /// lifecycle hook (a panic), nor when the task itself is cancelled
     /// ([`JoinHandle::abort`](tokio::task::JoinHandle::abort), runtime shutdown) and the
-    /// future is dropped at an `.await`.
+    /// future is dropped at an `.await`. On the panic path the runtime logs one
+    /// `error!` record naming the actor; see [Panics](Actor#panics).
     ///
     /// A **message** handler that merely *returns* `Err` does **not** terminate the
     /// actor: the error is surfaced through the `ask` reply, or through

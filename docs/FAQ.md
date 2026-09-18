@@ -350,8 +350,8 @@ A11: The lifecycle of an actor in `rsActor` follows these stages:
     *   This continues until the actor is stopped or encounters an error.
 
 3.  **Termination**:
-    *   When the actor is stopping (either due to `stop()`, `kill()`, or an error), the framework calls `on_stop(actor_ref, killed)`.
-    *   After `on_stop` completes, the actor is destroyed, and the `JoinHandle` is resolved with an `ActorResult`.
+    *   When the actor is stopping (either due to `stop()`, `kill()`, or an `on_idle` error), the framework calls `on_stop(actor_weak, killed)`.
+    *   After `on_stop` completes, the `JoinHandle` resolves to an `ActorResult` that hands the actor instance back to the caller (see Q12). A panic takes a different path: see Q13.
 
 The actor's lifecycle methods are:
 
@@ -359,7 +359,7 @@ The actor's lifecycle methods are:
 *   `on_idle(&mut self, event: Self::IdleEvent, actor_weak: &ActorWeak<Self>) -> Result<(), Self::Error>`: Called for each event yielded by a `Stream` registered via `ActorRef::subscribe_idle`, but only while the mailbox is empty.
     *   Requires the associated type `Actor::IdleEvent` (set to `()` when there is no idle work; `#[derive(Actor)]` fills this in automatically).
     *   Requires the idle channel to be enabled at spawn time via `SpawnOptions::new().with_idle()`. Without it, `subscribe_idle` returns `Error::IdleChannelNotEnabled` and `on_idle` is never called. Check at runtime with `actor_ref.has_idle_channel()`.
-    *   If `on_idle` returns `Err(e)`, the actor terminates due to a runtime error, resulting in `ActorResult::Failed` with `phase: FailurePhase::OnIdle`.
+    *   If `on_idle` returns `Err(e)`, the actor runs `on_stop` and terminates with `ActorResult::Failed { failure: ActorFailure::OnIdle { .. }, .. }` (or `ActorFailure::OnIdleThenOnStop` if `on_stop` fails too).
 *   `on_stop(&mut self, actor_weak: &ActorWeak<Self>, killed: bool) -> Result<(), Self::Error>`: Called when the actor is stopping (including after `on_idle` errors). The `killed` parameter is `true` if the actor was killed, and `false` if it was stopped gracefully.
 
 **Q12: What is the `ActorResult` enum?**
@@ -371,18 +371,34 @@ A12: The `ActorResult` enum represents the outcome of an actor's lifecycle when 
     *   Contains the final actor state (`actor: A`) and a boolean `killed` indicating whether the actor was killed or stopped gracefully.
     *   Returned when an actor is successfully stopped or killed.
 
-2.  **`ActorResult::Failed`**:
-    *   Indicates that the actor failed during its lifecycle.
-    *   Contains the optional actor state (`actor: Option<A>`), the error that caused the failure (`error: E`), an optional secondary error (`secondary_error: Option<E>`, the `on_stop` cleanup error when the phase is `OnIdleThenOnStop`), the phase in which the failure occurred (`phase: FailurePhase`), and a boolean `killed` indicating whether the actor was killed.
-    *   The `FailurePhase` can be `OnStart`, `OnIdle`, `OnStop`, or `OnIdleThenOnStop`.
+2.  **`ActorResult::Failed { failure, killed }`**:
+    *   Indicates that a lifecycle hook returned `Err`. A panic is never reported here; it arrives as `Err(JoinError)` (see Q13).
+    *   `failure` is an `ActorFailure<A>`, one variant per phase, each carrying what exists at that point:
+
+        | Variant | Fields | Actor instance |
+        |---|---|---|
+        | `OnStart` | `error` | none: `on_start` never returned one |
+        | `OnIdle` | `actor`, `error` | returned |
+        | `OnStop` | `actor`, `error` | returned |
+        | `OnIdleThenOnStop` | `actor`, `error` (from `on_idle`), `stop_error` (from `on_stop`) | returned |
+
+    *   `killed` is `true` if the actor was being killed rather than stopped gracefully.
+    *   `ActorFailure` is `#[non_exhaustive]`, so a `match` on it needs a `_` arm. The accessors avoid matching: on `ActorFailure`, `phase()` returns the `FailurePhase`, and `error()`, `actor()` / `into_actor()` and `stop_error()` return the fields. `ActorResult` offers the same through `phase()`, `error()`, `actor()` / `into_actor()` and `secondary_error()`, each returning an `Option` because a `Completed` result has no failure, plus predicates such as `is_startup_failed()` and `is_runtime_failed()`.
 
 **Q13: How do I handle errors in actors?**
 
 A13: Error handling in `rsActor` happens at several levels:
 
-*   **Lifecycle - `on_start`:** If `on_start` returns `Err(e)`, the actor never starts, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: None, error: e, secondary_error: None, phase: FailurePhase::OnStart, killed: false }`. Since the actor wasn't created, the `actor` field is `None`.
-*   **Lifecycle - `on_idle`:** If `on_idle` returns `Err(e)`, the actor will terminate after calling `on_stop` for cleanup, and the `JoinHandle` will resolve to `ActorResult::Failed { actor: Some(actor_state), error: e, secondary_error: None, phase: FailurePhase::OnIdle, killed: false }`. The `actor` field contains the actor's state.
-*   **Panics:** If a message handler or `on_idle` panics, the Tokio task hosting the actor will terminate. Awaiting the `JoinHandle` will then result in an `Err` (typically a `tokio::task::JoinError` indicating a panic). It's generally recommended to handle errors gracefully within your actor logic and return `Result` types from `on_start` and `on_idle`, and use `Result` as reply types for messages where appropriate, rather than relying on panics.
+*   **Lifecycle - `on_start`:** If `on_start` returns `Err(e)`, the actor never starts, and the `JoinHandle` resolves to `ActorResult::Failed { failure: ActorFailure::OnStart { error: e }, killed: false }`. There is no actor instance to return.
+*   **Lifecycle - `on_idle`:** If `on_idle` returns `Err(e)`, the actor calls `on_stop` for cleanup and the `JoinHandle` resolves to `ActorResult::Failed { failure: ActorFailure::OnIdle { actor, error: e }, killed: false }`, with the actor instance in `actor`. If that `on_stop` also returns `Err`, the variant is `ActorFailure::OnIdleThenOnStop`, which carries both errors.
+*   **Lifecycle - `on_stop`:** If `on_stop` returns `Err(e)` during a stop or kill, the `JoinHandle` resolves to `ActorResult::Failed { failure: ActorFailure::OnStop { actor, error: e }, killed }`.
+*   **Panics:** If `on_start`, a message handler, `on_idle` or `on_stop` panics, the Tokio task hosting the actor terminates and awaiting the `JoinHandle` returns `Err(JoinError)` with `is_panic() == true`. `JoinError::into_panic()` returns the panic payload. During the unwind:
+    *   `on_stop` is not called. The actor struct, once `on_start` has returned it, is dropped, so put cleanup that must always run in its `Drop` impl.
+    *   `tell` messages still in the mailbox are recorded as dead letters with reason `DiscardedAtShutdown`.
+    *   An `ask` whose handler panicked, or that was still queued, fails with `Error::Receive`.
+    *   The runtime logs one `error!` record naming the actor, through `tracing` like its other diagnostics. The panic hook's own stderr output names the thread and source location, not the actor.
+
+    Under `panic = "abort"` the process ends at the panic instead. It's generally recommended to handle errors gracefully within your actor logic and return `Result` types from `on_start` and `on_idle`, and use `Result` as reply types for messages where appropriate, rather than relying on panics.
 *   **Message Handling:** For message handling, the `Message<T>::handle` method can return any type as its `Reply`, including a `Result` type. If your message handler might fail, it's a good practice to use a `Result` type as the `Reply` type.
 *   **Sending Messages:** The methods for sending messages (`ask`, `tell`, etc.) return `Result<R, rsactor::Error>`, where `R` is the reply type of the message. These methods can fail if the actor has stopped, the mailbox is full, or a timeout occurs.
 
@@ -584,17 +600,31 @@ A17: `rsActor` does not have a built-in supervision system like some other actor
             Ok(ActorResult::Completed { .. }) => {
                 // Child completed normally
             }
-            Ok(ActorResult::Failed { error, .. }) => {
-                // Child failed, take some action (e.g., restart)
+            Ok(ActorResult::Failed { failure, .. }) => {
+                // Child returned Err from a lifecycle hook; `failure.phase()`
+                // says which. Take some action (e.g., restart).
                 let (new_child_ref, new_child_handle) = spawn::<ChildActor>(child_args);
                 // ...
             }
-            Err(join_error) => {
-                // Child panicked
+            Err(join_error) if join_error.is_panic() => {
+                // Child panicked. The payload is what `panic!` was given.
+                let payload = join_error.into_panic();
+                let text = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+                // Log `text`, then restart from fresh `Args`: the panicked
+                // instance was dropped during the unwind and is not recoverable.
+            }
+            Err(_cancelled) => {
+                // The task was cancelled: `JoinHandle::abort` or runtime shutdown.
             }
         }
     });
     ```
+
+    A panic is never reported as `ActorResult::Failed`; it always arrives as
+    `Err(JoinError)`. See Q13 for what else happens when an actor panics.
 
 2.  Creating a supervisor actor that manages child actors:
     ```rust
@@ -920,7 +950,7 @@ With the generic syntax, you specify the generic constraints in square brackets,
 
 **Q22: How can I effectively use the `on_idle` method in my actors?**
 
-A22: The `on_idle` method is an idle handler in the `rsActor` framework. Instead of being polled in a loop, it is driven by `Stream`s you register with `ActorRef::subscribe_idle`. The runtime drives those streams and calls `on_idle` once for each event they yield, but only while the mailbox is empty — messages always have priority over idle events, ensuring the actor stays responsive. The handler returns `Result<(), Error>`; returning `Err(e)` terminates the actor with `phase: FailurePhase::OnIdle`.
+A22: The `on_idle` method is an idle handler in the `rsActor` framework. Instead of being polled in a loop, it is driven by `Stream`s you register with `ActorRef::subscribe_idle`. The runtime drives those streams and calls `on_idle` once for each event they yield, but only while the mailbox is empty — messages always have priority over idle events, ensuring the actor stays responsive. The handler returns `Result<(), Error>`; returning `Err(e)` runs `on_stop` and terminates the actor with `ActorFailure::OnIdle` (see Q13).
 
 To use `on_idle` you must:
 *   Declare the associated type `Actor::IdleEvent`, the type of event the streams yield. Set it to `()` when there is no idle work; `#[derive(Actor)]` fills it in as `()` automatically.
