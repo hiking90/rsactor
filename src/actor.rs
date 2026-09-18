@@ -303,6 +303,60 @@ pub trait Actor: Sized + Send + 'static {
     /// ```
     type IdleEvent: Send + 'static;
 
+    /// Mailbox capacity this actor type asks for, used when the spawn call does
+    /// not pass one explicitly.
+    ///
+    /// The capacity that suits an actor follows from its message profile —
+    /// burst size, handler duration, whether senders can afford to wait at
+    /// admission — which is a property of the actor, not of the call site that
+    /// happens to spawn it. Declaring it here keeps the number and its
+    /// rationale next to the [`on_start`](Actor::on_start) it belongs to
+    /// instead of at a `spawn` in `main`.
+    ///
+    /// # Resolution order
+    ///
+    /// The first of these that is set wins:
+    ///
+    /// 1. [`SpawnOptions::mailbox_capacity`](crate::SpawnOptions::mailbox_capacity)
+    ///    or [`spawn_with_mailbox_capacity`](crate::spawn_with_mailbox_capacity)
+    ///    — an explicit decision at the spawn site
+    /// 2. `Self::MAILBOX_CAPACITY` — this constant
+    /// 3. [`set_default_mailbox_capacity`](crate::set_default_mailbox_capacity)
+    ///    — the process-wide default, if one was installed
+    /// 4. [`DEFAULT_MAILBOX_CAPACITY`](crate::DEFAULT_MAILBOX_CAPACITY) (32)
+    ///
+    /// `None` (the default) means this actor type expresses no preference and
+    /// defers to steps 3 and 4. It is distinct from `Some(32)`: an actor that
+    /// deliberately asks for 32 keeps it even when a process-wide default of
+    /// 1024 is installed.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use rsactor::{Actor, ActorRef};
+    /// # struct Orchestrator;
+    /// impl Actor for Orchestrator {
+    ///     type Args = ();
+    ///     type Error = std::convert::Infallible;
+    ///     type IdleEvent = ();
+    ///
+    ///     // Boot fans out ~50 unit-start requests before the first handler
+    ///     // returns; a smaller mailbox would park the sender mid-fan-out.
+    ///     const MAILBOX_CAPACITY: Option<usize> = Some(64);
+    ///
+    ///     async fn on_start(_: Self::Args, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+    ///         Ok(Orchestrator)
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// `Some(0)` panics at spawn time, like every other zero-capacity path.
+    /// The check cannot be made at compile time on this crate's MSRV (1.75):
+    /// inline `const { assert!(..) }` blocks in trait defaults require 1.79.
+    const MAILBOX_CAPACITY: Option<usize> = None;
+
     /// Called when the actor is started. This is required for actor creation.
     ///
     /// This method is the initialization point for an actor and a fundamental part of the actor model design.

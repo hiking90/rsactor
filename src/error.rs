@@ -473,6 +473,7 @@ impl Error {
                 "Mailbox capacity must be greater than 0",
                 "set_default_mailbox_capacity() can only be called once",
                 "Call it early in main() before spawning actors",
+                "To give one actor type its own capacity, set Actor::MAILBOX_CAPACITY instead - it takes precedence over this process-wide default",
             ],
             Error::Join { .. } => &[
                 "The spawned task panicked or was cancelled by the runtime",

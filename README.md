@@ -16,6 +16,7 @@ A Simple and Efficient In-Process Actor Model Implementation for Rust.
 - **Minimalist Design**: Focuses on core actor model primitives with a clean API
 - **Tokio-Native**: Built for the `tokio` asynchronous runtime
 - **Actor Derive Macro**: `#[derive(Actor)]` for simple actors that don't need complex initialization
+- **Mailbox Capacity Next to the Actor**: declare `const MAILBOX_CAPACITY: Option<usize> = Some(64);` on the `Actor` impl so the number sits with the handlers that justify it. A capacity passed to `spawn_with_mailbox_capacity` or `SpawnOptions::mailbox_capacity` overrides it for that one spawn; `set_default_mailbox_capacity` shifts the baseline for actors that declare none
 
 ### Message Passing
 | Method                           | Description                                                  |

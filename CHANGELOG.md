@@ -42,11 +42,32 @@ one internal type change that makes a doc promise compiler-enforced.
   enables tracing's own `log` bridge (not `log-always`), so a record is emitted
   only while no `tracing` subscriber is installed and an application that later
   adds one is never fed both forms of the same event.
+- **`Actor::MAILBOX_CAPACITY`** — an associated constant
+  (`Option<usize>`, default `None`) that lets an actor type declare its own
+  mailbox capacity. The capacity that suits an actor follows from its message
+  profile, which is a property of the actor rather than of the call site that
+  spawns it; until now the only places to put it were a `spawn` argument and
+  the process-wide `set_default_mailbox_capacity`, both away from the actor
+  definition. Resolution order, first match wins: `SpawnOptions::mailbox_capacity`
+  / `spawn_with_mailbox_capacity`, then `Actor::MAILBOX_CAPACITY`, then
+  `set_default_mailbox_capacity`, then `DEFAULT_MAILBOX_CAPACITY`. `None` is
+  distinct from `Some(32)`: only the former defers to the process-wide default.
+  `Some(0)` panics at spawn, naming the constant. Adding a defaulted associated
+  const is not a breaking change for existing `Actor` impls or for
+  `#[derive(Actor)]`.
 - **`FailurePhase::as_str()`** — the stable label, replacing the previous
   delegation to the derived `Debug` as the single source of truth.
 
 ### Changed
 
+- **The process-wide default mailbox capacity is now read when the actor is
+  spawned, not when `SpawnOptions` is constructed.** Resolution moved into
+  `spawn_with_options`, which is the first point where the actor type — and so
+  `Actor::MAILBOX_CAPACITY` — is known. One sequence observes the difference:
+  building a `SpawnOptions` *before* calling `set_default_mailbox_capacity` and
+  spawning with it afterwards used to use the old default and now uses the new
+  one. Code that installs the default during startup, before any spawn, is
+  unaffected.
 - `Cargo.toml` now sets `exclude`, so developer tooling and working notes
   (`plan/`, `plans/`, `book/`, `skills/`, `.github/`, `.claude/`, `.vscode/`)
   no longer ship in the published `.crate`.
