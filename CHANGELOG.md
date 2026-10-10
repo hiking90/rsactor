@@ -5,14 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+`Debug` output and the text returned by `Error::debugging_tips()` are not a
+stable interface: they may change in any release, and such changes are not
+listed as breaking changes or migration steps. `Display` output, public API,
+runtime behavior, dead-letter records and log/`tracing` records are part of the
+stable interface, and changes to them are recorded.
+
 ## [Unreleased]
 
-A follow-up review pass over `src/`. Almost every finding was a documentation
-contract that disagreed with the implementation — this crate specifies panic
-conditions, deadlock-vs-stall semantics and dead-letter labels in rustdoc, and
-none of that is checked by `fmt`/`clippy`/`rustdoc`/tests. Two enums gain
-`#[non_exhaustive]`; the rest is prose brought back in line with the code, plus
-one internal type change that makes a doc promise compiler-enforced.
+Changes since 0.18.0, including new API and diagnostics (see Added) and the
+results of a review pass over `src/` and the derive macros. Many review
+findings were documentation contracts that disagreed with the implementation —
+this crate specifies panic conditions, deadlock-vs-stall semantics and
+dead-letter labels in rustdoc, and none of that is checked by
+`fmt`/`clippy`/`rustdoc`/tests. Every entry under BREAKING CHANGES and Added
+changes code; Changed and Fixed mix code changes with corrections to
+documentation and tests, so read each entry. Upgrade steps are in
+[Migrating from 0.18.x](#migrating-from-018x).
 
 ### ⚠️ BREAKING CHANGES
 
@@ -31,17 +40,48 @@ one internal type change that makes a doc promise compiler-enforced.
   specifiers.** They pad and align as expected (`{:>24}`), but a *precision*
   now truncates (`{:.10}` renders both `BlockingAsk` and `BlockingAskPriority`
   as `blocking_a`). Use `as_str()` where an unabridged label is required.
+- **`#[derive(Actor)]` and `#[message_handlers]` now generate absolute
+  `::rsactor::…` paths** (previously `rsactor::…`). An absolute path resolves
+  only through the extern prelude, so a crate that names rsactor through a `use`
+  alias (`use actors as rsactor;`) or reaches it only through a facade crate's
+  re-export (`use facade::rsactor;`) now fails with "could not find `rsactor`".
+  Depend on `rsactor` directly; a renamed dependency can instead add
+  `extern crate <name> as rsactor;` at the crate root.
+- **`#[message_handlers]` matches a handler's error through
+  `::core::result::Result::Err`** (previously a bare `Err`). A handler that
+  returns a user-defined enum with its own `Err` variant — an enum named
+  `Result`, or any type marked `#[handler(result)]` — compiled when the call
+  site imported that variant (`use Outcome::*;`), and now fails with E0308.
+  Return `core::result::Result`, or replace that handler's attribute with
+  `#[handler(no_log)]` (it cannot be combined with `result`); see Migrating.
+  The bare pattern could not stay: it broke handlers that return the standard
+  `Result` in a module that imports another enum's `Err` (see Fixed).
+- **`#[message_handlers]` rejects arguments.** `#[message_handlers(no_log)]` and
+  similar used to be accepted and silently ignored, so the option never took
+  effect. Put handler options on each `#[handler(...)]`.
+- **`#[handler]` rejects a by-value `mut self` receiver.** It used to compile
+  for a `Copy` actor, where the generated call ran the handler on a copy of the
+  actor, so every state change was lost. It now fails with "First parameter
+  must be '&mut self'". Take `&mut self`.
 
 ### Added
 
-- **`log` feature** — forwards rsActor's `tracing` events to the
-  [`log`](https://crates.io/crates/log) crate. Applications built on `log` and
-  `env_logger` with no `tracing` dependency previously saw none of the crate's
-  diagnostics: an actor could fail its `on_start`, drop messages to dead
+- **`log` feature** — forwards the `log` records tracing produces for its
+  events and spans to the [`log`](https://crates.io/crates/log) crate; which
+  records, under which targets and levels, follows tracing's
+  [Emitting `log` Records](https://docs.rs/tracing/0.1/tracing/#emitting-log-records).
+  Applications built on `log` and `env_logger` that install no `tracing`
+  subscriber previously saw none of the
+  crate's diagnostics: an actor could fail its `on_start`, drop messages to dead
   letters, or return a handler error, and leave no record anywhere. The feature
-  enables tracing's own `log` bridge (not `log-always`), so a record is emitted
-  only while no `tracing` subscriber is installed and an application that later
-  adds one is never fed both forms of the same event.
+  enables tracing's own `log` bridge (`tracing/log`, not `log-always`), and
+  Cargo unifies that feature across the build, so the bridge applies to every
+  crate that uses `tracing` — the application and its other dependencies as
+  well as rsActor. A `log`-based application that enables it can therefore
+  receive new records from unrelated crates at the levels its logger admits. A
+  record is emitted only until a `tracing` dispatcher (global or scoped) is
+  first set in the process, so an application that later installs a subscriber
+  is never fed both forms of the same event.
 - **`Actor::MAILBOX_CAPACITY`** — an associated constant
   (`Option<usize>`, default `None`) that lets an actor type declare its own
   mailbox capacity. The capacity that suits an actor follows from its message
@@ -64,7 +104,20 @@ one internal type change that makes a doc promise compiler-enforced.
   record of which actor ended. Panics are still not caught: the `JoinHandle`
   resolves to `Err(JoinError)` as before. The record is emitted under its own
   `catch_unwind`, so a subscriber that panics on it neither skips the
-  dead-letter drain nor aborts the process. Task cancellation emits nothing.
+  dead-letter drain nor aborts the process. Task cancellation emits nothing,
+  unless the thread dropping the task is itself unwinding — e.g. a
+  current-thread runtime (the `#[tokio::test]` default) dropped by a panicking
+  test, in which case every live actor task on that runtime, polled or not,
+  emits the record. A multi-thread runtime drops its tasks on its worker
+  threads, which are not unwinding, so no record is emitted there.
+- **`DeadLetterReason::RuntimeUnavailable`** — recorded when a `blocking_*`
+  call outside a multi-thread runtime cannot spawn its dedicated thread or
+  build the temporary runtime on it. The message was dropped before reaching
+  the mailbox and the caller got `Error::Runtime`, but until now no dead letter
+  was recorded, so the loss was missing from the `tracing` dead-letter event and
+  `dead_letter_count()`. A worker-thread panic is still not recorded, because
+  the message may already have been admitted. `DeadLetterReason` is
+  `#[non_exhaustive]`, so the new variant does not break existing matches.
 
 ### Changed
 
@@ -75,13 +128,35 @@ one internal type change that makes a doc promise compiler-enforced.
   building a `SpawnOptions` *before* calling `set_default_mailbox_capacity` and
   spawning with it afterwards used to use the old default and now uses the new
   one. Code that installs the default during startup, before any spawn, is
-  unaffected.
+  unaffected. `SpawnOptions`'s `Debug` output now shows the unresolved
+  `mailbox_capacity` — `None` unless set on the options, `Some(64)` after
+  `.mailbox_capacity(64)` — instead of a number; the resolved capacity is known
+  only at spawn.
 - `Cargo.toml` now sets `exclude`, so developer tooling and working notes
   (`plan/`, `plans/`, `book/`, `skills/`, `.github/`, `.claude/`, `.vscode/`)
   no longer ship in the published `.crate`.
 - The dead-letter recorder takes a typed `Operation` instead of a `&'static str`,
   so the emitted label and `Error::Timeout`'s operation can no longer drift.
   Internal only — `record` is `pub(crate)`.
+- `#[handler]` receiver validation now checks the receiver's type, so `self:
+  &mut Self` is accepted. The by-value `mut self` rejection is listed under
+  BREAKING CHANGES.
+- `#[handler]` signature errors now point at the offending token instead of the
+  `#[message_handlers]` line: a `&mut ActorRef<_>` third parameter, a
+  method-level type or const parameter, and `impl Trait` in the message or
+  return type are rejected by the macro. All of these inputs already failed to
+  compile, with a less specific error.
+- The `tokio` requirement now states its actual minimum, `1.22`
+  (`Handle::runtime_flavor`, `Semaphore::MAX_PERMITS`). It read `"1"`, so a
+  lockfile pinned to tokio 1.21 or older satisfied it and then failed to
+  compile.
+- `Error::debugging_tips()` returns different tips for two variants. A
+  tell-family `Timeout` (`Tell`, `TellPriority`, `BlockingTell`,
+  `BlockingTellPriority`) now says the message was not admitted, instead of
+  the ask-oriented tips; an ask-family `Timeout` adds that the message may
+  still be processed after the timeout, so retry only idempotent messages.
+  `MailboxCapacity` states both bounds (greater than 0, at most
+  `Semaphore::MAX_PERMITS`) and points to `Actor::MAILBOX_CAPACITY`.
 
 ### Fixed
 
@@ -110,14 +185,17 @@ one internal type change that makes a doc promise compiler-enforced.
   does *not* terminate the actor, so `on_stop` still runs. Task cancellation,
   which does skip `on_stop`, was missing from the list.
 - **The dead-letter `operation` contract ignored the shutdown drain**, which
-  cannot know the sending API and records `"tell"`/`"ask"` for everything —
-  including messages enqueued by `blocking_tell`.
+  cannot know the sending API and records only the channel-level label —
+  `"tell"`/`"ask"` for the regular mailbox, `"tell_priority"`/`"ask_priority"`
+  for the priority channel — including for messages enqueued by
+  `blocking_tell` or `blocking_tell_priority`.
 - **`register_ask_edge` claimed no cycle can form outside an actor context.** It
   is a detection blind spot, not a proof: `tokio::spawn`, `spawn_blocking` (the
   pattern `blocking_ask` itself recommends) and hand-rolled threads do not
   inherit the task-local, so even a self-`ask` from there hangs silently.
 - **`MetricsCollector` reported an active actor as idle** when the wall clock sat
-  at or before `UNIX_EPOCH`: `0` doubled as the "no activity yet" sentinel.
+  before `UNIX_EPOCH` + 1 ms: such a clock is stored as `0` milliseconds, and
+  `0` doubled as the "no activity yet" sentinel.
   Timestamps are now stored biased by one, keeping the type's all-`Relaxed`
   contract intact.
 - The `ActorResult` supervision example discarded the `on_stop` cleanup error and
@@ -148,6 +226,201 @@ one internal type change that makes a doc promise compiler-enforced.
   and under `panic = "abort"` none of it runs. Those drain and `Drop` behaviours
   had no test; they now do. The debugging guide no longer lists
   "panic recovery", which the runtime does not do.
+- **An actor task cancelled before its first poll dropped its queued `tell`s
+  without a dead-letter record.** The shutdown drain guard was built inside the
+  task future, so `JoinHandle::abort()` or a runtime shutdown right after
+  `spawn` — on a `current_thread` runtime, a `tell` returns `Ok` without
+  yielding, so the task has not run yet — dropped the receivers with no
+  `DiscardedAtShutdown` record. `spawn_with_options` now builds the guard
+  before spawning the task.
+- **A `#[cfg(...)]` on a `#[handler]` method did not reach its generated
+  `impl Message<_>`.** With the cfg off, the method was removed but the impl
+  still called it, so a feature-gated handler failed to compile ("no method
+  named …") in exactly the builds that disabled the feature. The cfg is now
+  copied onto the impl.
+- **A `where` clause on a `#[handler]` method did not reach its generated
+  `impl Message<_>`.** A bound the impl block lacked (`where T: Clone` on one
+  handler of a generic actor) failed with E0277 inside the generated call. The
+  predicates are now copied onto the impl, except those naming the method's
+  own lifetime parameters, which the impl cannot declare.
+- **The derive macros named standard-library items by paths that the call site
+  could shadow.** The generated code used `std::convert::Infallible`,
+  `std::result::Result`, `std::any::type_name` and bare `Ok(..)` / `Err(..)`,
+  so a crate with its own module named `std`, or with an `Ok`/`Err` brought
+  into scope by a glob import (`use Status::*;`), failed to compile inside the
+  generated `impl Actor` / `impl Message<_>`. These are now absolute `::core::…`
+  paths. The reverse case now fails instead: a handler returning a user-defined
+  enum whose own `Err` variant was imported at the call site — see
+  [Migrating from 0.18.x](#migrating-from-018x).
+- **`set_default_mailbox_capacity` accepted capacities above
+  `tokio::sync::Semaphore::MAX_PERMITS`** and returned `Ok`, after which every
+  spawn that fell back to that default panicked inside `mpsc::channel`. It now
+  returns `Error::MailboxCapacity`; `SpawnOptions::mailbox_capacity` and
+  `with_idle_capacity` assert the same bound at the call site.
+
+### Migrating from 0.18.x
+
+The items are split by whether the compiler reports the affected code. Items in
+the second group compile unchanged and behave differently at run time; check
+them by searching for the affected calls.
+
+**Reported by the compiler:**
+
+- **Add a `_` arm when matching `ActorFailure` or `FailurePhase`:**
+
+  ```rust
+  match failure {
+      ActorFailure::OnStart { error } => { /* ... */ }
+      ActorFailure::OnIdle { actor, error } => { /* ... */ }
+      ActorFailure::OnStop { actor, error } => { /* ... */ }
+      ActorFailure::OnIdleThenOnStop { actor, error, stop_error } => { /* ... */ }
+      _ => { /* a phase added by a later release */ }
+  }
+  ```
+
+- **The derive macros need `rsactor` in the extern prelude.** A crate that
+  reached rsactor only through a facade re-export or a `use … as rsactor` alias
+  adds `rsactor` to its own `[dependencies]`. A renamed dependency
+  (`actors = { package = "rsactor", … }`) can instead declare, at the crate root:
+
+  ```rust
+  extern crate actors as rsactor;
+  ```
+
+- **Move `#[message_handlers(...)]` arguments onto `#[handler(...)]`.**
+
+- **Replace a by-value `mut self` handler receiver with `&mut self`.** Only a
+  `Copy` actor could compile it, and its state changes were made on a copy and
+  discarded; with `&mut self` they persist, so check the handler did not depend
+  on that.
+
+- **A `#[handler]` returning a user-defined enum with its own `Err` variant
+  fails with E0308 on the `#[message_handlers]` line.** This covers an enum
+  named `Result` (the macro detects result types by name) and any type marked
+  `#[handler(result)]`. 0.18.x generated a bare `Err(..)` pattern in
+  `on_tell_result`, which resolved to the enum's variant when the call site
+  imported it (`use Outcome::*;` or `use Outcome::Err;`); the pattern is now
+  `::core::result::Result::Err`, which only matches the standard `Result`.
+  Return `core::result::Result` (a type alias for it works with
+  `#[handler(result)]`), or replace that handler's `#[handler]` /
+  `#[handler(result)]` with `#[handler(no_log)]`. Keep a single attribute:
+  `#[handler(result, no_log)]` is rejected (`result` and `no_log` are mutually
+  exclusive), and of several `#[handler]` attributes on one method only the
+  first is read, so a `#[handler(no_log)]` added after the existing one is
+  ignored. `no_log` also removes the automatic error log; to keep logging the
+  enum's error, remove `#[handler]` from that method, implement `Message<_>`
+  for its message by hand and override `on_tell_result`.
+
+**Not reported by the compiler:**
+
+- **`Error::Join`'s `{err}` no longer contains the panic message.** Walk the
+  `source()` chain, or inspect the `JoinError` directly:
+
+  ```rust
+  use std::error::Error as _;
+
+  // Before (0.18.x): the panic text was part of `{err}`
+  tracing::error!("actor task failed: {err}");
+
+  // After: append each source
+  let mut text = err.to_string();
+  let mut cause = err.source();
+  while let Some(c) = cause {
+      text.push_str(": ");
+      text.push_str(&c.to_string());
+      cause = c.source();
+  }
+  tracing::error!("actor task failed: {text}");
+
+  // Or branch on the cause
+  if let rsactor::Error::Join { source, .. } = &err {
+      if source.is_panic() { /* ... */ }
+  }
+  ```
+
+- **A precision in `Operation` / `Channel` / `FailurePhase` formatting now
+  truncates.** Use `as_str()` for the full label:
+
+  ```rust
+  // Before (0.18.x): `{op:.10}` printed "blocking_ask_priority"
+  // After: it prints "blocking_a"; this prints the full label
+  let label = op.as_str();
+  ```
+
+  A width now pads as well: 0.18.x ignored it for all three types, so
+  `format!("{:>10}", FailurePhase::OnStart)` returned `"OnStart"` and now
+  returns `"   OnStart"`. Check column-aligned log lines and string assertions
+  that format these types with a width.
+
+- **The process-wide default capacity is read at spawn.** A `SpawnOptions`
+  built before `set_default_mailbox_capacity` now picks up the new default. Pin
+  the capacity on the options to keep the previous result:
+
+  ```rust
+  let opts = SpawnOptions::new().with_priority();
+  rsactor::set_default_mailbox_capacity(1024)?;
+  // 0.18.x: this spawn used the default in effect at `SpawnOptions::new()`
+  // now:    it uses 1024
+  let (actor_ref, handle) = rsactor::spawn_with_options::<MyActor>(args, opts);
+
+  // To keep the old capacity for this spawn
+  let opts = SpawnOptions::new().with_priority().mailbox_capacity(32);
+  ```
+
+- **`set_default_mailbox_capacity` rejects capacities above
+  `tokio::sync::Semaphore::MAX_PERMITS`** with `Error::MailboxCapacity`. 0.18.x
+  returned `Ok(())` and panicked later, inside `mpsc::channel`, at the first
+  spawn that fell back to that default; a program that set such a value but
+  passed a capacity to every spawn ran without error and now gets `Err` from
+  the setter. Pass a value within the bound. `SpawnOptions::mailbox_capacity`
+  and `with_idle_capacity` panic for the same values at the builder call
+  instead of at spawn.
+
+  ```rust
+  // 0.18.x: Ok(())
+  // now:    Err(Error::MailboxCapacity { .. })
+  let result = rsactor::set_default_mailbox_capacity(usize::MAX);
+  ```
+
+- **An actor task cancelled before its first poll now records its queued
+  `tell`s** — whether by `JoinHandle::abort()` or by dropping or shutting down
+  its runtime. 0.18.x recorded nothing on that path; each such `tell` now
+  produces a `DiscardedAtShutdown` dead letter (a `tracing` event and a
+  `dead_letter_count()` increment). The runtime path is deterministic on a
+  current-thread runtime: a `#[tokio::test]` (current-thread by default) whose
+  body returns right after `spawn` and a `tell` (which does not yield while the
+  mailbox has capacity) never polls the actor task, and the runtime drops it on
+  the test thread when the test ends. On a multi-thread runtime a worker thread
+  drops the task, and whether it was polled first depends on scheduling. A test that asserts an exact
+  `dead_letter_count()` after aborting a freshly spawned actor, or that runs in
+  the same binary as a test like the one above (the counter is
+  process-global), must expect these records.
+
+- **A `blocking_*` call that cannot start its thread or runtime now records a
+  `RuntimeUnavailable` dead letter.** Outside a multi-thread runtime, a failed
+  thread spawn or runtime build returned `Error::Runtime` in 0.18.x and
+  recorded nothing; it still returns `Error::Runtime`, and now also produces a
+  `DeadLetterReason::RuntimeUnavailable` dead letter (a `tracing` event and a
+  `dead_letter_count()` increment). A test that asserts an exact
+  `dead_letter_count()` around such a failure must expect these records.
+
+- **An actor task ending during a panic unwind now logs an `error!` record.**
+  0.18.x logged nothing on that path. One ERROR-level event,
+  `Actor <identity> task is ending during a panic unwind; queued messages are discarded`,
+  is emitted when an actor's `on_start`, a message handler, `on_idle` or
+  `on_stop` panics, and for every live actor task on a current-thread runtime
+  (the `#[tokio::test]` default) that a panicking thread drops — so one
+  panicking test can produce several. A multi-thread runtime drops its tasks on
+  its worker threads and emits none for them; under `panic = "abort"` nothing
+  is emitted. A test that captures logs and asserts no ERROR event, or an alert
+  on ERROR counts, must expect these records.
+
+- **With `metrics`, `last_activity` is `Some(UNIX_EPOCH)` instead of `None`**
+  for an actor whose work completed while the wall clock read before
+  `UNIX_EPOCH` + 1 ms. This applies to `ActorRef::last_activity()` and
+  `MetricsSnapshot::last_activity`. `None` now means only that no message or
+  idle event has completed, so code that branches on `None` takes the other
+  branch for such an actor.
 
 ## [0.18.0] - 2026-07-11
 
@@ -155,8 +428,15 @@ A focused API-hardening follow-up from a second source-review pass. It
 future-proofs the `Error` type against field additions, replaces two
 stringly-typed error discriminants with real enums, adds a named accessor for
 the `ActorResult` tuple conversion, and lets `ActorRef` / `ActorWeak` implement
-`Debug` regardless of the actor type. Every breaking change is mechanical — the
-compiler flags each affected match. See
+`Debug` regardless of the actor type. The compiler flags every site a breaking
+change affects; all but one (constructing an `Error` variant outside the crate)
+are mechanical to update. Two output changes are not reported by the
+compiler, and both are listed under Changed. The `Debug` output of
+`Error::Timeout` and `Error::ChannelFull` changed; per the note at the top, it
+is not a breaking change. Formatting the `operation` or `channel` field with a
+width or precision (`{:<14}`, `{:.5}`) also changed: the 0.17.x
+`&'static str` fields honored both, while the new enums' `Display` ignores
+them (the following release honors them again). See
 [Migrating from 0.17.x to 0.18.0](#migrating-from-017x-to-0180).
 
 ### ⚠️ BREAKING CHANGES
@@ -176,7 +456,8 @@ compiler flags each affected match. See
 ### Added
 
 - **`Operation` and `Channel` enums** (both `#[non_exhaustive]`, each with a
-  `const fn as_str()` and `Display`) identify the operation family behind an
+  `const fn as_str()`, `Display`, and derived `Debug`, `Clone`, `Copy`,
+  `PartialEq`, `Eq` and `Hash`) identify the operation family behind an
   `Error::Timeout` and the bounded channel behind an `Error::ChannelFull`,
   replacing the previous doc-maintained string sets with compiler-checked
   variants.
@@ -191,6 +472,14 @@ compiler flags each affected match. See
   type**, not only those that are themselves `Debug`. A manual impl replaces
   `#[derive(Debug)]`, dropping the derive's spurious `T: Debug` bound (all
   fields are unconditionally `Debug`). Purely additive.
+- `{:?}` of `Error::Timeout` and `Error::ChannelFull` prints the enum variant
+  (`operation: Ask`, `channel: IdleSubscribe`) instead of a quoted string
+  (`operation: "ask"`); `Display` and `as_str()` keep the snake_case labels.
+- `Display` of `Error::Timeout.operation` and `Error::ChannelFull.channel`
+  ignores width and precision. The 0.17.x `&'static str` fields padded and
+  truncated (`format!("{:<6}|", operation)` gave `"ask   |"`); the enums'
+  `Display` writes the label unchanged (`"ask|"`). The following release
+  restores padding and truncation.
 - Deadlock-detection panic messages now route through a single shared prefix
   constant, so the slow-path re-raise check cannot silently drift from the
   panic text (internal).
@@ -205,7 +494,7 @@ compiler flags each affected match. See
 
 ### Migrating from 0.17.x to 0.18.0
 
-All mechanical; the compiler flags each affected site.
+The compiler flags each site affected by the items below.
 
 - **`Error` variants are `#[non_exhaustive]` — add `..` when binding all
   fields:**
@@ -216,6 +505,12 @@ All mechanical; the compiler flags each affected site.
   // After (0.18.0)
   if let Error::ChannelFull { identity, channel, .. } = &err { /* ... */ }
   ```
+
+  The same attribute rejects a struct literal of any `Error` variant outside
+  rsactor (E0639), so code that built one by hand — typically a test double
+  returning `Error::Send { .. }` — no longer compiles. There is no public
+  constructor; obtain the error from the call that returns it, or have the
+  test double return its own error type.
 
 - **`operation` is now an `Operation` enum, not a `&str`:**
 

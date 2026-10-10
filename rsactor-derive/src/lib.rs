@@ -118,6 +118,20 @@
 //! - Selective processing: only methods with `#[handler]` attribute are processed
 //! - Reduced boilerplate and potential for errors
 //! - Type-safe message handling with compile-time checks
+//!
+//! ## Crate Path
+//!
+//! Both macros emit absolute `::rsactor::…` paths, which resolve only through
+//! the extern prelude. The crate that uses the macros must therefore see
+//! `rsactor` under that exact name:
+//!
+//! - A crate that reaches rsactor only through a facade crate's re-export
+//!   (`use facade::rsactor;`) or a `use … as rsactor` alias fails to compile
+//!   with "could not find `rsactor`". Add `rsactor` to its own `[dependencies]`.
+//! - A renamed dependency (`actors = { package = "rsactor", … }`) can instead
+//!   declare `extern crate actors as rsactor;` at the crate root.
+//!
+//! The macros take no option to override this path.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -184,6 +198,13 @@ use syn::{
 /// - Leaves `MAILBOX_CAPACITY` at its `None` default, so a derived actor takes
 ///   the process-wide default capacity. To declare a capacity on the type,
 ///   implement `Actor` manually and set the constant there
+/// - Emits `::rsactor::…` paths, so the using crate must have `rsactor` in its
+///   extern prelude under that name. A crate that reaches rsactor only through
+///   a facade crate's re-export or a `use … as rsactor` alias fails with "could
+///   not find `rsactor`"; add `rsactor` to its own `[dependencies]`. A renamed
+///   dependency (`actors = { package = "rsactor", … }`) can instead declare
+///   `extern crate actors as rsactor;` at the crate root. There is no option to
+///   override the path
 #[proc_macro_derive(Actor)]
 pub fn derive_actor(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -281,6 +302,25 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// - Second parameter: `msg: MessageType` (where MessageType is the message struct)
 /// - Third parameter: `&ActorRef<Self>` or `&rsactor::ActorRef<Self>`
 /// - Return type: the reply type for the message
+/// - No type or const generic parameters on the method itself
+/// - No `impl Trait` in the message or return type
+///
+/// A `#[cfg(...)]` on a handler method is copied onto its generated
+/// `Message` impl, so a feature-gated handler is removed together with its impl.
+/// Predicates in the method's `where` clause are copied onto the impl as well,
+/// except those that name one of the method's own lifetime parameters.
+///
+/// `#[message_handlers]` itself takes no arguments; options belong on
+/// `#[handler(...)]`.
+///
+/// The generated impls use `::rsactor::…` paths, so the using crate must have
+/// `rsactor` in its extern prelude under that name. A crate that reaches
+/// rsactor only through a facade crate's re-export or a `use … as rsactor`
+/// alias fails with "could not find `rsactor`"; add `rsactor` to its own
+/// `[dependencies]`. A renamed dependency
+/// (`actors = { package = "rsactor", … }`) can instead declare
+/// `extern crate actors as rsactor;` at the crate root. There is no option to
+/// override the path.
 ///
 /// # Error Messages
 ///
@@ -288,7 +328,7 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// - Wrong parameter count
 /// - Missing `async` keyword
 /// - Incorrect parameter types
-/// - Invalid #[handler] attribute usage
+/// - Invalid `#[handler]` attribute usage
 ///
 /// # Benefits
 ///
@@ -296,7 +336,16 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// - Reduces boilerplate code and potential for errors
 /// - Only processes methods marked with `#[handler]`, leaving other methods unchanged
 #[proc_macro_attribute]
-pub fn message_handlers(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn message_handlers(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(
+            TokenStream2::from(attr),
+            "`#[message_handlers]` takes no arguments; put handler options on `#[handler(...)]`",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let input = parse_macro_input!(item as ItemImpl);
 
     let expanded = match message_impl(input) {
@@ -442,6 +491,26 @@ fn generate_message_impl(
         ));
     }
 
+    // The generated `impl Message<M>` only declares the impl block's generics,
+    // so a method-level type or const parameter would be unbound there.
+    // Lifetime parameters are left alone: one used only by the `&ActorRef`
+    // parameter is inferred at the call and compiles.
+    if let Some(param) = method
+        .sig
+        .generics
+        .params
+        .iter()
+        .find(|param| !matches!(param, syn::GenericParam::Lifetime(_)))
+    {
+        return Err(syn::Error::new_spanned(
+            param,
+            format!(
+                "Handler method '{}' cannot have type or const parameters: the generated `impl Message<_>` has no place to declare them",
+                method.sig.ident
+            ),
+        ));
+    }
+
     if inputs.len() != 3 {
         return Err(syn::Error::new_spanned(
             &method.sig,
@@ -478,18 +547,33 @@ fn generate_message_impl(
         }
     };
 
+    // Argument-position `impl Trait` is an anonymous type parameter, which the
+    // method-generics check above cannot see. It would become
+    // `impl Message<impl Trait>`.
+    if tokens_contain_ident(quote::ToTokens::to_token_stream(message_type), "impl") {
+        return Err(syn::Error::new_spanned(
+            message_type,
+            format!(
+                "Handler method '{}' cannot take `impl Trait` as its message type: the generated `impl Message<_>` needs a concrete type",
+                method.sig.ident
+            ),
+        ));
+    }
+
     // Validate third parameter (&ActorRef<Self>)
     let third_param_valid = match &inputs[2] {
         FnArg::Typed(PatType { ty, .. }) => {
             match ty.as_ref() {
-                Type::Reference(type_ref) => {
-                    // Check if the referenced type contains "ActorRef" in its path
+                // A shared reference whose path ends in `ActorRef`; the
+                // generated call passes `&ActorRef<Self>`, so `&mut` cannot
+                // match.
+                Type::Reference(type_ref) if type_ref.mutability.is_none() => {
                     if let Type::Path(type_path) = type_ref.elem.as_ref() {
                         type_path
                             .path
                             .segments
-                            .iter()
-                            .any(|seg| seg.ident == "ActorRef")
+                            .last()
+                            .is_some_and(|seg| seg.ident == "ActorRef")
                     } else {
                         false
                     }
@@ -512,6 +596,19 @@ fn generate_message_impl(
         ReturnType::Type(_, ty) => Some(ty.as_ref()),
         ReturnType::Default => None,
     };
+
+    // `-> impl Trait` would become `type Reply = impl Trait;`.
+    if let Some(ty) = return_type_ty {
+        if tokens_contain_ident(quote::ToTokens::to_token_stream(ty), "impl") {
+            return Err(syn::Error::new_spanned(
+                ty,
+                format!(
+                    "Handler method '{}' cannot return `impl Trait`: the generated `type Reply` needs a concrete type",
+                    method.sig.ident
+                ),
+            ));
+        }
+    }
 
     let return_type = match return_type_ty {
         Some(ty) => quote! { #ty },
@@ -538,6 +635,35 @@ fn generate_message_impl(
     // Get method name
     let method_name = &method.sig.ident;
 
+    // The generated impl calls the method, so the method's `where` predicates
+    // must hold there too. A predicate naming a method lifetime parameter
+    // cannot be written on the impl (the lifetime is undeclared there) and
+    // stays on the method only.
+    let method_lifetimes: Vec<String> = method
+        .sig
+        .generics
+        .lifetimes()
+        .map(|param| param.lifetime.ident.to_string())
+        .collect();
+    let carried_predicates: Vec<syn::WherePredicate> = method
+        .sig
+        .generics
+        .where_clause
+        .iter()
+        .flat_map(|clause| clause.predicates.iter())
+        .filter(|pred| {
+            !tokens_contain_lifetime(quote::ToTokens::to_token_stream(*pred), &method_lifetimes)
+        })
+        .cloned()
+        .collect();
+    let mut generics = generics.clone();
+    if !carried_predicates.is_empty() {
+        generics
+            .make_where_clause()
+            .predicates
+            .extend(carried_predicates);
+    }
+
     let (impl_generics, _ty_generics, where_clause) = generics.split_for_impl();
 
     let on_tell_result_impl = if should_generate_on_tell_result {
@@ -556,8 +682,17 @@ fn generate_message_impl(
         quote! {}
     };
 
+    // An attribute macro sees the method's `#[cfg]` unevaluated, and the
+    // compiler later strips only the method itself. Copy the cfg onto the
+    // generated impl so it is removed together with the method it calls.
+    let cfg_attrs = method
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("cfg"));
+
     // Generate the Message trait implementation
     let impl_tokens = quote! {
+        #(#cfg_attrs)*
         impl #impl_generics ::rsactor::Message<#message_type> for #actor_type #where_clause {
             type Reply = #return_type;
 
@@ -574,6 +709,45 @@ fn generate_message_impl(
     };
 
     Ok(impl_tokens)
+}
+
+/// Whether `tokens` contains the identifier (or keyword) `ident` at any group depth.
+fn tokens_contain_ident(tokens: TokenStream2, ident: &str) -> bool {
+    tokens.into_iter().any(|tt| match tt {
+        proc_macro2::TokenTree::Ident(i) => i == ident,
+        proc_macro2::TokenTree::Group(g) => tokens_contain_ident(g.stream(), ident),
+        _ => false,
+    })
+}
+
+/// Whether `tokens` contains a lifetime `'name` for any `name` in `names`, at
+/// any group depth. A lifetime is a `'` punct followed by an identifier.
+fn tokens_contain_lifetime(tokens: TokenStream2, names: &[String]) -> bool {
+    if names.is_empty() {
+        return false;
+    }
+    let mut after_apostrophe = false;
+    for tt in tokens {
+        match tt {
+            proc_macro2::TokenTree::Punct(p) => {
+                after_apostrophe = p.as_char() == '\'';
+                continue;
+            }
+            proc_macro2::TokenTree::Ident(i) => {
+                if after_apostrophe && names.iter().any(|name| i == name) {
+                    return true;
+                }
+            }
+            proc_macro2::TokenTree::Group(g) => {
+                if tokens_contain_lifetime(g.stream(), names) {
+                    return true;
+                }
+            }
+            proc_macro2::TokenTree::Literal(_) => {}
+        }
+        after_apostrophe = false;
+    }
+    false
 }
 
 // TODO: Future enhancements that could be added:

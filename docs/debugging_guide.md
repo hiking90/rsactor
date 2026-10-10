@@ -21,7 +21,7 @@ rsactor provides two methods on the `Error` type to help diagnose issues:
 Determines whether an operation might succeed if retried.
 
 ```rust
-use rsactor::Error;
+use rsactor::{Actor, ActorRef, Error, Message};
 use std::time::Duration;
 
 async fn send_with_retry<T, M>(
@@ -35,7 +35,9 @@ where
 {
     let mut attempts = 0;
     loop {
-        match actor.tell(msg.clone()).await {
+        // A tell `Timeout` means the message was not admitted, so resending
+        // cannot duplicate it. Plain `tell` never returns a retryable error.
+        match actor.tell_with_timeout(msg.clone(), Duration::from_millis(50)).await {
             Ok(()) => return Ok(()),
             Err(e) if e.is_retryable() && attempts < max_attempts => {
                 attempts += 1;
@@ -51,11 +53,12 @@ where
 
 | Error Type | Retryable | Reason |
 |------------|-----------|--------|
-| `Timeout` | Yes | Transient; may succeed with longer timeout |
+| `Timeout` | Yes | Transient; may succeed with longer timeout. For ask variants the original message may still be processed — retry only idempotent messages |
+| `ChannelFull` | Yes | Transient; the bounded buffer drains as the actor makes progress |
 | `Send` | No | Actor stopped; channel permanently closed |
 | `Receive` | No | Reply channel dropped; cannot recover |
 | `Downcast` | No | Type mismatch; programming error |
-| `Runtime` | No | Actor lifecycle failure |
+| `Runtime` | No | A `blocking_*` call could not spawn its thread or build its temporary runtime, or the worker thread panicked |
 | `MailboxCapacity` | No | Configuration error |
 | `Join` | No | Task panic or cancellation |
 
@@ -100,6 +103,8 @@ Dead letters are messages that could not be delivered to their intended recipien
 | Message sent to stopped actor | `ActorStopped` |
 | `tell_with_timeout` or `ask_with_timeout` exceeds duration | `Timeout` |
 | Handler fails before sending reply (in `ask`) | `ReplyDropped` |
+| `tell` accepted into the mailbox, but the actor terminated before processing it (e.g. still queued when `kill()` runs) | `DiscardedAtShutdown` |
+| `blocking_*` call cannot spawn its dedicated thread or build its runtime | `RuntimeUnavailable` |
 
 ### Observing Dead Letters
 
@@ -132,7 +137,7 @@ Enable the `test-utils` feature to access dead letter counters in tests:
 
 ```toml
 [dev-dependencies]
-rsactor = { version = "0.12", features = ["test-utils"] }
+rsactor = { version = "0.18", features = ["test-utils"] }
 ```
 
 ```rust
@@ -140,6 +145,9 @@ use rsactor::{spawn, dead_letter_count, reset_dead_letter_count};
 
 #[tokio::test]
 async fn test_dead_letter_tracking() {
+    // The counter is process-global and `cargo test` runs tests in parallel:
+    // serialize this test against every other test that records dead letters
+    // (e.g. a shared `tokio::sync::Mutex`, or `serial_test`).
     reset_dead_letter_count();
     let initial = dead_letter_count();
 
@@ -231,7 +239,7 @@ rsactor uses `tracing` as its logging infrastructure (since v0.12).
 
 ```toml
 [dependencies]
-rsactor = "0.12"
+rsactor = "0.18"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
@@ -251,6 +259,7 @@ fn main() {
 |---------|-------------|
 | (default) | `tracing` crate included for logging (`warn!`, `error!`, etc.) |
 | `tracing` | Enables `#[tracing::instrument]` for detailed spans |
+| `log` | Enables tracing's own `log` bridge (tracing's `log` feature, not `log-always`), so tracing's forwarding rules apply unchanged: the `log` records tracing produces for its events and spans reach the `log` crate — see [Emitting `log` Records](https://docs.rs/tracing/0.1/tracing/#emitting-log-records) for the exact set, targets and levels. Cargo unifies the feature across the build, so this covers every crate that emits through `tracing`, not only rsactor. Forwarding runs only until a `tracing` dispatcher (global or scoped) is first set in the process, and then stays off for the rest of the process, even after a scoped dispatcher's guard is dropped. rsactor's own spans exist only with the `tracing` feature |
 | `metrics` | Enables actor performance metrics |
 | `test-utils` | Enables `dead_letter_count()` for testing |
 | `deadlock-detection` | Runtime deadlock detection for `ask` cycles (see [Deadlock Detection](deadlock_detection.md)) |
@@ -259,10 +268,14 @@ fn main() {
 
 | Level | What's Logged |
 |-------|---------------|
-| `ERROR` | Lifecycle errors; an actor task ending by a panic (the runtime does not recover from panics) |
+| `ERROR` | Lifecycle errors; an actor task ending by a panic, or dropped while its thread unwinds another panic (e.g. a runtime dropped by a panicking test) — the runtime does not recover from panics |
 | `WARN` | Dead letters, timeout events |
-| `INFO` | Actor lifecycle events (when `tracing` feature enabled) |
-| `DEBUG` | Message send/receive details (when `tracing` feature enabled) |
+| `INFO` | Actor lifecycle events |
+| `DEBUG` | Message send/receive details |
+
+These events are emitted with or without the `tracing` feature. The `tracing`
+feature adds spans (`#[instrument]` and one per lifecycle hook and message)
+and a `DEBUG` event with each message's processing time.
 
 ### Environment Variable
 
@@ -315,7 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter("rsactor=warn")
         .init();
 
-    let (actor_ref, handle) = spawn::<WorkerActor>(());
+    let (actor_ref, handle) = spawn::<WorkerActor>(WorkerActor);
 
     // Normal operation
     actor_ref.tell(Work { id: 1 }).await?;

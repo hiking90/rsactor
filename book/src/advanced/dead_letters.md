@@ -9,6 +9,8 @@ Dead letters are messages that could not be delivered to their intended recipien
 | `ActorStopped` | Actor's mailbox channel closed | Sending to a stopped actor |
 | `Timeout` | Send or ask operation exceeded timeout | `tell_with_timeout` expired |
 | `ReplyDropped` | Reply channel dropped before response | Actor crashed during `ask` processing |
+| `DiscardedAtShutdown` | A `tell` (or an `ask` whose caller already gave up) was accepted into the mailbox, but the actor terminated before processing it; a still-awaited `ask` is recorded as `ReplyDropped` instead | `tell` still queued when `kill()` runs |
+| `RuntimeUnavailable` | A `blocking_*` call could not start its dedicated thread or runtime | Process thread limit reached (`EAGAIN`) |
 
 ## Observability
 
@@ -49,18 +51,21 @@ Enable the `test-utils` feature to count dead letters in tests:
 
 ```toml
 [dev-dependencies]
-rsactor = { version = "0.14", features = ["test-utils"] }
+rsactor = { version = "0.18", features = ["test-utils"] }
 ```
 
 ```rust
-use rsactor::{dead_letter_count, reset_dead_letter_count};
+use rsactor::{dead_letter_count, reset_dead_letter_count, spawn};
 
 #[tokio::test]
 async fn test_dead_letters() {
+    // The counter is process-global and `cargo test` runs tests in parallel:
+    // serialize this test against every other test that records dead letters
+    // (e.g. a shared `tokio::sync::Mutex`, or `serial_test`).
     reset_dead_letter_count();
 
     let (actor_ref, handle) = spawn::<MyActor>(args);
-    actor_ref.stop().await.unwrap();
+    actor_ref.stop().await;
     handle.await.unwrap();
 
     // Sending to a stopped actor creates a dead letter
@@ -76,13 +81,13 @@ async fn test_dead_letters() {
 Dead letter tracking works seamlessly with rsActor's error types:
 
 ```rust
-match actor_ref.tell(msg).await {
+match actor_ref.tell_with_timeout(msg, timeout).await {
     Ok(_) => { /* delivered successfully */ }
     Err(rsactor::Error::Send { .. }) => {
         // Dead letter was automatically logged
         // Error contains actor identity and details
     }
-    Err(rsactor::Error::Timeout { .. }) => {
+    Err(e @ rsactor::Error::Timeout { .. }) => {
         // Dead letter recorded with Timeout reason
         // Check if error is retryable
         if e.is_retryable() {

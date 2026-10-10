@@ -73,8 +73,9 @@ pub trait ActorControl: Send + Sync {
 
     /// Gracefully stops the actor.
     ///
-    /// The actor will process all remaining messages in its mailbox before stopping.
-    /// Idempotent: a closed mailbox is treated as "stop already in flight".
+    /// The actor processes the messages queued ahead of the stop signal, then
+    /// stops; messages sent after the signal are discarded and recorded as
+    /// dead letters. Idempotent: a closed mailbox is treated as "stop already in flight".
     ///
     /// The returned future resolves once the stop signal is **enqueued**, not
     /// when the actor has finished stopping. To observe completion, follow up
@@ -93,7 +94,7 @@ pub trait ActorControl: Send + Sync {
     /// processed (the physical drain happens after `on_stop(killed = true)`
     /// returns). **First signal wins**: if a graceful
     /// stop has already been dequeued, the actor completes that graceful stop
-    /// (draining its mailbox) and this kill is never observed — and a handler
+    /// (draining its priority channel and running `on_stop(killed = false)`) and this kill is never observed — and a handler
     /// already executing always runs to completion first; see
     /// [`ActorRef::kill`](crate::ActorRef::kill) for the full semantics.
     /// Idempotent: a closed or full terminate channel is treated as
@@ -106,7 +107,8 @@ pub trait ActorControl: Send + Sync {
     /// Type-erased counterpart of
     /// [`ActorRef::wait_stopped`](crate::ActorRef::wait_stopped); it signals
     /// completion only and cannot return the actor's
-    /// [`ActorResult`](crate::ActorResult).
+    /// [`ActorResult`](crate::ActorResult). Shutdown dead-letter recording
+    /// may still be in progress when it resolves; see that method.
     fn wait_stopped(&self) -> BoxFuture<'_, ()>;
 
     /// Downgrades to a weak control reference.

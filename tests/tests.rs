@@ -3,7 +3,7 @@
 
 use futures::stream::StreamExt;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::debug;
 
@@ -295,6 +295,8 @@ struct LifecycleErrorArgs {
     on_start_attempted: Arc<Mutex<bool>>,
     on_run_attempted: Arc<Mutex<bool>>,
     on_stop_attempted: Arc<Mutex<bool>>,
+    /// Notified by `on_idle` after it sets `on_run_attempted`.
+    on_run_signal: Arc<Notify>,
 }
 
 struct LifecycleErrorActor {
@@ -304,6 +306,16 @@ struct LifecycleErrorActor {
     on_start_attempted: Arc<Mutex<bool>>,
     on_run_attempted: Arc<Mutex<bool>>,
     on_stop_attempted: Arc<Mutex<bool>>,
+    on_run_signal: Arc<Notify>,
+}
+
+/// Waits until `LifecycleErrorActor::on_idle` has run at least once.
+/// `notify_one` stores a permit when no task is waiting yet, so the signal
+/// is not lost if `on_idle` runs before this is awaited.
+async fn wait_for_on_run(signal: &Notify) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), signal.notified())
+        .await
+        .expect("on_idle should have run within 10s");
 }
 
 impl Actor for LifecycleErrorActor {
@@ -328,12 +340,14 @@ impl Actor for LifecycleErrorActor {
                 on_start_attempted: args.on_start_attempted,
                 on_run_attempted: args.on_run_attempted,
                 on_stop_attempted: args.on_stop_attempted,
+                on_run_signal: args.on_run_signal,
             })
         }
     }
 
     async fn on_idle(&mut self, _: (), _actor_ref: &ActorWeak<Self>) -> Result<(), Self::Error> {
         *self.on_run_attempted.lock().await = true;
+        self.on_run_signal.notify_one();
         if self.fail_on_run {
             Err(anyhow::anyhow!("simulated on_idle failure"))
         } else {
@@ -374,6 +388,7 @@ async fn test_actor_fail_on_start() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
     let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
@@ -406,6 +421,7 @@ async fn test_actor_fail_on_run() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
     let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
@@ -442,6 +458,17 @@ async fn test_set_default_mailbox_capacity_to_zero() {
     assert!(
         matches!(err, Error::MailboxCapacity { message, .. } if message == "Global default mailbox capacity must be greater than 0"),
         "Error message for zero capacity didn't match"
+    );
+}
+
+#[tokio::test]
+async fn test_set_default_mailbox_capacity_above_tokio_limit() {
+    // Rejected before the once-only slot is touched, so this is independent
+    // of whether another test has set the default.
+    let result = set_default_mailbox_capacity(tokio::sync::Semaphore::MAX_PERMITS + 1);
+    assert!(
+        matches!(result, Err(Error::MailboxCapacity { message, .. }) if message.contains("MAX_PERMITS")),
+        "capacity above tokio's channel limit must be rejected, got {result:?}"
     );
 }
 
@@ -647,11 +674,10 @@ async fn test_spawn_and_stop_dummy_actor() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_actor_ref_blocking_tell() {
-    let (actor_ref, handle, counter, last_processed) = setup_actor().await;
+    let (actor_ref, handle, counter, _last_processed) = setup_actor().await;
 
     let actor_ref_clone = actor_ref.clone();
     let counter_clone = counter.clone();
-    let last_processed_clone = last_processed.clone();
 
     // Spawn a blocking task to call blocking_tell
     let join_handle = tokio::task::spawn_blocking(move || {
@@ -661,13 +687,12 @@ async fn test_actor_ref_blocking_tell() {
     });
 
     join_handle.await.expect("Blocking task panicked");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await; // Allow time for processing
+    // `blocking_tell` only guarantees the enqueue. The mailbox is FIFO, so an
+    // `ask` sent afterwards replies only once the tell has been handled.
+    let reported: i32 = actor_ref.ask(GetCounterMsg).await.unwrap();
 
+    assert_eq!(reported, 7);
     assert_eq!(*counter_clone.lock().await, 7);
-    assert_eq!(
-        *last_processed_clone.lock().await,
-        Some("UpdateCounterMsg".to_string())
-    );
 
     actor_ref.stop().await;
     handle.await.expect("Actor task failed");
@@ -762,6 +787,13 @@ async fn test_actor_ref_blocking_ask_no_timeout() {
 #[tokio::test]
 async fn test_actor_ref_kill_multiple_times() {
     let (actor_ref, handle, _counter, _lpmt) = setup_actor().await;
+
+    // Queue a message ahead of the kills, as in `test_actor_ref_kill`, so the
+    // counter assertion below has something to reject.
+    actor_ref
+        .tell(UpdateCounterMsg(10))
+        .await
+        .expect("Tell UpdateCounterMsg failed");
 
     // Call kill multiple times
     actor_ref.kill();
@@ -939,11 +971,13 @@ async fn test_actor_fail_on_stop_during_graceful_stop() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
+    let on_run_signal = args.on_run_signal.clone();
     let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
-    // Wait for actor to start
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait until on_idle has run at least once
+    wait_for_on_run(&on_run_signal).await;
 
     // Gracefully stop the actor - this should trigger on_stop failure
     actor_ref.stop().await;
@@ -1000,11 +1034,13 @@ async fn test_actor_fail_on_stop_during_kill() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
+    let on_run_signal = args.on_run_signal.clone();
     let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
-    // Wait for actor to start
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait until on_idle has run at least once
+    wait_for_on_run(&on_run_signal).await;
 
     // Kill the actor - this should trigger on_stop failure
     actor_ref.kill();
@@ -1061,6 +1097,7 @@ async fn test_actor_fail_on_stop_after_on_run_failure() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
     let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
@@ -1123,6 +1160,7 @@ async fn test_actor_on_stop_success_after_on_run_failure() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
     let (_actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
@@ -1184,11 +1222,13 @@ async fn test_actor_on_stop_success_during_graceful_stop() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
+    let on_run_signal = args.on_run_signal.clone();
     let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
-    // Wait for actor to start
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait until on_idle has run at least once
+    wait_for_on_run(&on_run_signal).await;
 
     // Gracefully stop the actor - this should succeed
     actor_ref.stop().await;
@@ -1236,11 +1276,13 @@ async fn test_actor_on_stop_success_during_kill() {
         on_start_attempted: on_start_attempted.clone(),
         on_run_attempted: on_run_attempted.clone(),
         on_stop_attempted: on_stop_attempted.clone(),
+        on_run_signal: Arc::new(Notify::new()),
     };
+    let on_run_signal = args.on_run_signal.clone();
     let (actor_ref, handle) = spawn_idle::<LifecycleErrorActor>(args);
 
-    // Wait for actor to start
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Wait until on_idle has run at least once
+    wait_for_on_run(&on_run_signal).await;
 
     // Kill the actor - this should succeed
     actor_ref.kill();

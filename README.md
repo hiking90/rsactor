@@ -252,9 +252,15 @@ Install a `tracing` subscriber to see them; nothing else is needed.
 
 Applications that use `log` and `env_logger` and have no `tracing` dependency
 see none of the above by default: an actor can fail its `on_start` and leave no
-record. The `log` feature enables tracing's `log` bridge, which emits a `log`
-record for every event **while no `tracing` subscriber is installed**. Adding a
-subscriber later turns the bridge back off, so events are never duplicated.
+record. The `log` feature enables tracing's own `log` bridge (tracing's `log`
+feature, not `log-always`), so tracing's forwarding rules apply unchanged: the
+`log` records tracing produces for its events and spans reach the `log` crate
+(see [Emitting `log` Records](https://docs.rs/tracing/0.1/tracing/#emitting-log-records)
+for the exact set, targets and levels), from every crate in the build that
+emits through `tracing`, **until a `tracing` dispatcher (global or scoped) is
+first set in the process**. rsactor creates spans only with the `tracing`
+feature. Adding a subscriber later turns the bridge off for the rest of the
+process, so events are never duplicated.
 
 ```toml
 [dependencies]

@@ -17,13 +17,15 @@
 //! - The reply channel was dropped before responding
 //! - The message was accepted but the actor terminated before processing it
 //!   (see [`DeadLetterReason::DiscardedAtShutdown`])
+//! - A `blocking_*` call could not start the thread or runtime it sends from
+//!   (see [`DeadLetterReason::RuntimeUnavailable`])
 //!
 //! # Observability
 //!
 //! Dead letters are always logged with structured fields via `tracing` (the
 //! crate is a required dependency; no cargo feature gates this). With the
-//! `log` feature enabled and no `tracing` subscriber installed, the same event
-//! also reaches a [`log`](https://crates.io/crates/log) logger:
+//! `log` feature enabled and no `tracing` dispatcher set yet in the process, the
+//! same event also reaches a [`log`](https://crates.io/crates/log) logger:
 //!
 //! ```text
 //! WARN dead_letter: Dead letter: message could not be delivered
@@ -43,7 +45,7 @@
 //! | Successful message delivery (hot path) | **Zero** - no code executes |
 //! | Dead letter, no tracing subscriber | ~5-50 ns (fast check + early return) |
 //! | Dead letter, subscriber active | ~1-10 μs (logging + serialization) |
-//! | Dead letter, `log` feature, no subscriber, logger installed | ~1-10 μs (the early return above is replaced by formatting a `log` record) |
+//! | Dead letter, `log` feature, no dispatcher ever set, logger installed | ~1-10 μs (the early return above is replaced by formatting a `log` record) |
 //!
 //! Key optimizations:
 //! - `#[cold]` attribute hints compiler to optimize hot path
@@ -135,7 +137,7 @@ pub enum DeadLetterReason {
     /// **no reply was observed in time** — the message may well have been
     /// delivered and fully processed, with any side effects applied, and only
     /// the reply was late. Do not treat an ask-timeout dead letter (or
-    /// [`dead_letter_count`](crate::dead_letter_count)) as proof the handler
+    /// `dead_letter_count()` (`test-utils` feature)) as proof the handler
     /// did not run — in particular, do not blindly retry non-idempotent
     /// operations on it.
     Timeout,
@@ -151,11 +153,32 @@ pub enum DeadLetterReason {
     ///
     /// This covers messages still queued when the actor was killed, and
     /// messages admitted after a graceful stop signal (which the actor does
-    /// not process). The sender observed a successful send (`Ok`), so this
-    /// receiver-side record is the only trace of the loss. Recording is
-    /// best-effort: a send racing the final shutdown drain can still slip
-    /// through unrecorded.
+    /// not process). Only `tell` envelopes, and `ask` envelopes whose caller
+    /// has already given up (reply receiver closed), are recorded here. An
+    /// `ask` whose caller is still waiting is not: dropping its reply channel
+    /// wakes the caller, which records [`ReplyDropped`](Self::ReplyDropped)
+    /// instead.
+    ///
+    /// For a `tell`, the sender observed a successful send (`Ok`), so this
+    /// receiver-side record is the only trace of the loss. An `ask` that
+    /// timed out after admission (`ask_with_timeout`) already carries a
+    /// caller-side [`Timeout`](Self::Timeout) record, so the same message is
+    /// recorded twice. Recording is best-effort: a send racing the final
+    /// shutdown drain can still slip through unrecorded.
     DiscardedAtShutdown,
+
+    /// A `blocking_*` call could not start the dedicated thread or temporary
+    /// Tokio runtime it needs, so the message was dropped before reaching the
+    /// mailbox.
+    ///
+    /// Only the slow path of `blocking_tell` / `blocking_tell_priority` (full
+    /// mailbox or priority slot, with a timeout) and of `blocking_ask` (with a
+    /// timeout) / `blocking_ask_priority`, called outside a multi-thread
+    /// runtime, uses such a thread. Spawning it fails when the process hits
+    /// its thread limit (`EAGAIN`) or cannot allocate the thread's stack. The
+    /// caller receives [`Error::Runtime`](crate::Error::Runtime) carrying the
+    /// underlying [`std::io::Error`].
+    RuntimeUnavailable,
 }
 
 impl std::fmt::Display for DeadLetterReason {
@@ -165,6 +188,7 @@ impl std::fmt::Display for DeadLetterReason {
             DeadLetterReason::Timeout => write!(f, "timeout"),
             DeadLetterReason::ReplyDropped => write!(f, "reply dropped"),
             DeadLetterReason::DiscardedAtShutdown => write!(f, "discarded at shutdown"),
+            DeadLetterReason::RuntimeUnavailable => write!(f, "runtime unavailable"),
         }
     }
 }
@@ -189,7 +213,8 @@ impl std::fmt::Display for DeadLetterReason {
 ///   the [`Error::Timeout`](crate::Error::Timeout) variant can never drift.
 ///
 ///   **Caller-side records** ([`DeadLetterReason::ActorStopped`],
-///   [`DeadLetterReason::Timeout`], [`DeadLetterReason::ReplyDropped`]) name
+///   [`DeadLetterReason::Timeout`], [`DeadLetterReason::ReplyDropped`],
+///   [`DeadLetterReason::RuntimeUnavailable`]) name
 ///   the exact public API that failed, so the `blocking_*` variants keep their
 ///   own labels instead of folding into their async counterparts and a
 ///   dashboard can tell a blocking call site from an async one; a query that

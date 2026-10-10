@@ -13,7 +13,7 @@ readme = "README.md"
 keywords = ["actor", "rust", "framework"]
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.22", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["time"] }
 anyhow = "1.0"
 futures = "0.3"
@@ -56,10 +56,13 @@ default = []
 # `tracing` feature now ONLY controls #[tracing::instrument] attributes.
 # The tracing crate itself is ALWAYS available for logging (warn!, error!, etc.)
 tracing = []
-# Forward every `tracing` event to the `log` crate when NO tracing subscriber is
-# installed. This is tracing's own `log` feature, not `log-always`: with a
-# subscriber active the bridge stays off, so applications that use tracing never
-# see duplicated records. Lets `log` + env_logger applications observe dead
+# Enable tracing's own `log` bridge: the `log` records tracing produces for its
+# events and spans (tracing's docs list the exact set) reach the `log` crate,
+# from every crate in the build that emits through `tracing`, until a tracing
+# dispatcher (global or scoped) is first set in the process. This is tracing's
+# `log` feature, not `log-always`: once a dispatcher has been set the bridge stays off
+# for the rest of the process, so applications that use tracing never see
+# duplicated records. Lets `log` + env_logger applications observe dead
 # letters and lifecycle errors without depending on tracing themselves.
 log = ["tracing/log"]
 metrics = []     # Actor performance metrics (message count, processing time, etc.)

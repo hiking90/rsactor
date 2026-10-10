@@ -191,7 +191,11 @@ pub enum Error {
     /// Emitted when a `blocking_*` call has to run on a dedicated thread with a
     /// temporary Tokio runtime (because the caller is not already inside a
     /// multi-thread runtime) and that runtime fails to build, or its worker
-    /// thread panics. Actor *lifecycle* failures (`on_start` / `on_idle` /
+    /// thread panics. When the thread cannot be spawned or the runtime cannot
+    /// be built, the message never reached the mailbox and is also recorded as
+    /// a [`RuntimeUnavailable`](crate::dead_letter::DeadLetterReason::RuntimeUnavailable)
+    /// dead letter; a worker-thread panic is not recorded, since the message
+    /// may already have been admitted. Actor *lifecycle* failures (`on_start` / `on_idle` /
     /// `on_stop`) are **not** reported here — they surface through
     /// [`ActorResult::Failed`](crate::ActorResult) carrying the actor's own
     /// error type.
@@ -494,7 +498,7 @@ impl Error {
                 "Prefer calling blocking_* from within an existing multi-thread runtime, or use the async ask()/tell() APIs",
             ],
             Error::MailboxCapacity { .. } => &[
-                "Mailbox capacity must be greater than 0",
+                "Mailbox capacity must be greater than 0 and at most tokio::sync::Semaphore::MAX_PERMITS",
                 "set_default_mailbox_capacity() can only be called once",
                 "Call it early in main() before spawning actors",
                 "To give one actor type its own capacity, set Actor::MAILBOX_CAPACITY instead - it takes precedence over this process-wide default",
