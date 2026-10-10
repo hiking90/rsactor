@@ -1521,3 +1521,88 @@ async fn test_error_handling_generic() {
     let response: String = actor_ref.ask(msg).await.unwrap();
     assert_eq!(response, "Processed 2 successful operations out of 4");
 }
+
+// A `#[cfg]` on a `#[handler]` method must gate the generated
+// `impl Message<_>` as well. `cfg(any())` is always false and `cfg(test)` is
+// true in a test build, so this file compiles only if the macro copies the cfg onto
+// the impl: otherwise the impl for the stripped method references a missing
+// method and a missing message type.
+#[derive(rsactor::Actor)]
+struct CfgGatedHandlerActor;
+
+struct CfgOnMsg;
+
+#[cfg(any())]
+struct CfgOffMsg;
+
+#[message_handlers]
+impl CfgGatedHandlerActor {
+    #[cfg(test)]
+    #[handler]
+    async fn handle_cfg_on(&mut self, _msg: CfgOnMsg, _: &ActorRef<Self>) -> u32 {
+        7
+    }
+
+    #[cfg(any())]
+    #[handler]
+    async fn handle_cfg_off(&mut self, _msg: CfgOffMsg, _: &ActorRef<Self>) -> u32 {
+        0
+    }
+}
+
+#[tokio::test]
+async fn test_cfg_gated_handler() {
+    let (actor_ref, _join_handle) = spawn::<CfgGatedHandlerActor>(CfgGatedHandlerActor);
+    let reply: u32 = actor_ref.ask(CfgOnMsg).await.unwrap();
+    assert_eq!(reply, 7);
+}
+
+// A `where` clause on a `#[handler]` method must reach the generated
+// `impl Message<_>`, which calls the method. `T: Clone` is not declared on the
+// impl block, so without the copy the generated call fails with E0277.
+// `Self: 'a` names the method's own lifetime, which is undeclared on the impl,
+// so it must stay on the method only.
+#[derive(rsactor::Actor, Debug)]
+struct WhereClauseHandlerActor<T>
+where
+    T: Send + std::fmt::Debug + 'static,
+{
+    value: T,
+}
+
+struct WhereGet;
+struct WhereLifetime;
+
+#[message_handlers]
+impl<T> WhereClauseHandlerActor<T>
+where
+    T: Send + std::fmt::Debug + 'static,
+{
+    #[handler]
+    async fn handle_where_get(&mut self, _msg: WhereGet, _: &ActorRef<Self>) -> T
+    where
+        T: Clone,
+    {
+        self.value.clone()
+    }
+
+    #[handler]
+    async fn handle_where_lifetime<'a>(&mut self, _msg: WhereLifetime, _: &'a ActorRef<Self>) -> u32
+    where
+        Self: 'a,
+    {
+        1
+    }
+}
+
+#[tokio::test]
+async fn test_handler_where_clause() {
+    let (actor_ref, _join_handle) =
+        spawn::<WhereClauseHandlerActor<String>>(WhereClauseHandlerActor {
+            value: "kept".to_string(),
+        });
+    let value: String = actor_ref.ask(WhereGet).await.unwrap();
+    assert_eq!(value, "kept");
+    let one: u32 = actor_ref.ask(WhereLifetime).await.unwrap();
+    assert_eq!(one, 1);
+}

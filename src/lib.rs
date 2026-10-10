@@ -42,8 +42,9 @@
 //!   errors are emitted whether or not any cargo feature is enabled:
 //!   - The `tracing` feature adds [`#[tracing::instrument]`](macro@tracing::instrument)
 //!     spans and per-message timing on top
-//!   - The `log` feature forwards those events to the [`log`](https://crates.io/crates/log)
-//!     crate when no `tracing` subscriber is installed
+//!   - The `log` feature enables tracing's own `log` bridge, which forwards
+//!     tracing's records to the [`log`](https://crates.io/crates/log) crate
+//!     until a `tracing` dispatcher is first set in the process
 //!   - Structured, non-redundant logs for easier debugging and monitoring
 //! - **Dead Letter Tracking**: Automatic logging of undelivered messages via [`DeadLetterReason`]:
 //!   - All failed message deliveries are logged with actor and message type information
@@ -66,7 +67,8 @@
 //! ### Message Handling with `#[message_handlers]`
 //!
 //! rsActor uses the `#[message_handlers]` attribute macro combined with `#[handler]` method attributes
-//! for message handling. This is **required** for all actors and offers several advantages:
+//! for message handling. This is the recommended approach (implementing [`Message`] directly is
+//! also supported) and offers several advantages:
 //!
 //! - **Selective Processing**: Only methods marked with `#[handler]` are treated as message handlers.
 //! - **Clean Separation**: Regular methods can coexist with message handlers within the same `impl` block.
@@ -262,8 +264,14 @@
 //! Applications built on [`log`](https://crates.io/crates/log) (`env_logger`,
 //! `fern`, …) and with no `tracing` dependency of their own would otherwise see
 //! nothing — an actor can fail its `on_start` and leave no record. The `log`
-//! feature enables tracing's own `log` bridge, which emits a `log` record for
-//! every event **as long as no `tracing` subscriber is installed**:
+//! feature enables tracing's own `log` bridge, so tracing's forwarding rules
+//! apply unchanged: the `log` records tracing produces for its events and spans
+//! (see [Emitting `log` Records](https://docs.rs/tracing/0.1/tracing/#emitting-log-records)
+//! for the exact set, targets and levels) reach the `log` crate, from every
+//! crate in the build that emits through `tracing`, **until a `tracing`
+//! dispatcher (global or scoped) is first set in the process**. rsactor creates
+//! spans only with the `tracing` feature (see
+//! [Instrumentation spans](#instrumentation-spans)):
 //!
 //! ```toml
 //! [dependencies]
@@ -279,8 +287,9 @@
 //! ```
 //!
 //! The bridge is tracing's `log` feature, not `log-always`: installing a
-//! `tracing` subscriber turns it back off, so an application is never fed both
-//! forms of the same event.
+//! `tracing` subscriber turns it off for the rest of the process (dropping a
+//! scoped default's guard does not turn it back on), so an application is never
+//! fed both forms of the same event.
 //!
 //! ## Instrumentation spans
 //!
@@ -614,10 +623,21 @@ pub const IDLE_SUBSCRIBE_CHANNEL_CAPACITY: usize = 32;
 /// type left `MAILBOX_CAPACITY` at `None`. Prefer the trait constant for a
 /// capacity that belongs to one actor type; this setter is for shifting the
 /// baseline of a whole process at once.
+///
+/// # Errors
+///
+/// Returns [`Error::MailboxCapacity`] if `size` is 0, if `size` exceeds
+/// [`tokio::sync::Semaphore::MAX_PERMITS`] (the largest capacity a Tokio
+/// mpsc channel accepts), or if a default has already been set.
 pub fn set_default_mailbox_capacity(size: usize) -> Result<()> {
     if size == 0 {
         return Err(Error::MailboxCapacity {
             message: "Global default mailbox capacity must be greater than 0",
+        });
+    }
+    if size > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err(Error::MailboxCapacity {
+            message: "Global default mailbox capacity must not exceed tokio::sync::Semaphore::MAX_PERMITS",
         });
     }
 
@@ -716,9 +736,13 @@ impl SpawnOptions {
     ///
     /// # Panics
     ///
-    /// Panics if `n == 0`.
+    /// Panics if `n == 0` or `n > tokio::sync::Semaphore::MAX_PERMITS`.
     pub fn mailbox_capacity(mut self, n: usize) -> Self {
         assert!(n > 0, "Mailbox capacity must be greater than 0");
+        assert!(
+            n <= tokio::sync::Semaphore::MAX_PERMITS,
+            "Mailbox capacity must not exceed tokio::sync::Semaphore::MAX_PERMITS"
+        );
         self.mailbox_capacity = Some(n);
         self
     }
@@ -755,8 +779,8 @@ impl SpawnOptions {
     /// When enabled, the actor gains the [`subscribe_idle`](crate::ActorRef::subscribe_idle)
     /// channel and its runtime drives [`Actor::on_idle`] for every
     /// event yielded by a subscribed stream. When **disabled** (the default), no such channel
-    /// is created: `subscribe_idle` returns [`Error::IdleChannelNotEnabled`] and `on_idle` is
-    /// never called.
+    /// is created: `subscribe_idle` fails with an [`IdleSubscribeError`] carrying
+    /// [`Error::IdleChannelNotEnabled`] and `on_idle` is never called.
     ///
     /// Idle support is off by default because it costs an always-active branch in the
     /// runtime's `select!` loop — a per-message overhead that only actors using `on_idle`
@@ -780,9 +804,13 @@ impl SpawnOptions {
     ///
     /// # Panics
     ///
-    /// Panics if `n == 0`.
+    /// Panics if `n == 0` or `n > tokio::sync::Semaphore::MAX_PERMITS`.
     pub fn with_idle_capacity(mut self, n: usize) -> Self {
         assert!(n > 0, "Idle-subscribe capacity must be greater than 0");
+        assert!(
+            n <= tokio::sync::Semaphore::MAX_PERMITS,
+            "Idle-subscribe capacity must not exceed tokio::sync::Semaphore::MAX_PERMITS"
+        );
         self.idle_enabled = true;
         self.idle_capacity = n;
         self
@@ -808,7 +836,8 @@ impl Default for SpawnOptions {
 /// # Panics
 ///
 /// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]),
-/// or if `T::MAILBOX_CAPACITY` is `Some(0)`.
+/// or if `T::MAILBOX_CAPACITY` is `Some(0)` or exceeds
+/// [`tokio::sync::Semaphore::MAX_PERMITS`].
 pub fn spawn<T: Actor>(args: T::Args) -> (ActorRef<T>, tokio::task::JoinHandle<ActorResult<T>>) {
     spawn_with_options(args, SpawnOptions::new())
 }
@@ -823,7 +852,8 @@ pub fn spawn<T: Actor>(args: T::Args) -> (ActorRef<T>, tokio::task::JoinHandle<A
 ///
 /// # Panics
 ///
-/// Panics if `mailbox_capacity == 0` (via
+/// Panics if `mailbox_capacity == 0` or exceeds
+/// [`tokio::sync::Semaphore::MAX_PERMITS`] (via
 /// [`SpawnOptions::mailbox_capacity`]), or if called outside a Tokio runtime
 /// context. Note the asymmetry with [`set_default_mailbox_capacity`], which
 /// returns an `Err` for `0`: a literal zero capacity at a spawn site is a
@@ -850,8 +880,9 @@ pub fn spawn_with_mailbox_capacity<T: Actor>(
 /// # Panics
 ///
 /// Panics if called outside a Tokio runtime context (this uses [`tokio::spawn`]),
-/// or if the resolved capacity is 0, which only `T::MAILBOX_CAPACITY = Some(0)`
-/// can produce — every other path rejects 0 before reaching here.
+/// or if the resolved capacity is 0 or exceeds
+/// [`tokio::sync::Semaphore::MAX_PERMITS`], which only `T::MAILBOX_CAPACITY`
+/// can produce — every other path rejects both before reaching here.
 pub fn spawn_with_options<T: Actor>(
     args: T::Args,
     opts: SpawnOptions,
@@ -909,13 +940,26 @@ pub fn spawn_with_options<T: Actor>(
         metrics,
     );
 
-    let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
-        args,
-        actor_ref.clone(),
+    // Fail on a missing runtime before the guard below exists. `tokio::spawn`
+    // panics for that too, but tokio 1.22 (the declared minimum) panics while
+    // still holding the task future, so the guard would be dropped during
+    // that unwind and log a panic record for a task that never existed.
+    let _ = tokio::runtime::Handle::current();
+
+    // Build the drain guard here, outside the task future: a task cancelled
+    // before its first poll never runs the future's body, but it still drops
+    // this captured argument.
+    let chans = crate::actor::LifecycleChannels::new(
+        actor_id,
         mailbox_rx,
         priority_rx,
         terminate_rx,
         idle_subscribe_rx,
+    );
+    let join_handle = tokio::spawn(crate::actor::run_actor_lifecycle(
+        args,
+        actor_ref.clone(),
+        chans,
     ));
 
     (actor_ref, join_handle)

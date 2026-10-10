@@ -281,6 +281,30 @@ async fn abort_does_not_log_panic_record() {
     );
 }
 
+/// `spawn` outside a runtime panics before any actor task exists, so there is
+/// no task to report. This checks only the observable outcome and is not a
+/// regression test for the runtime check in `spawn_with_options`: the record
+/// it looks for appears only on tokio 1.22 (the declared minimum), which
+/// panics in `spawn` while still holding the task future. Newer tokio,
+/// including the lockfile's version that CI runs, drops the future before
+/// panicking, so this passes with or without that check. The unit test
+/// `actor::tests::spawn_outside_runtime_panics_before_building_the_guard`
+/// checks the ordering itself on any tokio.
+#[test]
+fn spawn_outside_runtime_does_not_log_panic_record() {
+    let _serial = serial_lock().blocking_lock();
+    let (records, _guard) = capture(None);
+
+    let spawned = std::panic::catch_unwind(|| spawn_fragile(PanicAt::Handler));
+
+    assert!(spawned.is_err(), "spawn outside a Tokio runtime must panic");
+    assert!(
+        panic_records(&records).is_empty(),
+        "a spawn that never created a task must not produce a panic record: {:?}",
+        records.lock().unwrap()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Around the unwind
 // ---------------------------------------------------------------------------

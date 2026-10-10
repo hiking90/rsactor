@@ -145,6 +145,33 @@ async fn tells_pending_at_kill_are_recorded() {
     );
 }
 
+/// Aborting the actor task before its first poll still drains the mailbox.
+/// On this `current_thread` runtime the spawned task does not run until the
+/// test task yields, and the `tell`s below complete without yielding, so the
+/// abort drops the task future unresumed.
+#[tokio::test]
+async fn tells_queued_before_first_poll_are_recorded_on_abort() {
+    let _serial = serial_lock().lock().await;
+
+    let (_entered, _proceed, actor_ref, handle) = spawn_wedged();
+
+    let before = dead_letter_count();
+    for _ in 0..3 {
+        actor_ref.tell(Note).await.unwrap(); // accepted: sender sees Ok
+    }
+    handle.abort();
+
+    let err = handle.await.expect_err("an aborted task must not complete");
+    assert!(err.is_cancelled());
+
+    let delta = dead_letter_count() - before;
+    assert_eq!(
+        delta, 3,
+        "tells queued before the actor task was first polled must be recorded \
+         as DiscardedAtShutdown when the task is aborted"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // subscribe_idle fails fast once the actor has begun stopping
 // ---------------------------------------------------------------------------

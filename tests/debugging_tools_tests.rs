@@ -551,6 +551,10 @@ fn test_dead_letter_reason_display() {
         format!("{}", DeadLetterReason::ReplyDropped),
         "reply dropped"
     );
+    assert_eq!(
+        format!("{}", DeadLetterReason::RuntimeUnavailable),
+        "runtime unavailable"
+    );
 }
 
 // NOTE: test_reset_dead_letter_count was moved to tests/dead_letter_reset_test.rs

@@ -70,7 +70,12 @@ fn assert_current_thread_can_block() {
 /// thread/runtime/join boilerplate so all slow paths report errors identically:
 /// a failure to spawn the thread or to build the temporary runtime becomes
 /// `Error::Runtime` carrying the underlying [`std::io::Error`] as its
-/// [`source`](std::error::Error::source).
+/// [`source`](std::error::Error::source). In both cases `fut` is dropped
+/// unpolled, so the message never reached the mailbox; that loss is recorded
+/// as a [`RuntimeUnavailable`](crate::dead_letter::DeadLetterReason::RuntimeUnavailable)
+/// dead letter under `operation` and `message_type`. A worker-thread panic is
+/// not recorded: `fut` has been polled by then, so the message may already
+/// have been admitted.
 ///
 /// With `deadlock-detection` enabled, the calling actor's task-local identity
 /// is captured here and re-established inside the new runtime. This is
@@ -83,10 +88,54 @@ fn assert_current_thread_can_block() {
 /// (preserving the documented panic-on-detection contract); any other
 /// worker-thread panic is reported as `Error::Runtime` with `panic_msg` and
 /// the panic payload in its details.
-fn run_blocking_with_runtime<F, R>(identity: Identity, panic_msg: &'static str, fut: F) -> Result<R>
+fn run_blocking_with_runtime<F, R>(
+    identity: Identity,
+    operation: Operation,
+    message_type: &'static str,
+    panic_msg: &'static str,
+    fut: F,
+) -> Result<R>
 where
     F: std::future::Future<Output = Result<R>> + Send + 'static,
     R: Send + 'static,
+{
+    run_blocking_on(
+        identity,
+        operation,
+        message_type,
+        panic_msg,
+        fut,
+        |body| {
+            std::thread::Builder::new()
+                .name("rsactor-blocking".to_string())
+                .spawn(body)
+        },
+        || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+        },
+    )
+}
+
+/// The body of [`run_blocking_with_runtime`] with thread spawning and runtime
+/// building passed in, so tests can make either step fail.
+fn run_blocking_on<F, R, S, B>(
+    identity: Identity,
+    operation: Operation,
+    message_type: &'static str,
+    panic_msg: &'static str,
+    fut: F,
+    spawn: S,
+    build: B,
+) -> Result<R>
+where
+    F: std::future::Future<Output = Result<R>> + Send + 'static,
+    R: Send + 'static,
+    S: FnOnce(
+        Box<dyn FnOnce() -> Result<R> + Send + 'static>,
+    ) -> std::io::Result<std::thread::JoinHandle<Result<R>>>,
+    B: FnOnce() -> std::io::Result<tokio::runtime::Runtime> + Send + 'static,
 {
     // `join.join()` below parks the calling thread; refuse loudly if that
     // thread is currently driving a runtime (see the guard's docs).
@@ -97,34 +146,44 @@ where
     #[cfg(feature = "deadlock-detection")]
     let caller = crate::CURRENT_ACTOR.try_with(|id| *id).ok();
 
-    let join = std::thread::Builder::new()
-        .name("rsactor-blocking".to_string())
-        .spawn(move || -> Result<R> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .map_err(|e| Error::Runtime {
-                    identity,
-                    details: "Failed to build blocking runtime".to_string(),
-                    source: Some(std::sync::Arc::new(e)),
-                })?;
-            #[cfg(feature = "deadlock-detection")]
-            {
-                match caller {
-                    Some(id) => runtime.block_on(crate::CURRENT_ACTOR.scope(id, fut)),
-                    None => runtime.block_on(fut),
-                }
+    let record_unstarted = move || {
+        crate::dead_letter::record_erased(
+            identity,
+            crate::dead_letter::DeadLetterReason::RuntimeUnavailable,
+            operation,
+            message_type,
+        );
+    };
+
+    let join = spawn(Box::new(move || -> Result<R> {
+        let runtime = build().map_err(|e| {
+            record_unstarted();
+            Error::Runtime {
+                identity,
+                details: "Failed to build blocking runtime".to_string(),
+                source: Some(std::sync::Arc::new(e)),
             }
-            #[cfg(not(feature = "deadlock-detection"))]
-            {
-                runtime.block_on(fut)
+        })?;
+        #[cfg(feature = "deadlock-detection")]
+        {
+            match caller {
+                Some(id) => runtime.block_on(crate::CURRENT_ACTOR.scope(id, fut)),
+                None => runtime.block_on(fut),
             }
-        })
-        .map_err(|e| Error::Runtime {
+        }
+        #[cfg(not(feature = "deadlock-detection"))]
+        {
+            runtime.block_on(fut)
+        }
+    }))
+    .map_err(|e| {
+        record_unstarted();
+        Error::Runtime {
             identity,
             details: "Failed to spawn blocking thread".to_string(),
             source: Some(std::sync::Arc::new(e)),
-        })?;
+        }
+    })?;
 
     join.join().unwrap_or_else(|payload| {
         let panic_text = payload
@@ -184,8 +243,12 @@ use std::sync::Arc;
 ///   - [`blocking_ask`](ActorRef::blocking_ask): Send a message and block until a typed reply is received (no runtime context required).
 ///   - [`blocking_tell`](ActorRef::blocking_tell): Send a message and block until it is sent (no runtime context required).
 ///
-///   The `blocking_*` methods can be called from any thread and from within a
-///   multi-thread Tokio runtime. The exact mechanism (`block_in_place` +
+///   The `blocking_*` methods can be called from any thread that is allowed
+///   to block (no runtime, a `spawn_blocking` thread) and from within a
+///   multi-thread Tokio runtime. A thread driving a `current_thread` runtime
+///   may not block, so calls there panic (except `blocking_tell` /
+///   `blocking_tell_priority` while the mailbox / priority slot has room) —
+///   see each method's `# Panics` section. The exact mechanism (`block_in_place` +
 ///   `block_on`, `blocking_send` / `blocking_recv`, or a temporary runtime on a
 ///   dedicated thread) depends on the calling context — see each method's
 ///   "Execution paths" section for details.
@@ -288,7 +351,8 @@ impl<T: Actor> ActorRef<T> {
     /// via [`SpawnOptions::with_idle`](crate::SpawnOptions::with_idle).
     ///
     /// When this returns `false`, [`Actor::on_idle`](crate::Actor::on_idle) is never
-    /// driven and calls to [`subscribe_idle`](Self::subscribe_idle) return
+    /// driven and [`subscribe_idle`](Self::subscribe_idle) fails with an
+    /// [`IdleSubscribeError`] carrying
     /// [`Error::IdleChannelNotEnabled`](crate::Error::IdleChannelNotEnabled).
     #[inline]
     pub fn has_idle_channel(&self) -> bool {
@@ -317,8 +381,10 @@ impl<T: Actor> ActorRef<T> {
     /// **Note**: This is a heuristic, point-in-time check. The channels are
     /// closed only after the actor's loop exits, so this can briefly report
     /// `true` after `on_stop` has already run, and a `true` result does not
-    /// guarantee that a subsequent send will succeed. A successful send is the
-    /// only definitive liveness signal.
+    /// guarantee that a subsequent send will succeed. A successful `tell` does
+    /// not prove the message is handled either: after `stop()`/`kill()` is
+    /// observed, it can still return `Ok` and the message be discarded at
+    /// shutdown. To confirm processing, use `ask` and check the reply.
     #[inline]
     pub fn is_alive(&self) -> bool {
         // Both channels must be open for the actor to be considered alive
@@ -360,6 +426,14 @@ impl<T: Actor> ActorRef<T> {
     /// [`ActorControl::wait_stopped`](crate::ActorControl::wait_stopped)), but
     /// it only signals completion — it cannot return the
     /// [`ActorResult`](crate::ActorResult).
+    ///
+    /// It resolves when the mailbox receiver is closed, which is the first
+    /// step of the shutdown drain. Recording
+    /// [`DiscardedAtShutdown`](crate::DeadLetterReason::DiscardedAtShutdown)
+    /// dead letters for the remaining mailbox messages, and draining the
+    /// priority channel, can still be in progress on another worker thread
+    /// when this returns. To observe that the drain has finished (e.g. before
+    /// reading a dead-letter count), await the `JoinHandle` instead.
     ///
     /// Returns immediately if the actor has already stopped. Holding this
     /// `ActorRef` (including the `&self` borrowed by this call) keeps the actor
@@ -627,6 +701,14 @@ impl<T: Actor> ActorRef<T> {
     /// The message is sent to the actor's mailbox, and this method will return once
     /// the message is sent or timeout if the send operation doesn't complete
     /// within the specified duration.
+    ///
+    /// # Panics
+    ///
+    /// When the current runtime was built **without a time driver** (no
+    /// `enable_time()` / `enable_all()`): this method arms a
+    /// [`tokio::time::timeout`], which panics when no timer is available.
+    /// Spawning and driving actors does not itself require the time driver,
+    /// so a runtime can reach this call without one.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_tell_with_timeout",
@@ -924,6 +1006,13 @@ impl<T: Actor> ActorRef<T> {
     /// - [`Error::Send`] if the actor has already stopped (recorded as a dead letter).
     /// - [`Error::Timeout`] if admission did not complete within `timeout` (recorded as
     ///   a dead letter).
+    ///
+    /// # Panics
+    ///
+    /// When the current runtime was built **without a time driver** (no
+    /// `enable_time()` / `enable_all()`) and the priority channel is enabled:
+    /// this method arms a [`tokio::time::timeout`], which panics when no
+    /// timer is available.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_tell_priority",
@@ -1017,6 +1106,16 @@ impl<T: Actor> ActorRef<T> {
     /// - [`Error::Receive`] if the reply channel was dropped before a response arrived
     ///   (recorded as a dead letter).
     /// - [`Error::Downcast`] if the handler returned a value of an unexpected type.
+    ///
+    /// # Panics
+    ///
+    /// - With the `deadlock-detection` feature enabled, a self-ask (and any
+    ///   `ask` cycle that routes back into the calling actor) through the
+    ///   priority channel panics immediately instead of stalling for `timeout`.
+    /// - When the current runtime was built **without a time driver** (no
+    ///   `enable_time()` / `enable_all()`) and the priority channel is enabled:
+    ///   this method arms a [`tokio::time::timeout`], which panics when no
+    ///   timer is available.
     #[cfg_attr(feature = "tracing", tracing::instrument(
         level = "debug",
         name = "actor_ask_priority",
@@ -1265,6 +1364,8 @@ impl<T: Actor> ActorRef<T> {
             Some(handle) => block_on_current_runtime(handle, admit),
             None => run_blocking_with_runtime(
                 identity,
+                Operation::BlockingTellPriority,
+                std::any::type_name::<M>(),
                 "Priority blocking thread terminated unexpectedly",
                 admit,
             ),
@@ -1301,6 +1402,10 @@ impl<T: Actor> ActorRef<T> {
     /// be awaited. The async counterpart is
     /// [`ask_priority`](Self::ask_priority).
     ///
+    /// - With the `deadlock-detection` feature enabled, a self-ask (and any
+    ///   `ask` cycle that routes back into the calling actor) through the
+    ///   priority channel panics immediately instead of stalling for `timeout`
+    ///   (see the deadlock warning below).
     #[doc = include_str!("doc/blocking_panics.md")]
     ///
     /// # Deadlock warning
@@ -1337,6 +1442,8 @@ impl<T: Actor> ActorRef<T> {
         let self_clone = self.clone();
         run_blocking_with_runtime(
             self.identity(),
+            Operation::BlockingAskPriority,
+            std::any::type_name::<M>(),
             "Priority blocking thread terminated unexpectedly",
             async move {
                 self_clone
@@ -1468,8 +1575,11 @@ impl<T: Actor> ActorRef<T> {
 
     /// Synchronous version of [`ActorRef::tell`] that blocks until the message is sent.
     ///
-    /// This method can be used from any thread, including non-async contexts,
-    /// and from within `async fn` on a multi-thread Tokio runtime.
+    /// This method can be used from any thread that is allowed to block
+    /// (non-async contexts, a `spawn_blocking` thread), and from within
+    /// `async fn` on a multi-thread Tokio runtime. On a thread driving a
+    /// `current_thread` runtime it succeeds only while the mailbox has room;
+    /// see [§ Panics](#panics).
     ///
     /// # Execution paths
     ///
@@ -1630,6 +1740,8 @@ impl<T: Actor> ActorRef<T> {
                     Some(handle) => block_on_current_runtime(handle, admit),
                     None => run_blocking_with_runtime(
                         identity,
+                        Operation::BlockingTell,
+                        std::any::type_name::<M>(),
                         "Timeout thread terminated unexpectedly",
                         admit,
                     ),
@@ -1685,8 +1797,10 @@ impl<T: Actor> ActorRef<T> {
 
     /// Synchronous version of [`ActorRef::ask`] that blocks until the reply is received.
     ///
-    /// This method can be used from any thread, including non-async contexts,
-    /// and from within `async fn` on a multi-thread Tokio runtime.
+    /// This method can be used from any thread that is allowed to block
+    /// (non-async contexts, a `spawn_blocking` thread), and from within
+    /// `async fn` on a multi-thread Tokio runtime. On a thread driving a
+    /// `current_thread` runtime it panics; see [§ Panics](#panics).
     ///
     /// # Execution paths
     ///
@@ -1726,6 +1840,10 @@ impl<T: Actor> ActorRef<T> {
     /// there is no non-blocking fast path, because the reply must always be
     /// awaited. The async counterpart is [`ask`](Self::ask).
     ///
+    /// - With the `deadlock-detection` feature enabled, a self-ask (and any
+    ///   `ask` cycle that routes back into the calling actor) panics
+    ///   immediately instead of hanging or stalling for `timeout`
+    ///   (see the deadlock warning below).
     #[doc = include_str!("doc/blocking_panics.md")]
     ///
     /// # Deadlock warning
@@ -1864,6 +1982,8 @@ impl<T: Actor> ActorRef<T> {
 
         run_blocking_with_runtime(
             identity,
+            Operation::BlockingAsk,
+            std::any::type_name::<M>(),
             "Timeout thread terminated unexpectedly",
             async move {
                 self_clone
@@ -2207,8 +2327,11 @@ impl<T: Actor> From<IdleSubscribeError<T>> for Error {
 
 /// A weak, type-safe reference to an actor of type `T`.
 ///
-/// `ActorWeak<T>` is a weak reference that does not prevent the actor from being dropped
-/// and can be upgraded to a strong [`ActorRef<T>`] if the actor is still alive.
+/// `ActorWeak<T>` is a weak reference: it does not count toward the strong references
+/// that keep an actor running, so the actor stops once the last [`ActorRef<T>`] is
+/// dropped even while `ActorWeak`s remain. It can be upgraded to a strong
+/// [`ActorRef<T>`] while a strong reference exists and the actor's runtime loop has not
+/// exited; see [`upgrade`](ActorWeak::upgrade) for what the result does not guarantee.
 /// Like [`ActorRef<T>`], it maintains compile-time type safety for the actor type `T`.
 ///
 /// ## Creating `ActorWeak<T>`
@@ -2226,10 +2349,12 @@ impl<T: Actor> From<IdleSubscribeError<T>> for Error {
 ///
 /// ```ignore
 /// if let Some(strong_ref) = weak_ref.upgrade() {
-///     // Successfully upgraded, actor is still alive
+///     // A strong reference existed and the runtime loop had not exited. This does
+///     // not guarantee the message is processed (see `upgrade`).
 ///     strong_ref.tell(MyMessage).await?;
 /// } else {
-///     // Actor is no longer alive
+///     // No strong reference is left, or the runtime loop has exited;
+///     // `on_stop` may still be running.
 /// }
 /// ```
 pub struct ActorWeak<T: Actor> {
@@ -2268,16 +2393,21 @@ impl<T: Actor> fmt::Debug for ActorWeak<T> {
 impl<T: Actor> ActorWeak<T> {
     /// Attempts to upgrade the weak reference to a strong, type-safe reference.
     ///
-    /// Returns `Some(ActorRef<T>)` if the actor is still alive, or `None` if the actor
-    /// has been dropped.
+    /// Returns `Some(ActorRef<T>)` while at least one strong [`ActorRef`] exists and the
+    /// actor's runtime loop has not yet closed its channel receivers, `None` otherwise.
+    /// `None` does not mean the actor value has been dropped: once the last strong
+    /// reference is gone, `on_stop` can still be running. `Some` does not mean a message
+    /// will be processed: after `stop()`/`kill()` is observed, a `tell` through the returned
+    /// reference can still return `Ok` and then be discarded at shutdown.
     ///
     /// The priority and idle-subscribe channels are treated as *secondary* channels: if the
     /// original actor was spawned with one of them enabled but every strong sender for it has
     /// been dropped, `upgrade()` still succeeds. The resulting [`ActorRef`] reports the channel
     /// as absent ([`has_priority_channel()`](ActorRef::has_priority_channel) /
-    /// [`has_idle_channel()`](ActorRef::has_idle_channel) returning `false`), and calls on it
-    /// fail with [`Error::PriorityChannelNotEnabled`](crate::Error::PriorityChannelNotEnabled)
-    /// / [`Error::IdleChannelNotEnabled`](crate::Error::IdleChannelNotEnabled).
+    /// [`has_idle_channel()`](ActorRef::has_idle_channel) returning `false`): priority calls
+    /// fail with [`Error::PriorityChannelNotEnabled`](crate::Error::PriorityChannelNotEnabled),
+    /// and [`subscribe_idle`](ActorRef::subscribe_idle) fails with an [`IdleSubscribeError`]
+    /// carrying [`Error::IdleChannelNotEnabled`](crate::Error::IdleChannelNotEnabled).
     ///
     /// The mailbox and terminate channels are the *primary* channels and must both upgrade for
     /// `upgrade()` to succeed. In practice their strong-sender counts move in lockstep — every
@@ -2326,15 +2456,22 @@ impl<T: Actor> ActorWeak<T> {
 
     /// Checks if the actor might still be alive.
     ///
-    /// Returns `false` if the actor is definitely dead: every strong reference
-    /// has been dropped, or the actor's runtime loop has exited and closed its
-    /// channels (graceful stop, kill, or a lifecycle failure) — the latter
-    /// catches fully stopped actors whose strong [`ActorRef`] clones still
-    /// linger in registries, matching [`ActorRef::is_alive`].
+    /// Performs the same check as [`upgrade`](ActorWeak::upgrade). Returns
+    /// `false` once every strong reference has been dropped, or once the actor's
+    /// runtime loop has exited and closed its channels (graceful stop, kill, or
+    /// a lifecycle failure) — the latter catches fully stopped actors whose
+    /// strong [`ActorRef`] clones still linger in registries, matching
+    /// [`ActorRef::is_alive`]. As with `upgrade`, `false` does not mean the
+    /// actor value has been dropped (`on_stop` can still be running), and
+    /// `true` does not mean a message will be processed (after
+    /// `stop()`/`kill()` is observed, a `tell` can still return `Ok` and then be
+    /// discarded at shutdown).
     ///
     /// **Note**: This is a heuristic check — the actor can stop between this
-    /// call and the next operation. For definitive actor state, always use
-    /// [`upgrade`](ActorWeak::upgrade) and check the returned `Option`.
+    /// call and the next operation. To act on the actor, use
+    /// [`upgrade`](ActorWeak::upgrade): the returned [`ActorRef`] keeps the actor
+    /// from terminating by ref-drop, but not from `stop()`, `kill()`, or a
+    /// lifecycle failure. To confirm processing, use `ask` and check the reply.
     #[inline]
     pub fn is_alive(&self) -> bool {
         // Mirror the exact check `upgrade()` performs (primary senders
@@ -2373,5 +2510,83 @@ impl<T: Actor> Clone for ActorWeak<T> {
             #[cfg(feature = "metrics")]
             metrics: self.metrics.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dead_letter::dead_letter_count;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // One test, so the three cases do not race each other on the
+    // process-global dead-letter counter. No other unit test in this crate
+    // records dead letters.
+    #[test]
+    fn blocking_slow_path_records_unstarted_message_as_dead_letter() {
+        let identity = Identity::new(1, "TestActor");
+        let message_fut = |polled: Arc<AtomicBool>| async move {
+            polled.store(true, Ordering::SeqCst);
+            Ok(())
+        };
+        let real_build = || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+        };
+        let real_spawn = |body: Box<dyn FnOnce() -> Result<()> + Send + 'static>| {
+            std::thread::Builder::new().spawn(body)
+        };
+
+        // Thread spawn fails: the message is never polled and is recorded.
+        let polled = Arc::new(AtomicBool::new(false));
+        let before = dead_letter_count();
+        let err = run_blocking_on(
+            identity,
+            Operation::BlockingAsk,
+            "TestMsg",
+            "unused",
+            message_fut(polled.clone()),
+            |_body| Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+            real_build,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Runtime { .. }), "{err:?}");
+        assert!(!polled.load(Ordering::SeqCst));
+        assert_eq!(dead_letter_count() - before, 1);
+
+        // Runtime build fails on the spawned thread: same outcome.
+        let polled = Arc::new(AtomicBool::new(false));
+        let before = dead_letter_count();
+        let err = run_blocking_on(
+            identity,
+            Operation::BlockingTell,
+            "TestMsg",
+            "unused",
+            message_fut(polled.clone()),
+            real_spawn,
+            || Err(std::io::Error::other("injected build failure")),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Runtime { .. }), "{err:?}");
+        assert!(!polled.load(Ordering::SeqCst));
+        assert_eq!(dead_letter_count() - before, 1);
+
+        // Both steps succeed: the future runs and nothing is recorded.
+        let polled = Arc::new(AtomicBool::new(false));
+        let before = dead_letter_count();
+        run_blocking_on(
+            identity,
+            Operation::BlockingTell,
+            "TestMsg",
+            "unused",
+            message_fut(polled.clone()),
+            real_spawn,
+            real_build,
+        )
+        .unwrap();
+        assert!(polled.load(Ordering::SeqCst));
+        assert_eq!(dead_letter_count() - before, 0);
     }
 }

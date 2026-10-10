@@ -128,20 +128,50 @@ fn discard_queued_messages<T: Actor>(
 /// [`run_actor_lifecycle`]: the normal control-flow returns, but also a panic
 /// unwinding out of a message handler or lifecycle hook, and outright task
 /// cancellation (`JoinHandle::abort`, runtime shutdown) dropping the future
-/// at an `.await`. Without the guard those abnormal exits dropped the
-/// buffered envelopes silently — violating the `DiscardedAtShutdown`
+/// at an `.await`. `spawn_with_options` builds the guard before it spawns the
+/// task and passes it in as an argument, so a task cancelled before its first
+/// poll drops the guard with the unresumed future and still drains. Without
+/// the guard those abnormal exits dropped the buffered envelopes silently —
+/// violating the `DiscardedAtShutdown`
 /// guarantee that accepted-but-unprocessed `tell` messages leave a
 /// receiver-side dead-letter record (their senders already observed `Ok`).
 ///
 /// On the unwind path it also emits the only runtime record that names the
 /// actor whose task is ending by a panic: the standard panic hook prints the
 /// thread and location, not the actor, and does not go through `tracing`.
-struct LifecycleChannels<T: Actor> {
+pub(crate) struct LifecycleChannels<T: Actor> {
     actor_id: crate::Identity,
     receiver: mpsc::Receiver<MailboxMessage<T>>,
     priority_receiver: Option<mpsc::Receiver<MailboxMessage<T>>>,
     terminate_receiver: mpsc::Receiver<ControlSignal>,
     idle_subscribe_receiver: Option<mpsc::Receiver<IdleEventStream<T>>>,
+}
+
+impl<T: Actor> LifecycleChannels<T> {
+    pub(crate) fn new(
+        actor_id: crate::Identity,
+        receiver: mpsc::Receiver<MailboxMessage<T>>,
+        priority_receiver: Option<mpsc::Receiver<MailboxMessage<T>>>,
+        terminate_receiver: mpsc::Receiver<ControlSignal>,
+        idle_subscribe_receiver: Option<mpsc::Receiver<IdleEventStream<T>>>,
+    ) -> Self {
+        #[cfg(test)]
+        GUARDS_BUILT.with(|n| n.set(n.get() + 1));
+        LifecycleChannels {
+            actor_id,
+            receiver,
+            priority_receiver,
+            terminate_receiver,
+            idle_subscribe_receiver,
+        }
+    }
+}
+
+// Guards built on the current thread. Unit tests read it to check the order of
+// the steps in `spawn_with_options`; it is not compiled outside `cfg(test)`.
+#[cfg(test)]
+thread_local! {
+    static GUARDS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl<T: Actor> Drop for LifecycleChannels<T> {
@@ -160,10 +190,12 @@ impl<T: Actor> Drop for LifecycleChannels<T> {
         });
         if std::thread::panicking() {
             // Name the actor. `thread::panicking()` is true for any unwind in
-            // progress on this thread — including a runtime dropped while some
-            // other panic unwinds, which drops every live actor task with it —
-            // so the record says the task is ending during an unwind, not that
-            // this actor's own code panicked. Under `panic = "abort"` there is
+            // progress on the thread dropping this task — including a
+            // current-thread runtime dropped while some other panic unwinds,
+            // which drops every live actor task on that thread (a multi-thread
+            // runtime drops its tasks on its worker threads, which are not
+            // unwinding) — so the record says the task is ending during an
+            // unwind, not that this actor's own code panicked. Under `panic = "abort"` there is
             // no unwind, this Drop never runs, and nothing is recorded.
             //
             // Both the record and the drain call into the global tracing
@@ -275,6 +307,10 @@ macro_rules! process_envelope {
 /// 2. Errors in [`on_idle`](Actor::on_idle): The actor terminates during runtime. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) as
 ///    [`ActorFailure::OnIdle`](crate::ActorFailure::OnIdle), carrying the actor instance.
+///    If the cleanup [`on_stop`](Actor::on_stop) that follows also fails, the result is
+///    [`ActorFailure::OnIdleThenOnStop`](crate::ActorFailure::OnIdleThenOnStop) instead;
+///    the second error is available via
+///    [`stop_error`](crate::ActorFailure::stop_error).
 ///
 /// 3. Errors in [`on_stop`](Actor::on_stop): The actor fails during cleanup. The error is captured in
 ///    [`ActorResult::Failed`](crate::ActorResult::Failed) as
@@ -391,9 +427,13 @@ pub trait Actor: Sized + Send + 'static {
     ///
     /// # Panics
     ///
-    /// `Some(0)` panics at spawn time, like every other zero-capacity path.
-    /// The check cannot be made at compile time on this crate's MSRV (1.75):
-    /// inline `const { assert!(..) }` blocks in trait defaults require 1.79.
+    /// `Some(0)` panics at spawn time, like a zero capacity passed at the
+    /// spawn site. So does a value above [`tokio::sync::Semaphore::MAX_PERMITS`],
+    /// the largest capacity a Tokio mpsc channel accepts.
+    /// The check is a runtime assert rather than a compile-time one: a
+    /// compile-time check on a trait constant is a post-monomorphization
+    /// const error, which `cargo check` does not report — it would surface
+    /// only in `cargo build`.
     const MAILBOX_CAPACITY: Option<usize> = None;
 
     /// Called when the actor is started. This is required for actor creation.
@@ -572,7 +612,8 @@ pub trait Actor: Sized + Send + 'static {
     /// via [`SpawnOptions::with_idle`](crate::SpawnOptions::with_idle). The channel is off by
     /// default so that actors which never use idle events do not pay for an extra always-active
     /// branch in the runtime's `select!` loop. Without it,
-    /// [`subscribe_idle`](crate::ActorRef::subscribe_idle) returns
+    /// [`subscribe_idle`](crate::ActorRef::subscribe_idle) fails with an
+    /// [`IdleSubscribeError`](crate::IdleSubscribeError) carrying
     /// [`Error::IdleChannelNotEnabled`](crate::Error::IdleChannelNotEnabled) and this method is
     /// never called.
     ///
@@ -610,7 +651,9 @@ pub trait Actor: Sized + Send + 'static {
     /// runtime loop continues to the next message — so `on_stop` still runs at the
     /// eventual stop/kill. This does **not** extend to
     /// [`on_idle`](Actor::on_idle), whose `Err` does stop the actor (and then runs
-    /// `on_stop`, reported as [`FailurePhase::OnIdle`](crate::FailurePhase::OnIdle)).
+    /// `on_stop`, reported as [`FailurePhase::OnIdle`](crate::FailurePhase::OnIdle), or as
+    /// [`FailurePhase::OnIdleThenOnStop`](crate::FailurePhase::OnIdleThenOnStop) if that
+    /// `on_stop` also fails).
     ///
     /// The result of this method affects the final [`ActorResult`](crate::ActorResult) returned when awaiting the join handle.
     ///
@@ -755,14 +798,10 @@ pub trait Message<T: Send + 'static>: Actor {
 ///
 /// * `args` - Initialization arguments passed to the actor's `on_start` method
 /// * `actor_ref` - Strong reference to the actor (dropped after initialization)
-/// * `receiver` - Channel receiver for the regular mailbox
-/// * `priority_receiver` - Optional channel receiver for the priority mailbox.
-///   `None` when the actor was spawned without
-///   [`SpawnOptions::with_priority`](crate::SpawnOptions::with_priority).
-/// * `terminate_receiver` - Channel receiver for termination signals
-/// * `idle_subscribe_receiver` - Channel receiver for new idle-event stream
-///   subscriptions registered via
-///   [`ActorRef::subscribe_idle`](crate::ActorRef::subscribe_idle)
+/// * `chans` - Drain guard owning every inbound receiver (regular, optional
+///   priority, terminate, optional idle-subscribe). Built by
+///   `spawn_with_options` before `tokio::spawn`, so it drains even when the
+///   task is cancelled before its first poll; see [`LifecycleChannels`].
 ///
 /// # Returns
 ///
@@ -797,10 +836,7 @@ pub trait Message<T: Send + 'static>: Actor {
 pub(crate) async fn run_actor_lifecycle<T: Actor>(
     args: T::Args,
     actor_ref: ActorRef<T>,
-    receiver: mpsc::Receiver<MailboxMessage<T>>,
-    priority_receiver: Option<mpsc::Receiver<MailboxMessage<T>>>,
-    terminate_receiver: mpsc::Receiver<ControlSignal>,
-    idle_subscribe_receiver: Option<mpsc::Receiver<IdleEventStream<T>>>,
+    mut chans: LifecycleChannels<T>,
 ) -> ActorResult<T> {
     // The subscribe channel is `None` when the actor was spawned without
     // `SpawnOptions::with_idle()` — its select arm then resolves to `pending()`
@@ -810,17 +846,10 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     // does not busy-loop. Normal shutdown still propagates via the mailbox arm.
     let actor_id = actor_ref.identity();
 
-    // From here on the receivers live inside the drop guard, so the
-    // shutdown drain runs on every exit — normal returns, handler panics,
-    // and task cancellation alike. No explicit drain calls are needed (or
-    // present) on the return paths below.
-    let mut chans = LifecycleChannels {
-        actor_id,
-        receiver,
-        priority_receiver,
-        terminate_receiver,
-        idle_subscribe_receiver,
-    };
+    // The receivers live inside the drop guard `chans`, so the shutdown
+    // drain runs on every exit — normal returns, handler panics, and task
+    // cancellation alike. No explicit drain calls are needed (or present) on
+    // the return paths below.
 
     #[cfg(feature = "tracing")]
     let on_start_span = tracing::debug_span!("actor_on_start");
@@ -1208,4 +1237,42 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
 
     // Return the final actor state - successful completion
     ActorResult::Completed { actor, killed }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Probe;
+
+    impl Actor for Probe {
+        type Args = ();
+        type Error = std::convert::Infallible;
+        type IdleEvent = ();
+
+        async fn on_start(_: (), _: &ActorRef<Self>) -> std::result::Result<Self, Self::Error> {
+            Ok(Probe)
+        }
+    }
+
+    // tokio 1.22 (the declared minimum) panics in `tokio::spawn` while still
+    // holding the task future, so a guard built before that call is dropped
+    // during the unwind and logs a panic record for a task that never existed.
+    // Newer tokio drops the future before panicking, so the record check in
+    // tests/panic_diagnostics_tests.rs cannot fail on the lockfile's tokio.
+    // This checks the order itself, on any tokio: outside a runtime, `spawn`
+    // must panic before any guard is built.
+    #[test]
+    fn spawn_outside_runtime_panics_before_building_the_guard() {
+        let before = GUARDS_BUILT.with(|n| n.get());
+
+        let spawned = std::panic::catch_unwind(|| crate::spawn::<Probe>(()));
+
+        assert!(spawned.is_err(), "spawn outside a Tokio runtime must panic");
+        assert_eq!(
+            GUARDS_BUILT.with(|n| n.get()),
+            before,
+            "the drain guard must not exist when spawn panics for a missing runtime"
+        );
+    }
 }
