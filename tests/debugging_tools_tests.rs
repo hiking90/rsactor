@@ -6,6 +6,9 @@
 //! These tests use delta comparison pattern (comparing before/after counts) for parallel test safety.
 //! Run with: `cargo test --features test-utils`
 
+mod common;
+
+use common::{kill_and_release, Gate};
 use rsactor::{spawn, Actor, ActorRef};
 use std::time::Duration;
 
@@ -128,10 +131,11 @@ async fn test_dead_letter_multiple_actors_isolation() {
 async fn test_dead_letter_with_timeout() {
     let initial = rsactor::dead_letter_count();
 
-    // Create an actor with a full mailbox to force timeout
-    // The actor is slow to process, so the second message should timeout waiting to enter mailbox
+    // A full mailbox forces the timed send to wait for admission and expire.
     #[derive(Actor)]
-    struct SlowActor;
+    struct SlowActor {
+        gate: Gate,
+    }
 
     struct SlowPing;
 
@@ -139,34 +143,33 @@ async fn test_dead_letter_with_timeout() {
     impl SlowActor {
         #[handler]
         async fn handle(&mut self, _: SlowPing, _: &ActorRef<Self>) {
-            // Sleep long enough to cause timeout
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            self.gate.pass().await;
         }
     }
 
-    // Spawn with small mailbox capacity
-    let (actor_ref, handle) = rsactor::spawn_with_mailbox_capacity::<SlowActor>(SlowActor, 1);
+    let gate = Gate::default();
+    let (actor_ref, handle) =
+        rsactor::spawn_with_mailbox_capacity::<SlowActor>(SlowActor { gate: gate.clone() }, 1);
 
-    // First message will start processing (and sleep)
-    let _ = actor_ref.tell(SlowPing).await;
+    // Occupy the handler, then fill the single mailbox slot.
+    actor_ref.tell(SlowPing).await.unwrap();
+    gate.wait_started().await;
+    actor_ref.tell(SlowPing).await.unwrap();
 
-    // Second message should timeout trying to send (mailbox is full while first is processing)
     let result = actor_ref
         .tell_with_timeout(SlowPing, Duration::from_millis(10))
         .await;
 
-    // Either timeout or success is acceptable (depends on timing)
-    // What we care about is that IF it times out, a dead letter is recorded
-    if result.is_err() {
-        assert!(
-            rsactor::dead_letter_count() > initial,
-            "Timeout should record dead letter"
-        );
-    }
+    assert!(
+        matches!(result, Err(rsactor::Error::Timeout { .. })),
+        "expected Timeout, got {result:?}"
+    );
+    assert!(
+        rsactor::dead_letter_count() > initial,
+        "Timeout should record dead letter"
+    );
 
-    // Cleanup
-    actor_ref.kill();
-    let _ = handle.await;
+    kill_and_release(&actor_ref, handle, &gate).await;
 }
 
 #[tokio::test]
@@ -198,7 +201,9 @@ async fn test_dead_letter_ask_with_timeout() {
 
     // Create a slow actor for timeout scenario
     #[derive(Actor)]
-    struct SlowAskActor;
+    struct SlowAskActor {
+        gate: Gate,
+    }
 
     struct SlowAskPing;
 
@@ -206,27 +211,29 @@ async fn test_dead_letter_ask_with_timeout() {
     impl SlowAskActor {
         #[handler]
         async fn handle(&mut self, _: SlowAskPing, _: &ActorRef<Self>) -> String {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            self.gate.pass().await;
             "pong".to_string()
         }
     }
 
-    let (actor_ref, handle) = spawn::<SlowAskActor>(SlowAskActor);
+    let gate = Gate::default();
+    let (actor_ref, handle) = spawn::<SlowAskActor>(SlowAskActor { gate: gate.clone() });
 
     // ask_with_timeout should timeout and record dead letter
     let result: Result<String, _> = actor_ref
         .ask_with_timeout(SlowAskPing, Duration::from_millis(10))
         .await;
 
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(rsactor::Error::Timeout { .. })),
+        "expected Timeout, got {result:?}"
+    );
     assert!(
         rsactor::dead_letter_count() > initial,
         "ask_with_timeout should record dead letter on timeout"
     );
 
-    // Cleanup
-    actor_ref.kill();
-    let _ = handle.await;
+    kill_and_release(&actor_ref, handle, &gate).await;
 }
 
 #[tokio::test]
@@ -455,12 +462,16 @@ async fn test_dead_letter_reply_dropped() {
 
 #[tokio::test]
 async fn test_dead_letter_timeout_while_stopping() {
-    // Test: race condition between timeout and actor stopping
-    // Note: Due to race conditions, the operation may succeed or fail depending on timing
+    // Test: a timed send waiting for mailbox admission when the actor stops,
+    // well before its deadline. The runtime closes the mailbox before draining
+    // it (`discard_queued_messages`), so the waiting send is never admitted:
+    // it fails with `Error::Send` and records an ActorStopped dead letter.
     let initial = rsactor::dead_letter_count();
 
     #[derive(Actor)]
-    struct RaceActor;
+    struct RaceActor {
+        gate: Gate,
+    }
 
     struct RacePing;
 
@@ -468,35 +479,43 @@ async fn test_dead_letter_timeout_while_stopping() {
     impl RaceActor {
         #[handler]
         async fn handle(&mut self, _: RacePing, _: &ActorRef<Self>) {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            self.gate.pass().await;
         }
     }
 
-    let (actor_ref, handle) = spawn::<RaceActor>(RaceActor);
+    let gate = Gate::default();
+    let (actor_ref, handle) =
+        rsactor::spawn_with_mailbox_capacity::<RaceActor>(RaceActor { gate: gate.clone() }, 1);
 
-    // Start a timeout operation, then stop actor while it's pending
+    // Occupy the handler, then fill the single mailbox slot so the timed send
+    // below has to wait for admission.
+    actor_ref.tell(RacePing).await.unwrap();
+    gate.wait_started().await;
+    actor_ref.tell(RacePing).await.unwrap();
+
     let actor_clone = actor_ref.clone();
     let timeout_handle = tokio::spawn(async move {
         actor_clone
-            .tell_with_timeout(RacePing, Duration::from_millis(50))
+            .tell_with_timeout(RacePing, Duration::from_secs(30))
             .await
     });
 
-    // Brief delay then stop actor
+    // Give the timed send a chance to start waiting. Not required for the
+    // assertions: a send issued after the mailbox closed fails the same way.
     tokio::time::sleep(Duration::from_millis(10)).await;
-    actor_ref.stop().await;
+
+    // `stop()` would queue behind the full mailbox; kill() uses its own channel.
+    kill_and_release(&actor_ref, handle, &gate).await;
 
     let result = timeout_handle.await.unwrap();
-    let _ = handle.await;
-
-    // If the operation failed (timeout or actor stop), dead letter should be recorded
-    if result.is_err() {
-        assert!(
-            rsactor::dead_letter_count() > initial,
-            "Dead letter should be recorded when operation fails"
-        );
-    }
-    // If the operation succeeded (race condition), that's also acceptable behavior
+    assert!(
+        matches!(result, Err(rsactor::Error::Send { .. })),
+        "expected Send error from the closed mailbox, got {result:?}"
+    );
+    assert!(
+        rsactor::dead_letter_count() > initial,
+        "Dead letter should be recorded when the pending send fails"
+    );
 }
 
 #[tokio::test]
@@ -569,7 +588,9 @@ async fn test_kill_when_terminate_channel_full() {
     // The terminate channel has capacity of 1, so second kill should hit Full case
 
     #[derive(Actor)]
-    struct SlowStopActor;
+    struct SlowStopActor {
+        gate: Gate,
+    }
 
     struct SlowMessage;
 
@@ -577,23 +598,27 @@ async fn test_kill_when_terminate_channel_full() {
     impl SlowStopActor {
         #[handler]
         async fn handle(&mut self, _: SlowMessage, _: &ActorRef<Self>) {
-            // Sleep to keep the actor busy
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            self.gate.pass().await;
         }
     }
 
-    let (actor_ref, handle) = spawn::<SlowStopActor>(SlowStopActor);
+    let gate = Gate::default();
+    let (actor_ref, handle) = spawn::<SlowStopActor>(SlowStopActor { gate: gate.clone() });
 
-    // Send a message to keep the actor busy
-    let _ = actor_ref.tell(SlowMessage).await;
+    // Wait until the handler is running: the runtime cannot dequeue the first
+    // Terminate until it returns, so the second kill() deterministically
+    // finds the capacity-1 terminate channel occupied.
+    actor_ref.tell(SlowMessage).await.unwrap();
+    gate.wait_started().await;
 
     // kill() is idempotent — both calls succeed even when the second one hits
     // the Full branch (terminate channel has capacity 1 and is already occupied).
     actor_ref.kill();
     actor_ref.kill();
 
-    // Clean up
-    let _ = handle.await;
+    gate.release();
+    let result = handle.await.unwrap();
+    assert!(result.was_killed());
 }
 
 #[tokio::test]

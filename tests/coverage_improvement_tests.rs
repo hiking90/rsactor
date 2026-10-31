@@ -1,6 +1,9 @@
 // Tests specifically designed to improve code coverage
 // These tests target uncovered code paths identified by llvm-cov
 
+mod common;
+
+use common::{kill_and_release, Gate};
 use futures::stream::StreamExt;
 use rsactor::{spawn, Actor, ActorRef, ActorWeak, Identity};
 use std::time::Duration;
@@ -812,8 +815,16 @@ mod mailbox_capacity_tests {
 mod blocking_timeout_tests {
     use super::*;
 
-    #[derive(Actor)]
-    struct BlockingTimeoutActor;
+    #[derive(Actor, Default)]
+    struct BlockingTimeoutActor {
+        gate: Gate,
+    }
+
+    impl BlockingTimeoutActor {
+        fn with_gate(gate: &Gate) -> Self {
+            Self { gate: gate.clone() }
+        }
+    }
 
     struct SlowMessage;
     struct FastMessage;
@@ -822,7 +833,7 @@ mod blocking_timeout_tests {
     impl BlockingTimeoutActor {
         #[handler]
         async fn handle_slow(&mut self, _: SlowMessage, _: &ActorRef<Self>) -> String {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            self.gate.pass().await;
             "slow done".to_string()
         }
 
@@ -835,7 +846,7 @@ mod blocking_timeout_tests {
     #[tokio::test]
     async fn test_blocking_tell_with_timeout_success() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor);
+        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor::default());
 
         let actor_clone = actor_ref.clone();
 
@@ -858,7 +869,7 @@ mod blocking_timeout_tests {
     #[tokio::test]
     async fn test_blocking_ask_with_timeout_success() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor);
+        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor::default());
 
         let actor_clone = actor_ref.clone();
 
@@ -879,58 +890,84 @@ mod blocking_timeout_tests {
     #[tokio::test]
     async fn test_blocking_tell_with_timeout_expired() {
         init_test_logger();
+        let gate = Gate::default();
+        let (actor_ref, handle) = rsactor::spawn_with_mailbox_capacity::<BlockingTimeoutActor>(
+            BlockingTimeoutActor::with_gate(&gate),
+            1,
+        );
 
-        // Create actor with small mailbox that we can fill
-        let (actor_ref, handle) =
-            rsactor::spawn_with_mailbox_capacity::<BlockingTimeoutActor>(BlockingTimeoutActor, 1);
+        // Occupy the handler, then fill the single mailbox slot.
+        actor_ref.tell(SlowMessage).await.unwrap();
+        gate.wait_started().await;
+        actor_ref.tell(SlowMessage).await.unwrap();
 
-        // Fill the mailbox with a slow message
-        let _ = actor_ref.tell(SlowMessage).await;
-
+        // The mailbox stays full while the handler is parked, so the
+        // `try_send` fast path fails and the timeout path must expire.
         let actor_clone = actor_ref.clone();
-
-        // Now blocking_tell with very short timeout should timeout
         let result = tokio::task::spawn_blocking(move || {
             actor_clone.blocking_tell(FastMessage, Some(Duration::from_millis(10)))
         })
         .await
         .unwrap();
+        assert!(
+            matches!(result, Err(rsactor::Error::Timeout { .. })),
+            "expected Timeout, got {result:?}"
+        );
 
-        // Either timeout or success is acceptable (race condition)
-        // The key is covering the timeout code path
-        let _ = result; // just making sure it executed
-
-        actor_ref.kill();
-        let _ = handle.await;
+        kill_and_release(&actor_ref, handle, &gate).await;
     }
 
+    /// The reply never arrives because the ask's own handler is still running.
     #[tokio::test]
     async fn test_blocking_ask_with_timeout_expired() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor);
+        let gate = Gate::default();
+        let (actor_ref, handle) =
+            spawn::<BlockingTimeoutActor>(BlockingTimeoutActor::with_gate(&gate));
 
         let actor_clone = actor_ref.clone();
-
-        // blocking_ask with timeout that expires (slow message)
         let result: Result<String, _> = tokio::task::spawn_blocking(move || {
             actor_clone.blocking_ask(SlowMessage, Some(Duration::from_millis(10)))
         })
         .await
         .unwrap();
-
         assert!(
-            result.is_err(),
-            "blocking_ask should timeout on slow message"
+            matches!(result, Err(rsactor::Error::Timeout { .. })),
+            "expected Timeout, got {result:?}"
         );
 
-        actor_ref.kill();
-        let _ = handle.await;
+        kill_and_release(&actor_ref, handle, &gate).await;
+    }
+
+    /// The reply never arrives because the ask is still queued behind a
+    /// running handler; kill() later discards it unprocessed.
+    #[tokio::test]
+    async fn test_blocking_ask_with_timeout_expired_while_queued() {
+        init_test_logger();
+        let gate = Gate::default();
+        let (actor_ref, handle) =
+            spawn::<BlockingTimeoutActor>(BlockingTimeoutActor::with_gate(&gate));
+
+        actor_ref.tell(SlowMessage).await.unwrap();
+
+        let actor_clone = actor_ref.clone();
+        let result: Result<String, _> = tokio::task::spawn_blocking(move || {
+            actor_clone.blocking_ask(FastMessage, Some(Duration::from_millis(10)))
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, Err(rsactor::Error::Timeout { .. })),
+            "expected Timeout, got {result:?}"
+        );
+
+        kill_and_release(&actor_ref, handle, &gate).await;
     }
 
     #[tokio::test]
     async fn test_blocking_tell_with_timeout_to_stopped_actor() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor);
+        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor::default());
 
         // Stop the actor first
         actor_ref.stop().await;
@@ -954,7 +991,7 @@ mod blocking_timeout_tests {
     #[tokio::test]
     async fn test_blocking_ask_with_timeout_to_stopped_actor() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor);
+        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(BlockingTimeoutActor::default());
 
         // Stop the actor first
         actor_ref.stop().await;
@@ -1960,15 +1997,17 @@ mod is_alive_edge_cases_tests {
 mod actual_timeout_tests {
     use super::*;
 
-    struct TimeoutTestActor;
+    struct TimeoutTestActor {
+        gate: Gate,
+    }
 
     impl Actor for TimeoutTestActor {
-        type Args = ();
+        type Args = Gate;
         type Error = String;
         type IdleEvent = ();
 
-        async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
-            Ok(Self)
+        async fn on_start(gate: Gate, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self { gate })
         }
     }
 
@@ -1979,7 +2018,7 @@ mod actual_timeout_tests {
         type Reply = String;
 
         async fn handle(&mut self, _: VerySlowMsg, _: &ActorRef<Self>) -> Self::Reply {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            self.gate.pass().await;
             "done".to_string()
         }
     }
@@ -1995,7 +2034,8 @@ mod actual_timeout_tests {
     #[tokio::test]
     async fn test_ask_with_timeout_actually_times_out() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<TimeoutTestActor>(());
+        let gate = Gate::default();
+        let (actor_ref, handle) = spawn::<TimeoutTestActor>(gate.clone());
 
         // Very short timeout with slow message should timeout
         let result: rsactor::Result<String> = actor_ref
@@ -2010,14 +2050,13 @@ mod actual_timeout_tests {
             e => panic!("Expected Timeout error, got: {:?}", e),
         }
 
-        actor_ref.kill();
-        let _ = handle.await;
+        kill_and_release(&actor_ref, handle, &gate).await;
     }
 
     #[tokio::test]
     async fn test_tell_with_timeout_success_path() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<TimeoutTestActor>(());
+        let (actor_ref, handle) = spawn::<TimeoutTestActor>(Gate::default());
 
         // Tell with sufficient timeout should succeed
         let result = actor_ref
@@ -2283,15 +2322,17 @@ mod metrics_api_tests {
 mod tell_with_timeout_tests {
     use super::*;
 
-    struct SlowTellActor;
+    struct SlowTellActor {
+        gate: Gate,
+    }
 
     impl Actor for SlowTellActor {
-        type Args = ();
+        type Args = Gate;
         type Error = String;
         type IdleEvent = ();
 
-        async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
-            Ok(Self)
+        async fn on_start(gate: Gate, _: &ActorRef<Self>) -> Result<Self, Self::Error> {
+            Ok(Self { gate })
         }
     }
 
@@ -2301,117 +2342,35 @@ mod tell_with_timeout_tests {
         type Reply = ();
 
         async fn handle(&mut self, _: BlockingMsg, _: &ActorRef<Self>) -> Self::Reply {
-            // Block for a very long time
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            self.gate.pass().await;
         }
     }
 
     #[tokio::test]
     async fn test_tell_with_timeout_actual_timeout() {
         init_test_logger();
-        let (actor_ref, handle) = spawn::<SlowTellActor>(());
+        let gate = Gate::default();
+        let (actor_ref, handle) =
+            rsactor::spawn_with_mailbox_capacity::<SlowTellActor>(gate.clone(), 1);
 
-        // First, send a blocking message that will occupy the actor
+        // Occupy the handler, then fill the single mailbox slot. The timeout
+        // covers admission into the mailbox, not handler completion, so a
+        // free slot would let the send succeed immediately.
+        actor_ref.tell(BlockingMsg).await.unwrap();
+        gate.wait_started().await;
         actor_ref.tell(BlockingMsg).await.unwrap();
 
-        // Now try to send another message with a very short timeout
-        // The actor is busy processing the first message, so this should timeout
-        let _result = actor_ref
+        let result = actor_ref
             .tell_with_timeout(BlockingMsg, Duration::from_millis(5))
             .await;
-
-        // This might succeed (if the message queue isn't full) or timeout
-        // The timeout error occurs when waiting for the message to be sent,
-        // not when waiting for the handler to complete
-
-        // Clean up
-        actor_ref.kill();
-        let _ = handle.await;
-    }
-}
-
-// ============================================================================
-// Tests for blocking methods with timeout expiry (actor_ref.rs)
-// ============================================================================
-
-mod blocking_timeout_expiry_tests {
-    use super::*;
-
-    struct BlockingTimeoutActor;
-
-    impl Actor for BlockingTimeoutActor {
-        type Args = ();
-        type Error = String;
-        type IdleEvent = ();
-
-        async fn on_start(_: (), _: &ActorRef<Self>) -> Result<Self, Self::Error> {
-            Ok(Self)
-        }
-    }
-
-    struct VerySlowHandlerMsg;
-
-    impl rsactor::Message<VerySlowHandlerMsg> for BlockingTimeoutActor {
-        type Reply = String;
-
-        async fn handle(&mut self, _: VerySlowHandlerMsg, _: &ActorRef<Self>) -> Self::Reply {
-            // Very long operation
-            tokio::time::sleep(Duration::from_secs(120)).await;
-            "done".to_string()
-        }
-    }
-
-    #[tokio::test]
-    async fn test_blocking_tell_timeout_with_slow_handler() {
-        init_test_logger();
-        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(());
-
-        // Start processing a slow message
-        actor_ref.tell(VerySlowHandlerMsg).await.unwrap();
-
-        let actor_clone = actor_ref.clone();
-
-        // Try blocking_tell with timeout while actor is busy
-        let _result = tokio::task::spawn_blocking(move || {
-            actor_clone.blocking_tell(VerySlowHandlerMsg, Some(Duration::from_millis(10)))
-        })
-        .await
-        .unwrap();
-
-        // This might succeed (queued) or timeout depending on timing
-        // The important thing is that the timeout path is exercised
-
-        actor_ref.kill();
-        let _ = handle.await;
-    }
-
-    #[tokio::test]
-    async fn test_blocking_ask_timeout_with_slow_handler() {
-        init_test_logger();
-        let (actor_ref, handle) = spawn::<BlockingTimeoutActor>(());
-
-        // Start processing a slow message first
-        actor_ref.tell(VerySlowHandlerMsg).await.unwrap();
-
-        let actor_clone = actor_ref.clone();
-
-        // Try blocking_ask with timeout while actor is busy processing
-        let result: rsactor::Result<String> = tokio::task::spawn_blocking(move || {
-            actor_clone.blocking_ask(VerySlowHandlerMsg, Some(Duration::from_millis(10)))
-        })
-        .await
-        .unwrap();
-
-        // Should timeout since actor is busy
-        // The exact behavior depends on whether the message gets queued before timeout
         match result {
-            Ok(_) => {}                               // Message was processed before timeout
-            Err(rsactor::Error::Timeout { .. }) => {} // Expected timeout
-            Err(e) => panic!("Unexpected error: {:?}", e),
+            Err(rsactor::Error::Timeout { operation, .. }) => {
+                assert_eq!(operation.as_str(), "tell");
+            }
+            other => panic!("Expected Timeout error, got: {other:?}"),
         }
 
-        actor_ref.kill();
-        let _ = handle.await;
+        kill_and_release(&actor_ref, handle, &gate).await;
     }
 }
 
