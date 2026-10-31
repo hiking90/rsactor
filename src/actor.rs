@@ -246,7 +246,8 @@ macro_rules! process_envelope {
         reply_channel = $reply_channel:expr,
         actor_ref = $actor_ref:expr,
         span_name = $span_name:literal,
-        record = $record_fn:ident $(,)?
+        record = $record_fn:ident,
+        metrics = $metrics:ident $(,)?
     ) => {{
         #[cfg(feature = "tracing")]
         let msg_span = tracing::debug_span!($span_name);
@@ -256,12 +257,11 @@ macro_rules! process_envelope {
         #[cfg(feature = "tracing")]
         let start_time = std::time::Instant::now();
 
-        // Hold the metrics collector by Arc clone (1 atomic increment) rather
-        // than cloning the entire ActorRef (which would clone every channel
-        // sender — 4 atomic increments). The collector must outlive the move
-        // of $actor_ref into handle_message below.
-        #[cfg(feature = "metrics")]
-        let metrics_collector = $actor_ref.metrics.clone();
+        // Metrics are recorded through `$metrics`, the runtime loop's own
+        // `Arc<MetricsCollector>`, not through `$actor_ref`: `$actor_ref` is
+        // moved into handle_message below, and every ActorRef of an actor
+        // shares that one collector, so borrowing the loop's handle avoids an
+        // Arc clone (atomic increment + decrement) per message.
         #[cfg(feature = "metrics")]
         let metrics_start = std::time::Instant::now();
 
@@ -278,7 +278,7 @@ macro_rules! process_envelope {
         // neither inflates the documented "successfully processed" counters —
         // an RAII guard recorded cancelled messages as successes.
         #[cfg(feature = "metrics")]
-        metrics_collector.$record_fn(metrics_start.elapsed());
+        $metrics.$record_fn(metrics_start.elapsed());
 
         #[cfg(feature = "tracing")]
         debug!(
@@ -881,9 +881,9 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
     debug!("Actor {actor_id} runtime starting - entering main processing loop.");
 
     let actor_weak = ActorRef::downgrade(&actor_ref);
-    // Keep the collector reachable for the idle branch below (the strong
-    // actor_ref is dropped next; the envelopes carry their own refs for the
-    // message branches).
+    // Keep the collector reachable for the rest of the loop: the strong
+    // actor_ref is dropped next, and both the message branches
+    // (`process_envelope!`) and the idle branch record through this handle.
     #[cfg(feature = "metrics")]
     let metrics = actor_ref.metrics.clone();
     drop(actor_ref); // Drop the strong reference to allow graceful shutdown detection
@@ -983,6 +983,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             actor_ref = actor_ref,
                             span_name = "actor_process_priority_message",
                             record = record_priority_message,
+                            metrics = metrics,
                         );
                         // `_ask_edge` (deadlock-detection token) drops here, right
                         // after the reply was sent — removing the wait-for edge
@@ -1049,6 +1050,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                             actor_ref = actor_ref,
                             span_name = "actor_process_message",
                             record = record_message,
+                            metrics = metrics,
                         );
                         // `_ask_edge` (deadlock-detection token) drops here, right
                         // after the reply was sent — removing the wait-for edge
@@ -1112,6 +1114,7 @@ pub(crate) async fn run_actor_lifecycle<T: Actor>(
                                             actor_ref = actor_ref,
                                             span_name = "actor_drain_priority_message",
                                             record = record_priority_message,
+                                            metrics = metrics,
                                         );
                                     }
                                     MailboxMessage::StopGracefully(_) => {

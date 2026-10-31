@@ -186,19 +186,17 @@ where
     })?;
 
     join.join().unwrap_or_else(|payload| {
-        let panic_text = payload
+        // Borrowed from `payload`: the only move of `payload` below is the
+        // diverging `resume_unwind`, so no copy of the text is needed.
+        let panic_text: Option<&str> = payload
             .downcast_ref::<&str>()
             .copied()
-            .map(str::to_owned)
-            .or_else(|| payload.downcast_ref::<String>().cloned());
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
         // Deadlock detection promises an *immediate panic* on an ask cycle;
         // swallowing it into Error::Runtime would silently downgrade that
         // contract on the slow path.
         #[cfg(feature = "deadlock-detection")]
-        if panic_text
-            .as_deref()
-            .is_some_and(|m| m.starts_with(crate::DEADLOCK_PANIC_PREFIX))
-        {
+        if panic_text.is_some_and(|m| m.starts_with(crate::DEADLOCK_PANIC_PREFIX)) {
             std::panic::resume_unwind(payload);
         }
         Err(Error::Runtime {
@@ -2588,5 +2586,54 @@ mod tests {
         .unwrap();
         assert!(polled.load(Ordering::SeqCst));
         assert_eq!(dead_letter_count() - before, 0);
+    }
+
+    // A panic on the blocking thread becomes `Error::Runtime`, with the panic
+    // text appended when the payload is a `&str` or a `String`. Records no
+    // dead letter: the message was already polled when it panicked.
+    #[test]
+    fn blocking_slow_path_reports_panic_text_as_runtime_error() {
+        // `resume_unwind` keeps the payload's type exactly and skips the panic
+        // hook, so the test prints nothing.
+        async fn panic_with(payload: Box<dyn std::any::Any + Send>) -> Result<()> {
+            std::panic::resume_unwind(payload)
+        }
+
+        let identity = Identity::new(1, "TestActor");
+        let cases: [(Box<dyn std::any::Any + Send>, &str); 3] = [
+            (Box::new("static text"), "worker died: static text"),
+            (
+                Box::new(String::from("owned text")),
+                "worker died: owned text",
+            ),
+            (Box::new(42_u32), "worker died"),
+        ];
+        for (payload, expected) in cases {
+            let err = run_blocking_on(
+                identity,
+                Operation::BlockingAsk,
+                "TestMsg",
+                "worker died",
+                panic_with(payload),
+                |body: Box<dyn FnOnce() -> Result<()> + Send + 'static>| {
+                    std::thread::Builder::new().spawn(body)
+                },
+                || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_time()
+                        .build()
+                },
+            )
+            .unwrap_err();
+            match err {
+                Error::Runtime {
+                    details, source, ..
+                } => {
+                    assert_eq!(details, expected);
+                    assert!(source.is_none());
+                }
+                other => panic!("expected Error::Runtime, got {other:?}"),
+            }
+        }
     }
 }

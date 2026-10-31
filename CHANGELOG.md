@@ -153,6 +153,10 @@ documentation and tests, so read each entry. Upgrade steps are in
 - The dead-letter recorder takes a typed `Operation` instead of a `&'static str`,
   so the emitted label and `Error::Timeout`'s operation can no longer drift.
   Internal only — `record` is `pub(crate)`.
+- With the `metrics` feature, the message loop records each processed message
+  through its own handle to the actor's metrics collector instead of cloning
+  the envelope's `Arc` first, removing one atomic increment and decrement per
+  message. Recorded values are unchanged.
 - `#[handler]` receiver validation now checks the receiver's type, so `self:
   &mut Self` is accepted. The by-value `mut self` rejection is listed under
   BREAKING CHANGES.
