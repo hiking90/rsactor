@@ -964,3 +964,97 @@ pub fn spawn_with_options<T: Actor>(
 
     (actor_ref, join_handle)
 }
+
+/// Receiver forms accepted and rejected by `#[handler]` (validated in
+/// `rsactor-derive`). Doctests only. They live in this crate because CI runs
+/// `cargo test` without `--workspace`, which skips `rsactor-derive`'s own
+/// tests, and rustdoc does not collect the `compile_fail` blocks in
+/// `tests/derive_macro_tests.rs`.
+///
+/// Accepted: `&mut self` and `self: &mut Self`.
+///
+/// ```
+/// use rsactor::{message_handlers, spawn, Actor, ActorRef};
+///
+/// #[derive(Actor)]
+/// struct A(u32);
+/// struct Shorthand;
+/// struct Explicit;
+///
+/// #[message_handlers]
+/// impl A {
+///     #[handler]
+///     async fn shorthand(&mut self, _: Shorthand, _: &ActorRef<Self>) -> u32 {
+///         self.0 += 1;
+///         self.0
+///     }
+///     #[handler]
+///     #[allow(clippy::needless_arbitrary_self_type)]
+///     async fn explicit(self: &mut Self, _: Explicit, _: &ActorRef<Self>) -> u32 {
+///         self.0 += 10;
+///         self.0
+///     }
+/// }
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let (actor_ref, handle) = spawn::<A>(A(0));
+/// assert_eq!(actor_ref.ask(Shorthand).await.unwrap(), 1);
+/// assert_eq!(actor_ref.ask(Explicit).await.unwrap(), 11);
+/// actor_ref.stop().await;
+/// handle.await.unwrap();
+/// # }
+/// ```
+///
+/// Rejected with "First parameter must be '&mut self'": `&self`
+///
+/// ```compile_fail
+/// use rsactor::{message_handlers, Actor, ActorRef};
+/// #[derive(Actor)]
+/// struct A(u32);
+/// struct M;
+/// #[message_handlers]
+/// impl A {
+///     #[handler]
+///     async fn h(&self, _: M, _: &ActorRef<Self>) -> u32 { self.0 }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// by-value `mut self` (`A` is `Copy`, the case that compiled before the check
+/// and ran the handler on a copy)
+///
+/// ```compile_fail
+/// use rsactor::{message_handlers, Actor, ActorRef};
+/// #[derive(Actor, Clone, Copy)]
+/// struct A(u32);
+/// struct M;
+/// #[message_handlers]
+/// impl A {
+///     #[handler]
+///     async fn h(mut self, _: M, _: &ActorRef<Self>) -> u32 { self.0 }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// `self: &Self`
+///
+/// ```compile_fail
+/// use rsactor::{message_handlers, Actor, ActorRef};
+/// #[derive(Actor)]
+/// struct A(u32);
+/// struct M;
+/// #[message_handlers]
+/// impl A {
+///     #[handler]
+///     async fn h(self: &Self, _: M, _: &ActorRef<Self>) -> u32 { self.0 }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// Each `compile_fail` block above compiles once the receiver check is removed,
+/// so it fails only because of that check. `self: Box<Self>` is also rejected,
+/// but rustc rejects it without the check, so a block for it would not test
+/// anything here.
+#[cfg(doctest)]
+struct HandlerReceiverDoctests;

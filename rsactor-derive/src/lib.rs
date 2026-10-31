@@ -138,7 +138,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
     parse_macro_input, Data, DeriveInput, FnArg, ImplItem, ImplItemFn, ItemImpl, PatType,
-    ReturnType, Type,
+    ReceiverKind, ReturnType, Type,
 };
 
 /// Derive macro for automatically implementing the Actor trait.
@@ -523,12 +523,21 @@ fn generate_message_impl(
     }
 
     // Validate first parameter (&mut self)
-    // Judge by the receiver's type, not `receiver.mutability`: that flag is also
-    // set for by-value `mut self`, and unset for the valid `self: &mut Self`.
+    // Judge by the receiver's kind, not `receiver.mutability`: that flag is the
+    // binding's `mut` (by-value `mut self`), not the reference's. Accept the
+    // shorthand `&mut self` and the explicit `self: &mut Self`. `ReceiverKind`
+    // is `#[non_exhaustive]`; any form added later (e.g. `&pin mut self`) is
+    // rejected until it is handled here. Tested by `HandlerReceiverDoctests`
+    // in rsactor's `src/lib.rs`.
     if !matches!(
         &inputs[0],
-        FnArg::Receiver(receiver)
-            if matches!(receiver.ty.as_ref(), Type::Reference(r) if r.mutability.is_some())
+        FnArg::Receiver(receiver) if match &receiver.kind {
+            ReceiverKind::Reference(_, _, mutability) => mutability.is_some(),
+            ReceiverKind::Typed(_, ty) => {
+                matches!(ty.as_ref(), Type::Reference(r) if r.mutability.is_some())
+            }
+            _ => false,
+        }
     ) {
         return Err(syn::Error::new_spanned(
             &inputs[0],

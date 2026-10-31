@@ -130,6 +130,12 @@ documentation and tests, so read each entry. Upgrade steps are in
 
 ### Changed
 
+- `rsactor-derive` now depends on `syn` 3 (was 2). Accepted and rejected
+  `#[handler]` receivers are unchanged: `&mut self` and `self: &mut Self` are
+  accepted; `&self`, by-value `self`/`mut self` and any other typed receiver
+  fail with "First parameter must be '&mut self'". Builds of rsactor already
+  compiled `syn` 3 through `futures-macro`, and still compile `syn` 2 through
+  `tracing-attributes`.
 - **The process-wide default mailbox capacity is now read when the actor is
   spawned, not when `SpawnOptions` is constructed.** Resolution moved into
   `spawn_with_options`, which is the first point where the actor type — and so
