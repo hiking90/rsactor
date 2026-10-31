@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Security and Dependencies
 - `cargo audit` - Run security audit (requires cargo-audit installation)
-- `cargo update` - Resolves against the workspace MSRV: `.cargo/config.toml` enables MSRV-aware resolution, so dependency versions requiring a newer compiler than `rust-version` are not selected (needs cargo 1.84+; older toolchains ignore the setting)
+- `cargo update` - Resolves against the workspace MSRV: `.cargo/config.toml` enables MSRV-aware resolution, so dependency versions requiring a newer compiler than `rust-version` are not selected (needs cargo 1.84+, which every toolchain at or above the MSRV satisfies)
 
 ## Repository Architecture
 
@@ -80,7 +80,7 @@ Two patterns:
 ### Cross-Platform Support
 - Workspace supports multiple platforms (Linux, Windows, macOS)
 - Android cross-compilation tested in CI
-- MSRV: Rust 1.75.0+
+- MSRV: Rust 1.85.0+
 
 ### Documentation
 - Extensive inline documentation with examples

@@ -8,9 +8,9 @@
 # `fallback`, Cargo prefers versions compatible with the workspace
 # `rust-version` and reaches past it only when no compatible version exists.
 #
-# Honoured by Cargo 1.84+. Older toolchains -- including the MSRV build itself
-# -- ignore the key, so this setting cannot break an MSRV build. Keep it in
-# sync with `rust-version` in Cargo.toml: the value is read from there, not
-# duplicated here.
+# Honoured by Cargo 1.84+. The MSRV is above that, so every supported
+# toolchain, the MSRV build included, applies it. The compiler version is read
+# from `rust-version` in Cargo.toml, not duplicated here, so raising the MSRV
+# needs no change in this file.
 [resolver]
 incompatible-rust-versions = "fallback"

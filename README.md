@@ -2,7 +2,7 @@
 [![CI](https://github.com/hiking90/rsactor/actions/workflows/rust.yml/badge.svg)](https://github.com/hiking90/rsactor/actions/workflows/rust.yml)
 [![Crates.io](https://img.shields.io/crates/v/rsactor.svg)](https://crates.io/crates/rsactor)
 [![Docs.rs](https://docs.rs/rsactor/badge.svg)](https://docs.rs/rsactor)
-[![Rust Version](https://img.shields.io/badge/rustc-1.75+-blue.svg)](https://blog.rust-lang.org/)
+[![Rust Version](https://img.shields.io/badge/rustc-1.85+-blue.svg)](https://blog.rust-lang.org/)
 
 A Simple and Efficient In-Process Actor Model Implementation for Rust.
 
