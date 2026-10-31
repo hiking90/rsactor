@@ -25,6 +25,15 @@ documentation and tests, so read each entry. Upgrade steps are in
 
 ### ⚠️ BREAKING CHANGES
 
+- **MSRV raised from 1.75 to 1.85.** `tokio` 1.54 and the `rand` 0.10
+  dev-dependency (used by the examples) both require Rust 1.85; under the old
+  MSRV the lockfile stayed on `tokio` 1.53 and `rand` 0.9. The `tokio`
+  requirement itself is unchanged (`1.22`), so downstream crates still choose
+  their own `tokio` version. Building with an older compiler fails with
+  "cannot be built because it requires rustc 1.85.0 or newer". Such a crate can
+  stay on 0.18.x; cargo picks 0.18.x on its own only when MSRV-aware resolution
+  is enabled in that crate (cargo 1.84+, with `resolver = "3"` or
+  `incompatible-rust-versions = "fallback"`).
 - **`FailurePhase` and `ActorFailure` are now `#[non_exhaustive]`.** A match in
   a downstream crate must add a `_` arm. This lets a future release report a new
   lifecycle phase without a breaking change. Note the attribute is applied at the
