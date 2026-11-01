@@ -38,6 +38,7 @@ pub fn to_dot(output: &Output) -> String {
                 "shape=box, style=\"rounded,dashed\", label=\"{}\"",
                 handlers_label(output, h)
             ),
+            Node::Unknown(_) => "shape=circle, color=red, fontcolor=red, label=\"?\"".to_string(),
         };
         let _ = writeln!(dot, "  {id} [{attrs}];");
     }
@@ -95,7 +96,7 @@ fn edge_attrs(group: &[&Edge]) -> String {
                     EdgeKind::Ask => "ask",
                     _ => "tell",
                 });
-                let message = edge.message.as_deref().unwrap_or("?");
+                let message = edge.message_label.as_deref().unwrap_or("?");
                 match &edge.reply {
                     Some(reply) => format!("{verb} {message} -> {reply}"),
                     None => format!("{verb} {message}"),

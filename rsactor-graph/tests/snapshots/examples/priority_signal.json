@@ -77,6 +77,7 @@
         "from": "external",
         "to": "actor:example:priority_signal:priority_signal::WorkerActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -84,6 +85,78 @@
           {
             "file": "examples/priority_signal.rs",
             "line": 113
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:priority_signal:priority_signal::WorkerActor",
+        "message": "priority_signal::ProcessJob",
+        "message_label": "ProcessJob",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/priority_signal.rs",
+            "line": 118
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": "tell_priority",
+        "from": "external",
+        "to": "actor:example:priority_signal:priority_signal::WorkerActor",
+        "message": "priority_signal::PauseProcessing",
+        "message_label": "PauseProcessing",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/priority_signal.rs",
+            "line": 135
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": "tell_priority",
+        "from": "external",
+        "to": "actor:example:priority_signal:priority_signal::WorkerActor",
+        "message": "priority_signal::ResumeProcessing",
+        "message_label": "ResumeProcessing",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/priority_signal.rs",
+            "line": 149
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_priority",
+        "from": "external",
+        "to": "actor:example:priority_signal:priority_signal::WorkerActor",
+        "message": "priority_signal::HealthCheck",
+        "message_label": "HealthCheck",
+        "reply": "HealthSnapshot",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/priority_signal.rs",
+            "line": 126
+          },
+          {
+            "file": "examples/priority_signal.rs",
+            "line": 140
           }
         ]
       }

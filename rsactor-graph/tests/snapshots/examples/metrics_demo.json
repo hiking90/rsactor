@@ -65,6 +65,7 @@
         "from": "external",
         "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -72,6 +73,65 @@
           {
             "file": "examples/metrics_demo.rs",
             "line": 65
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": "metrics_demo::FastTask",
+        "message_label": "FastTask",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 80
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": "metrics_demo::SlowTask",
+        "message_label": "SlowTask",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 102
+          },
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 103
+          },
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 104
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": "metrics_demo::GetName",
+        "message_label": "GetName",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 129
           }
         ]
       }

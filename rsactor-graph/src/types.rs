@@ -37,6 +37,10 @@ pub enum Ty {
     Slice(Box<Ty>),
     Dyn(Vec<Ty>),
     ImplTrait(Vec<Ty>),
+    /// An iterator yielding the inner type. Never written in source; the
+    /// type environment produces it for `iter()`, `values()` and friends
+    /// (§4.4.1).
+    Iter(Box<Ty>),
     /// Could not be resolved; holds the type as written (compacted).
     Unknown(String),
 }
@@ -160,6 +164,92 @@ impl Ty {
         self.render(index, false)
     }
 
+    /// Strips references and the smart pointers method calls see through
+    /// (auto-deref, §4.4): `&T`, `Box<T>`, `Arc<T>`, `Rc<T>`.
+    pub fn auto_deref(&self) -> &Ty {
+        match self {
+            Ty::Ref(inner) => inner.auto_deref(),
+            Ty::Std { path, args }
+                if args.len() == 1
+                    && matches!(
+                        path.as_str(),
+                        "std::boxed::Box" | "std::sync::Arc" | "std::rc::Rc"
+                    ) =>
+            {
+                args[0].auto_deref()
+            }
+            other => other,
+        }
+    }
+
+    /// `Ty::Rsactor` with the given name, after auto-deref.
+    pub fn rsactor(&self, wanted: &str) -> Option<&[Ty]> {
+        match self.auto_deref() {
+            Ty::Rsactor { name, args } if name == wanted => Some(args),
+            _ => None,
+        }
+    }
+
+    /// `dyn TellHandler<M>`-style trait object, after auto-deref: the
+    /// rsactor trait name and its arguments.
+    pub fn handler_trait(&self) -> Option<(&str, &[Ty])> {
+        let Ty::Dyn(bounds) = self.auto_deref() else {
+            return None;
+        };
+        bounds.iter().find_map(|bound| match bound {
+            Ty::Rsactor { name, args }
+                if matches!(
+                    name.as_str(),
+                    "TellHandler" | "AskHandler" | "WeakTellHandler" | "WeakAskHandler"
+                ) =>
+            {
+                Some((name.as_str(), args.as_slice()))
+            }
+            _ => None,
+        })
+    }
+
+    /// Replaces generic parameters by name.
+    pub fn substitute(&self, params: &[String], args: &[Ty]) -> Ty {
+        let sub = |items: &[Ty]| -> Vec<Ty> {
+            items.iter().map(|t| t.substitute(params, args)).collect()
+        };
+        match self {
+            Ty::Generic(name) => match params.iter().position(|p| p == name) {
+                Some(i) if i < args.len() => args[i].clone(),
+                _ => self.clone(),
+            },
+            Ty::Decl {
+                id,
+                args: a,
+                inferred,
+            } => Ty::Decl {
+                id: *id,
+                args: sub(a),
+                inferred: *inferred,
+            },
+            Ty::Rsactor { name, args: a } => Ty::Rsactor {
+                name: name.clone(),
+                args: sub(a),
+            },
+            Ty::Std { path, args: a } => Ty::Std {
+                path: path.clone(),
+                args: sub(a),
+            },
+            Ty::External { path, args: a } => Ty::External {
+                path: path.clone(),
+                args: sub(a),
+            },
+            Ty::Ref(inner) => Ty::Ref(Box::new(inner.substitute(params, args))),
+            Ty::Slice(inner) => Ty::Slice(Box::new(inner.substitute(params, args))),
+            Ty::Iter(inner) => Ty::Iter(Box::new(inner.substitute(params, args))),
+            Ty::Tuple(items) => Ty::Tuple(sub(items)),
+            Ty::Dyn(items) => Ty::Dyn(sub(items)),
+            Ty::ImplTrait(items) => Ty::ImplTrait(sub(items)),
+            Ty::Unknown(_) => self.clone(),
+        }
+    }
+
     /// Weakest judgement that went into this type.
     pub fn resolution(&self) -> Resolution {
         match self {
@@ -175,7 +265,7 @@ impl Ty {
                 .iter()
                 .fold(Resolution::Exact, |acc, a| acc.weakest(a.resolution())),
             Ty::Generic(_) => Resolution::Exact,
-            Ty::Ref(inner) | Ty::Slice(inner) => inner.resolution(),
+            Ty::Ref(inner) | Ty::Slice(inner) | Ty::Iter(inner) => inner.resolution(),
             Ty::Tuple(items) | Ty::Dyn(items) | Ty::ImplTrait(items) => items
                 .iter()
                 .fold(Resolution::Exact, |acc, a| acc.weakest(a.resolution())),
@@ -232,6 +322,7 @@ impl Ty {
                 format!("({})", inner.join(", "))
             }
             Ty::Slice(inner) => format!("[{}]", inner.render(index, full)),
+            Ty::Iter(inner) => format!("Iterator<{}>", inner.render(index, full)),
             Ty::Dyn(bounds) => {
                 let inner: Vec<String> = bounds.iter().map(|b| b.render(index, full)).collect();
                 format!("dyn {}", inner.join(" + "))

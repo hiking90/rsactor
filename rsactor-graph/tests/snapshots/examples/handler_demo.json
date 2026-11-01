@@ -82,6 +82,34 @@
       {
         "kind": "external",
         "id": "external"
+      },
+      {
+        "kind": "handlers",
+        "id": "handlers:AskHandler:handler_demo::GetStatus:handler_demo::Status",
+        "handler": "AskHandler",
+        "message": "handler_demo::GetStatus",
+        "message_label": "GetStatus",
+        "reply": "handler_demo::Status",
+        "reply_label": "Status",
+        "candidates": [
+          "actor:example:handler_demo:handler_demo::CounterActor",
+          "actor:example:handler_demo:handler_demo::LoggerActor"
+        ],
+        "may_be_outside": false
+      },
+      {
+        "kind": "handlers",
+        "id": "handlers:TellHandler:handler_demo::Ping",
+        "handler": "TellHandler",
+        "message": "handler_demo::Ping",
+        "message_label": "Ping",
+        "reply": null,
+        "reply_label": null,
+        "candidates": [
+          "actor:example:handler_demo:handler_demo::CounterActor",
+          "actor:example:handler_demo:handler_demo::LoggerActor"
+        ],
+        "may_be_outside": false
       }
     ],
     "edges": [
@@ -91,6 +119,7 @@
         "from": "external",
         "to": "actor:example:handler_demo:handler_demo::CounterActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -107,6 +136,7 @@
         "from": "external",
         "to": "actor:example:handler_demo:handler_demo::LoggerActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -114,6 +144,60 @@
           {
             "file": "examples/handler_demo.rs",
             "line": 117
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "handlers:TellHandler:handler_demo::Ping",
+        "message": "handler_demo::Ping",
+        "message_label": "Ping",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/handler_demo.rs",
+            "line": 141
+          },
+          {
+            "file": "examples/handler_demo.rs",
+            "line": 187
+          },
+          {
+            "file": "examples/handler_demo.rs",
+            "line": 207
+          },
+          {
+            "file": "examples/handler_demo.rs",
+            "line": 229
+          },
+          {
+            "file": "examples/handler_demo.rs",
+            "line": 267
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "handlers:AskHandler:handler_demo::GetStatus:handler_demo::Status",
+        "message": "handler_demo::GetStatus",
+        "message_label": "GetStatus",
+        "reply": "Status",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/handler_demo.rs",
+            "line": 160
+          },
+          {
+            "file": "examples/handler_demo.rs",
+            "line": 285
           }
         ]
       }

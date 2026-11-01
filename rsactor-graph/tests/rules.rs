@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use rsactor_graph::model::{ActorNode, Category, EdgeKind, Node, Output, Resolution};
+use rsactor_graph::model::{ActorNode, Category, Edge, EdgeKind, Node, Output, Resolution};
 use rsactor_graph::render::{escape_record, to_dot};
 use rsactor_graph::{scan, CrateSpec, ScanInput};
 
@@ -416,4 +416,205 @@ fn an_actor_outside_the_workspace_widens_handler_candidates() {
     };
     assert_eq!(tell.candidates, vec![local.to_string()]);
     assert!(tell.may_be_outside);
+}
+
+fn find_edge<'a>(
+    output: &'a Output,
+    from: &str,
+    to: &str,
+    kind: EdgeKind,
+    variant: Option<&str>,
+    message: Option<&str>,
+) -> &'a Edge {
+    output
+        .graph
+        .edges
+        .iter()
+        .find(|e| {
+            e.from == from
+                && e.to == to
+                && e.kind == kind
+                && e.variant.as_deref() == variant
+                && e.message.as_deref() == message
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no {kind:?} {from} -> {to} {variant:?} {message:?}; edges: {:#?}",
+                output.graph.edges
+            )
+        })
+}
+
+fn reports(output: &Output, category: Category) -> Vec<String> {
+    output
+        .report
+        .entries
+        .iter()
+        .filter(|e| e.category == category)
+        .map(|e| e.detail.clone())
+        .collect()
+}
+
+const WORKER: &str = "actor:lib:sends:sends::Worker";
+const ROUTER: &str = "actor:lib:sends:sends::Router";
+
+#[test]
+fn receivers_resolve_through_the_type_environment() {
+    let output = scan_lib("sends");
+    // Every `Job` tell that must reach Router: async-block capture (1),
+    // `let else`, `match`, UFCS downgrade + upgrade (3), containers (9), and
+    // field access through a message, a wrapper struct, a generic struct and
+    // a renamed `ActorRef` (4). The shadowed closure parameter and the
+    // re-`let` to `Batcher` must not add locations here.
+    let job = find_edge(
+        &output,
+        WORKER,
+        ROUTER,
+        EdgeKind::Tell,
+        None,
+        Some("sends::Job"),
+    );
+    assert_eq!(job.locations.len(), 17, "{:#?}", job.locations);
+    assert_eq!(job.receiver_resolution, Resolution::Exact);
+    assert_eq!(job.message_resolution, Resolution::Exact);
+
+    // `Self::Args` destructuring + `if let Some(r) = weak.upgrade()`, and
+    // enum variants of every shape: one `Command` edge, three locations.
+    let command = find_edge(
+        &output,
+        WORKER,
+        ROUTER,
+        EdgeKind::Tell,
+        None,
+        Some("sends::Command"),
+    );
+    assert_eq!(command.locations.len(), 3, "{:#?}", command.locations);
+}
+
+#[test]
+fn messages_follow_m1_and_m2() {
+    let output = scan_lib("sends");
+
+    let made = find_edge(
+        &output,
+        WORKER,
+        ROUTER,
+        EdgeKind::Tell,
+        None,
+        Some("sends::Made"),
+    );
+    assert_eq!(made.message_resolution, Resolution::Assumed);
+
+    // `Box::new(Job)`: the receiver is known and kept; only the message is `?`.
+    let unknown_message = find_edge(&output, WORKER, ROUTER, EdgeKind::Tell, None, None);
+    assert_eq!(unknown_message.receiver_resolution, Resolution::Exact);
+    assert_eq!(unknown_message.message_resolution, Resolution::Unresolved);
+
+    find_edge(
+        &output,
+        WORKER,
+        ROUTER,
+        EdgeKind::Ask,
+        None,
+        Some("sends::Job"),
+    );
+    find_edge(
+        &output,
+        WORKER,
+        ROUTER,
+        EdgeKind::Tell,
+        Some("tell_priority"),
+        Some("sends::Job"),
+    );
+}
+
+#[test]
+fn unresolved_receivers_go_to_a_per_sender_unknown_node() {
+    let output = scan_lib("sends");
+    // The shadowing closure parameter.
+    let shadowed = find_edge(
+        &output,
+        WORKER,
+        &format!("unknown:{WORKER}"),
+        EdgeKind::Tell,
+        None,
+        Some("sends::Job"),
+    );
+    assert_eq!(shadowed.receiver_resolution, Resolution::Unresolved);
+    // A call result with no known type.
+    let from = "fn:lib:sends:sends::unknown_receiver";
+    find_edge(
+        &output,
+        from,
+        &format!("unknown:{from}"),
+        EdgeKind::Tell,
+        None,
+        Some("sends::Job"),
+    );
+}
+
+#[test]
+fn type_erased_receivers_reach_handler_nodes() {
+    let output = scan_lib("sends");
+    find_edge(
+        &output,
+        WORKER,
+        "handlers:AskHandler:sends::Query:u32",
+        EdgeKind::Ask,
+        None,
+        Some("sends::Query"),
+    );
+    find_edge(
+        &output,
+        "fn:lib:sends:sends::handlers",
+        "handlers:TellHandler:sends::Job",
+        EdgeKind::Tell,
+        None,
+        Some("sends::Job"),
+    );
+}
+
+#[test]
+fn candidates_that_cannot_be_drawn_are_reported() {
+    let output = scan_lib("sends");
+
+    let unsupported = reports(&output, Category::UnsupportedReceiver);
+    assert_eq!(unsupported.len(), 3, "{unsupported:#?}");
+    assert!(unsupported
+        .iter()
+        .any(|d| d.contains("wrapper type `RouterHandle`")));
+    assert!(unsupported
+        .iter()
+        .any(|d| d.contains("type alias `RouterRef`")));
+    assert!(unsupported
+        .iter()
+        .any(|d| d.contains("generic parameter `R`")));
+
+    // Unknown receiver, message no actor handles: reported, not a `?` edge.
+    let unclassified = reports(&output, Category::Unclassified);
+    assert_eq!(unclassified.len(), 1, "{unclassified:#?}");
+    assert!(unclassified[0].contains("LogLine"));
+
+    assert_eq!(reports(&output, Category::Ufcs).len(), 1);
+
+    let in_macros = reports(&output, Category::MacroCandidate);
+    assert_eq!(in_macros.len(), 2, "{in_macros:#?}");
+    assert!(in_macros.iter().any(|d| d.contains("select!")));
+    assert!(in_macros.iter().any(|d| d.contains("println!")));
+
+    // `Box::new(..)` message, the shadowed closure, the unknown call result.
+    assert_eq!(reports(&output, Category::UnresolvedEdge).len(), 3);
+
+    let cross = reports(&output, Category::CrossCheck);
+    assert_eq!(cross.len(), 1, "{cross:#?}");
+    assert!(cross[0].contains("sends::Unhandled"));
+
+    // `Batcher::tell` (field and re-`let`) is dropped without a trace, and
+    // nothing else is reported: 3 + 1 + 1 + 2 + 3 + 1.
+    assert_eq!(
+        output.report.entries.len(),
+        11,
+        "{:#?}",
+        output.report.entries
+    );
 }

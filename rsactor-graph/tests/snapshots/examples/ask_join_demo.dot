@@ -5,4 +5,7 @@ digraph "ask_join_demo" {
   "actor:example:ask_join_demo:ask_join_demo::WorkerActor" [label="{ask_join_demo::WorkerActor|FileProcessingTask -\> JoinHandle\<String\>\lGetTaskCount -\> u32\lHeavyComputationTask -\> JoinHandle\<u64\>\lPanicTask -\> JoinHandle\<String\>\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:ask_join_demo:ask_join_demo::WorkerActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:ask_join_demo:ask_join_demo::WorkerActor" [label="ask GetTaskCount -> u32\nask HeavyComputationTask -> JoinHandle<u64>"];
+  "external" -> "actor:example:ask_join_demo:ask_join_demo::WorkerActor" [label="ask_join ?"];
+  "external" -> "actor:example:ask_join_demo:ask_join_demo::WorkerActor" [label="ask_join HeavyComputationTask -> JoinHandle<u64>\nask_join PanicTask -> JoinHandle<String>"];
 }

@@ -89,6 +89,7 @@
         "from": "external",
         "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -98,10 +99,106 @@
             "line": 67
           }
         ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
+        "message": "message_macro_demo::Add",
+        "message_label": "Add",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 72
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
+        "message": "message_macro_demo::Multiply",
+        "message_label": "Multiply",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 76
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
+        "message": "message_macro_demo::Reset",
+        "message_label": "Reset",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 86
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
+        "message": "message_macro_demo::SetCount",
+        "message_label": "SetCount",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 80
+          }
+        ]
       }
     ]
   },
   "report": {
-    "entries": []
+    "entries": [
+      {
+        "category": "macro_candidate",
+        "location": {
+          "file": "examples/message_macro_demo.rs",
+          "line": 69
+        },
+        "sender": "external",
+        "detail": "`.ask(..)` inside `println!`"
+      },
+      {
+        "category": "macro_candidate",
+        "location": {
+          "file": "examples/message_macro_demo.rs",
+          "line": 83
+        },
+        "sender": "external",
+        "detail": "`.ask(..)` inside `println!`"
+      },
+      {
+        "category": "macro_candidate",
+        "location": {
+          "file": "examples/message_macro_demo.rs",
+          "line": 89
+        },
+        "sender": "external",
+        "detail": "`.ask(..)` inside `println!`"
+      }
+    ]
   }
 }

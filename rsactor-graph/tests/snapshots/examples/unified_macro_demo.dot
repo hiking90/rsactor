@@ -7,4 +7,8 @@ digraph "unified_macro_demo" {
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [style="bold", label="spawn"];
   "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [label="tell SetValue"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="tell Increment"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [label="ask GetValue -> Option<T>"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="ask GetCount -> i32"];
 }

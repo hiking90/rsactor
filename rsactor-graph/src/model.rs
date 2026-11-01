@@ -71,6 +71,9 @@ pub enum Node {
     External(ExternalNode),
     /// "Every actor that handles M" for a type-erased handler (§4.3).
     Handlers(HandlersNode),
+    /// Receiver that could not be determined. One per sender, so unresolved
+    /// sends do not pile onto a single hub node (§6.1).
+    Unknown(UnknownNode),
 }
 
 impl Node {
@@ -81,8 +84,16 @@ impl Node {
             Node::Fn(n) => &n.id,
             Node::External(n) => &n.id,
             Node::Handlers(n) => &n.id,
+            Node::Unknown(n) => &n.id,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct UnknownNode {
+    pub id: String,
+    /// Id of the sender whose sends end here.
+    pub sender: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -164,7 +175,12 @@ pub struct Edge {
     pub variant: Option<String>,
     pub from: String,
     pub to: String,
+    /// Message key (§4.2); `None` for holds and spawn edges and for a
+    /// message that could not be determined.
     pub message: Option<String>,
+    /// Short form of the message for display.
+    pub message_label: Option<String>,
+    /// Reply type label, from the receiver's handler.
     pub reply: Option<String>,
     pub receiver_resolution: Resolution,
     pub message_resolution: Resolution,

@@ -77,6 +77,7 @@
         "from": "external",
         "to": "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -84,6 +85,82 @@
           {
             "file": "examples/actor_blocking_task.rs",
             "line": 222
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": "blocking_tell",
+        "from": "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor",
+        "to": "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor",
+        "message": "actor_blocking_task::ProcessedData",
+        "message_label": "ProcessedData",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_blocking_task.rs",
+            "line": 102
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor",
+        "message": "actor_blocking_task::GetState",
+        "message_label": "GetState",
+        "reply": "(f64, Option<f64>, Option<Instant>)",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_blocking_task.rs",
+            "line": 229
+          },
+          {
+            "file": "examples/actor_blocking_task.rs",
+            "line": 259
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor",
+        "message": "actor_blocking_task::SetFactor",
+        "message_label": "SetFactor",
+        "reply": "f64",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_blocking_task.rs",
+            "line": 238
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor",
+        "message": "actor_blocking_task::TaskCommand",
+        "message_label": "TaskCommand",
+        "reply": "bool",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_blocking_task.rs",
+            "line": 245
+          },
+          {
+            "file": "examples/actor_blocking_task.rs",
+            "line": 266
           }
         ]
       }

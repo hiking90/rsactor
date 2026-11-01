@@ -91,6 +91,7 @@
         "from": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
         "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -111,6 +112,7 @@
         "from": "external",
         "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -127,6 +129,7 @@
         "from": "external",
         "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -134,6 +137,74 @@
           {
             "file": "examples/actor_async_worker.rs",
             "line": 156
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "message": "actor_async_worker::ProcessTask",
+        "message_label": "ProcessTask",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 63
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": "actor_async_worker::WorkCompleted",
+        "message_label": "WorkCompleted",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 140
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": "actor_async_worker::RequestWork",
+        "message_label": "RequestWork",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 162
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": "actor_async_worker::GetResults",
+        "message_label": "GetResults",
+        "reply": "Vec<String>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 174
           }
         ]
       }

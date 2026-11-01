@@ -65,6 +65,7 @@
         "from": "external",
         "to": "actor:example:basic:basic::MyActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -72,6 +73,44 @@
           {
             "file": "examples/basic.rs",
             "line": 108
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:basic:basic::MyActor",
+        "message": "basic::Decrement",
+        "message_label": "Decrement",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/basic.rs",
+            "line": 119
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:basic:basic::MyActor",
+        "message": "basic::Increment",
+        "message_label": "Increment",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/basic.rs",
+            "line": 114
+          },
+          {
+            "file": "examples/basic.rs",
+            "line": 124
           }
         ]
       }

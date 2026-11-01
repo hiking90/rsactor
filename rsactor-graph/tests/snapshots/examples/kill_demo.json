@@ -41,6 +41,7 @@
         "from": "external",
         "to": "actor:example:kill_demo:kill_demo::DemoActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -48,6 +49,23 @@
           {
             "file": "examples/kill_demo.rs",
             "line": 72
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:kill_demo:kill_demo::DemoActor",
+        "message": "kill_demo::Ping",
+        "message_label": "Ping",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/kill_demo.rs",
+            "line": 75
           }
         ]
       }

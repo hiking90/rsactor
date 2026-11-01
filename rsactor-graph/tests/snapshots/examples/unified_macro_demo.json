@@ -91,6 +91,7 @@
         "from": "external",
         "to": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -111,6 +112,7 @@
         "from": "external",
         "to": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -118,6 +120,86 @@
           {
             "file": "examples/unified_macro_demo.rs",
             "line": 83
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
+        "message": "unified_macro_demo::SetValue",
+        "message_label": "SetValue",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 96
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 106
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
+        "message": "unified_macro_demo::Increment",
+        "message_label": "Increment",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 85
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 86
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
+        "message": "unified_macro_demo::GetValue",
+        "message_label": "GetValue",
+        "reply": "Option<T>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 97
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 107
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
+        "message": "unified_macro_demo::GetCount",
+        "message_label": "GetCount",
+        "reply": "i32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 87
           }
         ]
       }

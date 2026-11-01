@@ -5,4 +5,5 @@ digraph "weak_reference_demo" {
   "actor:example:weak_reference_demo:weak_reference_demo::PingActor" [label="{weak_reference_demo::PingActor|GetStatus -\> Status\lPing -\> String\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:weak_reference_demo:weak_reference_demo::PingActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:weak_reference_demo:weak_reference_demo::PingActor" [label="ask GetStatus -> Status\nask Ping -> String"];
 }

@@ -8,4 +8,8 @@ digraph "actor_async_worker" {
   "actor:example:actor_async_worker:actor_async_worker::RequesterActor" -> "actor:example:actor_async_worker:actor_async_worker::WorkerActor" [style="dotted", color=gray50];
   "external" -> "actor:example:actor_async_worker:actor_async_worker::RequesterActor" [style="bold", label="spawn"];
   "external" -> "actor:example:actor_async_worker:actor_async_worker::WorkerActor" [style="bold", label="spawn"];
+  "actor:example:actor_async_worker:actor_async_worker::RequesterActor" -> "actor:example:actor_async_worker:actor_async_worker::WorkerActor" [label="tell ProcessTask"];
+  "actor:example:actor_async_worker:actor_async_worker::WorkerActor" -> "actor:example:actor_async_worker:actor_async_worker::RequesterActor" [label="tell WorkCompleted"];
+  "external" -> "actor:example:actor_async_worker:actor_async_worker::RequesterActor" [label="tell RequestWork"];
+  "external" -> "actor:example:actor_async_worker:actor_async_worker::RequesterActor" [label="ask GetResults -> Vec<String>"];
 }

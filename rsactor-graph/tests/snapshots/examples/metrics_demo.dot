@@ -5,4 +5,6 @@ digraph "metrics_demo" {
   "actor:example:metrics_demo:metrics_demo::WorkerActor" [label="{metrics_demo::WorkerActor|FastTask\lGetName -\> String\lSlowTask\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:metrics_demo:metrics_demo::WorkerActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:metrics_demo:metrics_demo::WorkerActor" [label="tell FastTask\ntell SlowTask"];
+  "external" -> "actor:example:metrics_demo:metrics_demo::WorkerActor" [label="ask GetName -> String"];
 }

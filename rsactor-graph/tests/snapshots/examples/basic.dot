@@ -5,4 +5,5 @@ digraph "basic" {
   "actor:example:basic:basic::MyActor" [label="{basic::MyActor|Decrement -\> u32\lDummyMessage -\> u32\lIncrement -\> u32\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:basic:basic::MyActor" [style="bold", label="spawn (spawn_with_options)"];
+  "external" -> "actor:example:basic:basic::MyActor" [label="ask Decrement -> u32\nask Increment -> u32"];
 }

@@ -4,7 +4,7 @@
 //! Graph assembly: actors and handled messages (§4.1, §4.2), holds edges and
 //! type-erased handler nodes (§4.3). Call sites are scanned by [`crate::calls`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use quote::ToTokens;
@@ -14,7 +14,7 @@ use syn::{Attribute, FnArg, ImplItem, Item, ItemImpl, Meta, ReturnType, Token};
 use crate::crate_tree::{compact_tokens, location_of, ModId};
 use crate::model::{
     ActorNode, Category, Edge, EdgeKind, ExternalActorNode, ExternalNode, FnNode, Graph,
-    HandledMessage, HandlersNode, Location, Node, Report, Resolution,
+    HandledMessage, HandlersNode, Location, Node, Report, Resolution, UnknownNode,
 };
 use crate::resolve::{type_params, DeclId, Index, Res};
 use crate::types::{Ty, TyCtx};
@@ -34,9 +34,14 @@ pub struct ActorInfo {
 pub enum Endpoint {
     Actor(DeclId),
     ExternalActor(String),
-    Fn { target: String, path: String },
+    Fn {
+        target: String,
+        path: String,
+    },
     External,
     Handlers(HandlerSig),
+    /// The `?` receiver of one sender, identified by the sender's node id.
+    Unknown(String),
 }
 
 /// `TellHandler<M>` or `AskHandler<M, R>`.
@@ -54,6 +59,7 @@ struct EdgeKey {
     from: String,
     to: String,
     message: Option<String>,
+    message_label: Option<String>,
     reply: Option<String>,
     receiver_resolution: Resolution,
     message_resolution: Resolution,
@@ -65,6 +71,9 @@ pub struct Builder<'i, 'a> {
     pub base: &'i Path,
     pub report: &'i mut Report,
     pub actors: BTreeMap<DeclId, ActorInfo>,
+    /// Types with an `impl Deref`/`DerefMut`: a method call on them may reach
+    /// an `ActorRef` inside, so a send on them is never dropped (§4.4).
+    pub deref_impls: HashSet<DeclId>,
     extra: BTreeMap<String, Node>,
     handlers: BTreeMap<String, (HandlerSig, String)>,
     edges: BTreeMap<EdgeKey, BTreeSet<Location>>,
@@ -75,10 +84,32 @@ pub struct EdgeData {
     pub kind: EdgeKind,
     pub variant: Option<String>,
     pub message: Option<String>,
+    pub message_label: Option<String>,
     pub reply: Option<String>,
     pub receiver_resolution: Resolution,
     pub message_resolution: Resolution,
     pub location: Location,
+}
+
+impl EdgeData {
+    /// Holds and spawn edges carry no message.
+    pub fn structural(
+        kind: EdgeKind,
+        variant: Option<String>,
+        receiver: Resolution,
+        location: Location,
+    ) -> Self {
+        EdgeData {
+            kind,
+            variant,
+            message: None,
+            message_label: None,
+            reply: None,
+            receiver_resolution: receiver,
+            message_resolution: Resolution::Exact,
+            location,
+        }
+    }
 }
 
 impl<'i, 'a> Builder<'i, 'a> {
@@ -133,6 +164,16 @@ impl<'i, 'a> Builder<'i, 'a> {
                     .or_insert_with(|| (sig.clone(), handler.to_string()));
                 id
             }
+            Endpoint::Unknown(sender) => {
+                let id = format!("unknown:{sender}");
+                self.extra.entry(id.clone()).or_insert_with(|| {
+                    Node::Unknown(UnknownNode {
+                        id: id.clone(),
+                        sender: sender.clone(),
+                    })
+                });
+                id
+            }
         }
     }
 
@@ -144,6 +185,7 @@ impl<'i, 'a> Builder<'i, 'a> {
             Endpoint::Fn { path, .. } => format!("fn {path}"),
             Endpoint::External => "external".to_string(),
             Endpoint::Handlers(sig) => sig.message.label(self.index),
+            Endpoint::Unknown(_) => "?".to_string(),
         }
     }
 
@@ -154,6 +196,7 @@ impl<'i, 'a> Builder<'i, 'a> {
             from: self.endpoint_id(from),
             to: self.endpoint_id(to),
             message: data.message,
+            message_label: data.message_label,
             reply: data.reply,
             receiver_resolution: data.receiver_resolution,
             message_resolution: data.message_resolution,
@@ -178,6 +221,7 @@ pub fn discover(index: &Index, base: &Path, report: &mut Report) -> Graph {
         base,
         report,
         actors: BTreeMap::new(),
+        deref_impls: HashSet::new(),
         extra: BTreeMap::new(),
         handlers: BTreeMap::new(),
         edges: BTreeMap::new(),
@@ -204,10 +248,34 @@ fn collect_actors(b: &mut Builder) {
                     }
                 }
                 if let Item::Impl(imp) = item {
+                    record_deref(b, c, m, imp);
                     scan_impl(b, c, m, &module.file, imp);
                 }
             }
         }
+    }
+}
+
+fn record_deref(b: &mut Builder, krate: usize, module: ModId, imp: &ItemImpl) {
+    let is_deref = imp
+        .trait_
+        .as_ref()
+        .and_then(|(path, _)| path.segments.last())
+        .is_some_and(|s| s.ident == "Deref" || s.ident == "DerefMut");
+    if !is_deref {
+        return;
+    }
+    let generics = type_params(&imp.generics);
+    let ty = TyCtx {
+        index: b.index,
+        krate,
+        module,
+        generics: &generics,
+        self_ty: None,
+    }
+    .resolve(&imp.self_ty);
+    if let Ty::Decl { id, .. } = ty {
+        b.deref_impls.insert(id);
     }
 }
 
@@ -408,15 +476,7 @@ fn holds_edges(b: &mut Builder) {
                     Held::Endpoint(to, resolution) => b.add_edge(
                         &from,
                         &to,
-                        EdgeData {
-                            kind: EdgeKind::Holds,
-                            variant: None,
-                            message: None,
-                            reply: None,
-                            receiver_resolution: resolution,
-                            message_resolution: Resolution::Exact,
-                            location: location.clone(),
-                        },
+                        EdgeData::structural(EdgeKind::Holds, None, resolution, location.clone()),
                     ),
                     Held::Unsupported(what) => b.report.push(
                         Category::Declaration,
@@ -466,7 +526,7 @@ fn held_refs(index: &Index, ty: &Ty, out: &mut Vec<Held>) {
         Ty::Decl { args, .. } | Ty::Std { args, .. } | Ty::External { args, .. } => {
             recurse(args, out)
         }
-        Ty::Ref(inner) | Ty::Slice(inner) => held_refs(index, inner, out),
+        Ty::Ref(inner) | Ty::Slice(inner) | Ty::Iter(inner) => held_refs(index, inner, out),
         Ty::Tuple(items) | Ty::Dyn(items) | Ty::ImplTrait(items) => recurse(items, out),
         Ty::Generic(_) | Ty::Unknown(_) => {}
     }
@@ -555,6 +615,7 @@ fn assemble(b: Builder) -> Graph {
             from: key.from,
             to: key.to,
             message: key.message,
+            message_label: key.message_label,
             reply: key.reply,
             receiver_resolution: key.receiver_resolution,
             message_resolution: key.message_resolution,

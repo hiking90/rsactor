@@ -3,6 +3,11 @@ digraph "actor_with_timeout" {
   node [shape=record, fontname="Helvetica", fontsize=10];
   edge [fontname="Helvetica", fontsize=9];
   "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [label="{actor_with_timeout::TimeoutDemoActor|ConfigurableQuery -\> String\lFastQuery -\> String\lSlowQuery -\> String\l}"];
+  "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_ask_with_timeout" [shape=box, style=rounded, label="fn actor_with_timeout::demonstrate_ask_with_timeout"];
+  "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_tell_with_timeout" [shape=box, style=rounded, label="fn actor_with_timeout::demonstrate_tell_with_timeout"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [style="bold", label="spawn"];
+  "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_tell_with_timeout" -> "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [label="tell_with_timeout ConfigurableQuery -> String"];
+  "external" -> "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [label="ask_with_timeout FastQuery -> String\nask_with_timeout SlowQuery -> String"];
+  "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_ask_with_timeout" -> "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [label="ask_with_timeout ConfigurableQuery -> String"];
 }

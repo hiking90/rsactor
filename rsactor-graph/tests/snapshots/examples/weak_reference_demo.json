@@ -53,6 +53,7 @@
         "from": "external",
         "to": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
         "message": null,
+        "message_label": null,
         "reply": null,
         "receiver_resolution": "exact",
         "message_resolution": "exact",
@@ -60,6 +61,52 @@
           {
             "file": "examples/weak_reference_demo.rs",
             "line": 103
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
+        "message": "weak_reference_demo::GetStatus",
+        "message_label": "GetStatus",
+        "reply": "Status",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 131
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
+        "message": "weak_reference_demo::Ping",
+        "message_label": "Ping",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 118
+          },
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 125
+          },
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 126
+          },
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 152
           }
         ]
       }
