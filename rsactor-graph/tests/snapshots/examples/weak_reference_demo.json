@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "weak_reference_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:weak_reference_demo",
+        "path": "weak_reference_demo::PingActor",
+        "display": "weak_reference_demo::PingActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "weak_reference_demo::GetStatus",
+            "label": "GetStatus",
+            "reply": "Status",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/weak_reference_demo.rs",
+              "line": 85
+            }
+          },
+          {
+            "key": "weak_reference_demo::Ping",
+            "label": "Ping",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/weak_reference_demo.rs",
+              "line": 79
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/weak_reference_demo.rs",
+          "line": 20
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

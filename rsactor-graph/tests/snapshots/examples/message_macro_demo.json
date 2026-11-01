@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "name": "message_macro_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:message_macro_demo",
+        "path": "message_macro_demo::Calculator",
+        "display": "message_macro_demo::Calculator",
+        "open": false,
+        "messages": [
+          {
+            "key": "message_macro_demo::Add",
+            "label": "Add",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/message_macro_demo.rs",
+              "line": 38
+            }
+          },
+          {
+            "key": "message_macro_demo::GetCount",
+            "label": "GetCount",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/message_macro_demo.rs",
+              "line": 27
+            }
+          },
+          {
+            "key": "message_macro_demo::Multiply",
+            "label": "Multiply",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/message_macro_demo.rs",
+              "line": 44
+            }
+          },
+          {
+            "key": "message_macro_demo::Reset",
+            "label": "Reset",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/message_macro_demo.rs",
+              "line": 50
+            }
+          },
+          {
+            "key": "message_macro_demo::SetCount",
+            "label": "SetCount",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/message_macro_demo.rs",
+              "line": 32
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/message_macro_demo.rs",
+          "line": 18
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "name": "priority_signal",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:priority_signal",
+        "path": "priority_signal::WorkerActor",
+        "display": "priority_signal::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "priority_signal::HealthCheck",
+            "label": "HealthCheck",
+            "reply": "HealthSnapshot",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/priority_signal.rs",
+              "line": 82
+            }
+          },
+          {
+            "key": "priority_signal::PauseProcessing",
+            "label": "PauseProcessing",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/priority_signal.rs",
+              "line": 90
+            }
+          },
+          {
+            "key": "priority_signal::ProcessJob",
+            "label": "ProcessJob",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/priority_signal.rs",
+              "line": 68
+            }
+          },
+          {
+            "key": "priority_signal::ResumeProcessing",
+            "label": "ResumeProcessing",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/priority_signal.rs",
+              "line": 96
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/priority_signal.rs",
+          "line": 25
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

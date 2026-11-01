@@ -1,0 +1,6 @@
+digraph "tracing_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:tracing_demo:tracing_demo::TracingDemoActor" [label="{tracing_demo::TracingDemoActor|Echo -\> String\lFailingMessage -\> Result\<String, String\>\lGetCounter -\> u64\lIncrement -\> String\lPing -\> String\lSlowOperation -\> String\l}"];
+}

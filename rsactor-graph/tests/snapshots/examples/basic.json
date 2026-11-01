@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "name": "basic",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:basic",
+        "path": "basic::MyActor",
+        "display": "basic::MyActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "basic::Decrement",
+            "label": "Decrement",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/basic.rs",
+              "line": 79
+            }
+          },
+          {
+            "key": "basic::DummyMessage",
+            "label": "DummyMessage",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/basic.rs",
+              "line": 86
+            }
+          },
+          {
+            "key": "basic::Increment",
+            "label": "Increment",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/basic.rs",
+              "line": 72
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/basic.rs",
+          "line": 23
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

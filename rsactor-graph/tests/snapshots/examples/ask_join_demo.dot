@@ -1,0 +1,6 @@
+digraph "ask_join_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:ask_join_demo:ask_join_demo::WorkerActor" [label="{ask_join_demo::WorkerActor|FileProcessingTask -\> JoinHandle\<String\>\lGetTaskCount -\> u32\lHeavyComputationTask -\> JoinHandle\<u64\>\lPanicTask -\> JoinHandle\<String\>\l}"];
+}

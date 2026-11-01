@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "name": "metrics_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:metrics_demo",
+        "path": "metrics_demo::WorkerActor",
+        "display": "metrics_demo::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "metrics_demo::FastTask",
+            "label": "FastTask",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/metrics_demo.rs",
+              "line": 34
+            }
+          },
+          {
+            "key": "metrics_demo::GetName",
+            "label": "GetName",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/metrics_demo.rs",
+              "line": 45
+            }
+          },
+          {
+            "key": "metrics_demo::SlowTask",
+            "label": "SlowTask",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/metrics_demo.rs",
+              "line": 39
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/metrics_demo.rs",
+          "line": 20
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

@@ -1,0 +1,6 @@
+digraph "derive_macro_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:derive_macro_demo:derive_macro_demo::MyActor" [label="{derive_macro_demo::MyActor|GetCount -\> u32\lGetName -\> String\lIncrement\l}"];
+}

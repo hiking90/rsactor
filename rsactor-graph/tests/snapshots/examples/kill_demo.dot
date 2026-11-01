@@ -1,0 +1,6 @@
+digraph "kill_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:kill_demo:kill_demo::DemoActor" [label="{kill_demo::DemoActor|Ping -\> String\l}"];
+}

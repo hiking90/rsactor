@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "name": "actor_blocking_task",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:actor_blocking_task",
+        "path": "actor_blocking_task::SyncDataProcessorActor",
+        "display": "actor_blocking_task::SyncDataProcessorActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_blocking_task::GetState",
+            "label": "GetState",
+            "reply": "(f64, Option<f64>, Option<Instant>)",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_blocking_task.rs",
+              "line": 159
+            }
+          },
+          {
+            "key": "actor_blocking_task::ProcessedData",
+            "label": "ProcessedData",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_blocking_task.rs",
+              "line": 179
+            }
+          },
+          {
+            "key": "actor_blocking_task::SetFactor",
+            "label": "SetFactor",
+            "reply": "f64",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_blocking_task.rs",
+              "line": 168
+            }
+          },
+          {
+            "key": "actor_blocking_task::TaskCommand",
+            "label": "TaskCommand",
+            "reply": "bool",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_blocking_task.rs",
+              "line": 197
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_blocking_task.rs",
+          "line": 46
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

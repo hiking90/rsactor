@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "name": "handler_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:handler_demo",
+        "path": "handler_demo::CounterActor",
+        "display": "handler_demo::CounterActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "handler_demo::GetStatus",
+            "label": "GetStatus",
+            "reply": "Status",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/handler_demo.rs",
+              "line": 60
+            }
+          },
+          {
+            "key": "handler_demo::Ping",
+            "label": "Ping",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/handler_demo.rs",
+              "line": 51
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/handler_demo.rs",
+          "line": 43
+        }
+      },
+      {
+        "kind": "actor",
+        "target": "example:handler_demo",
+        "path": "handler_demo::LoggerActor",
+        "display": "handler_demo::LoggerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "handler_demo::GetStatus",
+            "label": "GetStatus",
+            "reply": "Status",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/handler_demo.rs",
+              "line": 90
+            }
+          },
+          {
+            "key": "handler_demo::Ping",
+            "label": "Ping",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/handler_demo.rs",
+              "line": 81
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/handler_demo.rs",
+          "line": 73
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

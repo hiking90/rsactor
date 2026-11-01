@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "name": "actor_with_timeout",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:actor_with_timeout",
+        "path": "actor_with_timeout::TimeoutDemoActor",
+        "display": "actor_with_timeout::TimeoutDemoActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_with_timeout::ConfigurableQuery",
+            "label": "ConfigurableQuery",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_with_timeout.rs",
+              "line": 59
+            }
+          },
+          {
+            "key": "actor_with_timeout::FastQuery",
+            "label": "FastQuery",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_with_timeout.rs",
+              "line": 41
+            }
+          },
+          {
+            "key": "actor_with_timeout::SlowQuery",
+            "label": "SlowQuery",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_with_timeout.rs",
+              "line": 48
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_with_timeout.rs",
+          "line": 13
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

@@ -1,0 +1,7 @@
+digraph "handler_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:handler_demo:handler_demo::CounterActor" [label="{handler_demo::CounterActor|GetStatus -\> Status\lPing\l}"];
+  "example:handler_demo:handler_demo::LoggerActor" [label="{handler_demo::LoggerActor|GetStatus -\> Status\lPing\l}"];
+}

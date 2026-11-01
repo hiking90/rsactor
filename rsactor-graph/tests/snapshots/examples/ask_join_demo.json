@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "name": "ask_join_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:ask_join_demo",
+        "path": "ask_join_demo::WorkerActor",
+        "display": "ask_join_demo::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "ask_join_demo::FileProcessingTask",
+            "label": "FileProcessingTask",
+            "reply": "JoinHandle<String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 93
+            }
+          },
+          {
+            "key": "ask_join_demo::GetTaskCount",
+            "label": "GetTaskCount",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 129
+            }
+          },
+          {
+            "key": "ask_join_demo::HeavyComputationTask",
+            "label": "HeavyComputationTask",
+            "reply": "JoinHandle<u64>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 60
+            }
+          },
+          {
+            "key": "ask_join_demo::PanicTask",
+            "label": "PanicTask",
+            "reply": "JoinHandle<String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 34
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/ask_join_demo.rs",
+          "line": 24
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

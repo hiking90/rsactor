@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "name": "advanced_derive_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:advanced_derive_demo",
+        "path": "advanced_derive_demo::CounterActor",
+        "display": "advanced_derive_demo::CounterActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "advanced_derive_demo::Decrement",
+            "label": "Decrement",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 59
+            }
+          },
+          {
+            "key": "advanced_derive_demo::GetCount",
+            "label": "GetCount",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 67
+            }
+          },
+          {
+            "key": "advanced_derive_demo::Increment",
+            "label": "Increment",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 51
+            }
+          },
+          {
+            "key": "advanced_derive_demo::IsAtMax",
+            "label": "IsAtMax",
+            "reply": "bool",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 72
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/advanced_derive_demo.rs",
+          "line": 13
+        }
+      },
+      {
+        "kind": "actor",
+        "target": "example:advanced_derive_demo",
+        "path": "advanced_derive_demo::SimpleActor",
+        "display": "advanced_derive_demo::SimpleActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "advanced_derive_demo::GetName",
+            "label": "GetName",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 32
+            }
+          },
+          {
+            "key": "advanced_derive_demo::SetName",
+            "label": "SetName",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 37
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/advanced_derive_demo.rs",
+          "line": 7
+        }
+      },
+      {
+        "kind": "actor",
+        "target": "example:advanced_derive_demo",
+        "path": "advanced_derive_demo::WorkerActor",
+        "display": "advanced_derive_demo::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "advanced_derive_demo::DoWork",
+            "label": "DoWork",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 85
+            }
+          },
+          {
+            "key": "advanced_derive_demo::GetTasksCompleted",
+            "label": "GetTasksCompleted",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 93
+            }
+          },
+          {
+            "key": "advanced_derive_demo::GetWorkerId",
+            "label": "GetWorkerId",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/advanced_derive_demo.rs",
+              "line": 102
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/advanced_derive_demo.rs",
+          "line": 20
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

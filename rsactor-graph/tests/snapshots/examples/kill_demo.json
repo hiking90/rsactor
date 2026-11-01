@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "kill_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:kill_demo",
+        "path": "kill_demo::DemoActor",
+        "display": "kill_demo::DemoActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "kill_demo::Ping",
+            "label": "Ping",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/kill_demo.rs",
+              "line": 57
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/kill_demo.rs",
+          "line": 12
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

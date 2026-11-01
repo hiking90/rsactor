@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "name": "actor_task",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:actor_task",
+        "path": "actor_task::DataProcessorActor",
+        "display": "actor_task::DataProcessorActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_task::GetState",
+            "label": "GetState",
+            "reply": "(f64, Option<f64>, Option<Instant>)",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 149
+            }
+          },
+          {
+            "key": "actor_task::ProcessedData",
+            "label": "ProcessedData",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 169
+            }
+          },
+          {
+            "key": "actor_task::SendTaskCommand",
+            "label": "SendTaskCommand",
+            "reply": "bool",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 186
+            }
+          },
+          {
+            "key": "actor_task::SetFactor",
+            "label": "SetFactor",
+            "reply": "f64",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 158
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_task.rs",
+          "line": 50
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

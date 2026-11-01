@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "name": "actor_async_worker",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:actor_async_worker",
+        "path": "actor_async_worker::RequesterActor",
+        "display": "actor_async_worker::RequesterActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_async_worker::GetResults",
+            "label": "GetResults",
+            "reply": "Vec<String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 82
+            }
+          },
+          {
+            "key": "actor_async_worker::RequestWork",
+            "label": "RequestWork",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 52
+            }
+          },
+          {
+            "key": "actor_async_worker::WorkCompleted",
+            "label": "WorkCompleted",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 73
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_async_worker.rs",
+          "line": 12
+        }
+      },
+      {
+        "kind": "actor",
+        "target": "example:actor_async_worker",
+        "path": "actor_async_worker::WorkerActor",
+        "display": "actor_async_worker::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_async_worker::ProcessTask",
+            "label": "ProcessTask",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 121
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_async_worker.rs",
+          "line": 95
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

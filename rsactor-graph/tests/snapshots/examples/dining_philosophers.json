@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "name": "dining_philosophers",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:dining_philosophers",
+        "path": "dining_philosophers::Philosopher",
+        "display": "dining_philosophers::Philosopher",
+        "open": false,
+        "messages": [
+          {
+            "key": "dining_philosophers::StartEating",
+            "label": "StartEating",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/dining_philosophers.rs",
+              "line": 258
+            }
+          },
+          {
+            "key": "dining_philosophers::StartThinking",
+            "label": "StartThinking",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/dining_philosophers.rs",
+              "line": 106
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/dining_philosophers.rs",
+          "line": 57
+        }
+      },
+      {
+        "kind": "actor",
+        "target": "example:dining_philosophers",
+        "path": "dining_philosophers::Table",
+        "display": "dining_philosophers::Table",
+        "open": false,
+        "messages": [
+          {
+            "key": "dining_philosophers::RegisterPhilosopher",
+            "label": "RegisterPhilosopher",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/dining_philosophers.rs",
+              "line": 358
+            }
+          },
+          {
+            "key": "dining_philosophers::ReleaseFork",
+            "label": "ReleaseFork",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/dining_philosophers.rs",
+              "line": 401
+            }
+          },
+          {
+            "key": "dining_philosophers::RequestFork",
+            "label": "RequestFork",
+            "reply": "bool",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/dining_philosophers.rs",
+              "line": 369
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/dining_philosophers.rs",
+          "line": 332
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

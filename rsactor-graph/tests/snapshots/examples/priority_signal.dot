@@ -1,0 +1,6 @@
+digraph "priority_signal" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:priority_signal:priority_signal::WorkerActor" [label="{priority_signal::WorkerActor|HealthCheck -\> HealthSnapshot\lPauseProcessing\lProcessJob\lResumeProcessing\l}"];
+}

@@ -1,0 +1,8 @@
+digraph "advanced_derive_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:advanced_derive_demo:advanced_derive_demo::CounterActor" [label="{advanced_derive_demo::CounterActor|Decrement -\> u32\lGetCount -\> u32\lIncrement -\> u32\lIsAtMax -\> bool\l}"];
+  "example:advanced_derive_demo:advanced_derive_demo::SimpleActor" [label="{advanced_derive_demo::SimpleActor|GetName -\> String\lSetName\l}"];
+  "example:advanced_derive_demo:advanced_derive_demo::WorkerActor" [label="{advanced_derive_demo::WorkerActor|DoWork -\> String\lGetTasksCompleted -\> u32\lGetWorkerId -\> u32\l}"];
+}

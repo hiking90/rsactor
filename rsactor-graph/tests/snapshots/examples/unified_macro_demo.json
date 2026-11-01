@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "name": "unified_macro_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:unified_macro_demo",
+        "path": "unified_macro_demo::GenericActor",
+        "display": "unified_macro_demo::GenericActor<T>",
+        "open": false,
+        "messages": [
+          {
+            "key": "unified_macro_demo::GetValue",
+            "label": "GetValue",
+            "reply": "Option<T>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 66
+            }
+          },
+          {
+            "key": "unified_macro_demo::SetValue",
+            "label": "SetValue<T>",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 60
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/unified_macro_demo.rs",
+          "line": 39
+        }
+      },
+      {
+        "kind": "actor",
+        "target": "example:unified_macro_demo",
+        "path": "unified_macro_demo::SimpleActor",
+        "display": "unified_macro_demo::SimpleActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "unified_macro_demo::GetCount",
+            "label": "GetCount",
+            "reply": "i32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 32
+            }
+          },
+          {
+            "key": "unified_macro_demo::Increment",
+            "label": "Increment",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 26
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/unified_macro_demo.rs",
+          "line": 5
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

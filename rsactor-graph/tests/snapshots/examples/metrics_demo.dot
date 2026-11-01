@@ -1,0 +1,6 @@
+digraph "metrics_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:metrics_demo:metrics_demo::WorkerActor" [label="{metrics_demo::WorkerActor|FastTask\lGetName -\> String\lSlowTask\l}"];
+}

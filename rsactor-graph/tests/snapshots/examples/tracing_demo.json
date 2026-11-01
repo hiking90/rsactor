@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "name": "tracing_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:tracing_demo",
+        "path": "tracing_demo::TracingDemoActor",
+        "display": "tracing_demo::TracingDemoActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "tracing_demo::Echo",
+            "label": "Echo",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 64
+            }
+          },
+          {
+            "key": "tracing_demo::FailingMessage",
+            "label": "FailingMessage",
+            "reply": "Result<String, String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 91
+            }
+          },
+          {
+            "key": "tracing_demo::GetCounter",
+            "label": "GetCounter",
+            "reply": "u64",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 69
+            }
+          },
+          {
+            "key": "tracing_demo::Increment",
+            "label": "Increment",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 74
+            }
+          },
+          {
+            "key": "tracing_demo::Ping",
+            "label": "Ping",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 59
+            }
+          },
+          {
+            "key": "tracing_demo::SlowOperation",
+            "label": "SlowOperation",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 80
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/tracing_demo.rs",
+          "line": 51
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

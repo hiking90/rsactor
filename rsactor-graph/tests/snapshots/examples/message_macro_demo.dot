@@ -1,0 +1,6 @@
+digraph "message_macro_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:message_macro_demo:message_macro_demo::Calculator" [label="{message_macro_demo::Calculator|Add -\> u32\lGetCount -\> u32\lMultiply -\> u32\lReset -\> String\lSetCount -\> u32\l}"];
+}

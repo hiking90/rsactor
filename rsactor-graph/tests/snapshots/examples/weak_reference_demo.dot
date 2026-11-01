@@ -1,0 +1,6 @@
+digraph "weak_reference_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:weak_reference_demo:weak_reference_demo::PingActor" [label="{weak_reference_demo::PingActor|GetStatus -\> Status\lPing -\> String\l}"];
+}

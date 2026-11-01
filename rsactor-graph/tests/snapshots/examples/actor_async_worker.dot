@@ -1,0 +1,7 @@
+digraph "actor_async_worker" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:actor_async_worker:actor_async_worker::RequesterActor" [label="{actor_async_worker::RequesterActor|GetResults -\> Vec\<String\>\lRequestWork\lWorkCompleted\l}"];
+  "example:actor_async_worker:actor_async_worker::WorkerActor" [label="{actor_async_worker::WorkerActor|ProcessTask\l}"];
+}

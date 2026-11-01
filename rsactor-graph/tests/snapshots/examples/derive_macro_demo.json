@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "name": "derive_macro_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "target": "example:derive_macro_demo",
+        "path": "derive_macro_demo::MyActor",
+        "display": "derive_macro_demo::MyActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "derive_macro_demo::GetCount",
+            "label": "GetCount",
+            "reply": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/derive_macro_demo.rs",
+              "line": 30
+            }
+          },
+          {
+            "key": "derive_macro_demo::GetName",
+            "label": "GetName",
+            "reply": "String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/derive_macro_demo.rs",
+              "line": 20
+            }
+          },
+          {
+            "key": "derive_macro_demo::Increment",
+            "label": "Increment",
+            "reply": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/derive_macro_demo.rs",
+              "line": 25
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/derive_macro_demo.rs",
+          "line": 6
+        }
+      }
+    ],
+    "edges": []
+  },
+  "report": {
+    "entries": []
+  }
+}

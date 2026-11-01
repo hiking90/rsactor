@@ -1,0 +1,6 @@
+digraph "basic" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:basic:basic::MyActor" [label="{basic::MyActor|Decrement -\> u32\lDummyMessage -\> u32\lIncrement -\> u32\l}"];
+}

@@ -1,0 +1,6 @@
+digraph "actor_blocking_task" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor" [label="{actor_blocking_task::SyncDataProcessorActor|GetState -\> (f64, Option\<f64\>, Option\<Instant\>)\lProcessedData\lSetFactor -\> f64\lTaskCommand -\> bool\l}"];
+}
