@@ -464,8 +464,9 @@ fn receivers_resolve_through_the_type_environment() {
     // Every `Job` tell that must reach Router: async-block capture (1),
     // `let else`, `match`, UFCS downgrade + upgrade (3), containers (9), and
     // field access through a message, a wrapper struct, a generic struct and
-    // a renamed `ActorRef` (4). The shadowed closure parameter and the
-    // re-`let` to `Batcher` must not add locations here.
+    // a renamed `ActorRef` (4), and a field typed by a type alias that
+    // expands to `ActorRef<Router>` (1). The shadowed closure parameter and
+    // the re-`let` to `Batcher` must not add locations here.
     let job = find_edge(
         &output,
         WORKER,
@@ -474,7 +475,7 @@ fn receivers_resolve_through_the_type_environment() {
         None,
         Some("sends::Job"),
     );
-    assert_eq!(job.locations.len(), 17, "{:#?}", job.locations);
+    assert_eq!(job.locations.len(), 18, "{:#?}", job.locations);
     assert_eq!(job.receiver_resolution, Resolution::Exact);
     assert_eq!(job.message_resolution, Resolution::Exact);
 
@@ -503,7 +504,17 @@ fn messages_follow_m1_and_m2() {
         None,
         Some("sends::Made"),
     );
-    assert_eq!(made.message_resolution, Resolution::Assumed);
+    // `Made::new` is declared `-> Self` in scope: exact, not assumed (G4).
+    assert_eq!(made.message_resolution, Resolution::Exact);
+    let built = find_edge(
+        &output,
+        WORKER,
+        ROUTER,
+        EdgeKind::Tell,
+        None,
+        Some("sends::Built"),
+    );
+    assert_eq!(built.message_resolution, Resolution::Assumed);
 
     // `Box::new(Job)`: the receiver is known and kept; only the message is `?`.
     let unknown_message = find_edge(&output, WORKER, ROUTER, EdgeKind::Tell, None, None);
@@ -579,13 +590,12 @@ fn candidates_that_cannot_be_drawn_are_reported() {
     let output = scan_lib("sends");
 
     let unsupported = reports(&output, Category::UnsupportedReceiver);
-    assert_eq!(unsupported.len(), 3, "{unsupported:#?}");
+    // A type alias is expanded to its declared target, so `RouterRef` is no
+    // longer here; it reaches Router (see the test above).
+    assert_eq!(unsupported.len(), 2, "{unsupported:#?}");
     assert!(unsupported
         .iter()
         .any(|d| d.contains("wrapper type `RouterHandle`")));
-    assert!(unsupported
-        .iter()
-        .any(|d| d.contains("type alias `RouterRef`")));
     assert!(unsupported
         .iter()
         .any(|d| d.contains("generic parameter `R`")));
@@ -597,10 +607,19 @@ fn candidates_that_cannot_be_drawn_are_reported() {
 
     assert_eq!(reports(&output, Category::Ufcs).len(), 1);
 
+    // `println!` is re-parsed and its `ask` becomes an edge (G6); `select!`
+    // has its own syntax and stays a token-scan candidate.
     let in_macros = reports(&output, Category::MacroCandidate);
-    assert_eq!(in_macros.len(), 2, "{in_macros:#?}");
-    assert!(in_macros.iter().any(|d| d.contains("select!")));
-    assert!(in_macros.iter().any(|d| d.contains("println!")));
+    assert_eq!(in_macros.len(), 1, "{in_macros:#?}");
+    assert!(in_macros[0].contains("select!"));
+    find_edge(
+        &output,
+        WORKER,
+        ROUTER,
+        EdgeKind::Ask,
+        None,
+        Some("sends::Query"),
+    );
 
     // `Box::new(..)` message, the shadowed closure, the unknown call result.
     assert_eq!(reports(&output, Category::UnresolvedEdge).len(), 3);
@@ -610,10 +629,149 @@ fn candidates_that_cannot_be_drawn_are_reported() {
     assert!(cross[0].contains("sends::Unhandled"));
 
     // `Batcher::tell` (field and re-`let`) is dropped without a trace, and
-    // nothing else is reported: 3 + 1 + 1 + 2 + 3 + 1.
+    // nothing else is reported: 2 + 1 + 1 + 1 + 3 + 1.
     assert_eq!(
         output.report.entries.len(),
-        11,
+        9,
+        "{:#?}",
+        output.report.entries
+    );
+}
+
+const TARGET: &str = "actor:lib:measured:measured::Target";
+
+fn holder_fn(name: &str) -> String {
+    format!("fn:lib:measured:measured::Holder::{name}")
+}
+
+/// Locations of the `measured` edge from `Holder::<name>` to Target.
+fn measured_locations(output: &Output, name: &str, kind: EdgeKind, message: Option<&str>) -> usize {
+    find_edge(output, &holder_fn(name), TARGET, kind, None, message)
+        .locations
+        .len()
+}
+
+#[test]
+fn block_level_use_resolves_names() {
+    let output = scan_lib("measured");
+    // Two `Ping`s exist; only the block-level `use` makes this exact.
+    let edge = find_edge(
+        &output,
+        &holder_fn("block_use"),
+        TARGET,
+        EdgeKind::Tell,
+        None,
+        Some("measured::msgs::Ping"),
+    );
+    assert_eq!(edge.message_resolution, Resolution::Exact);
+
+    // A block-level external glob blocks the fallback to `msgs::Status`.
+    let blocked = find_edge(
+        &output,
+        &holder_fn("block_glob"),
+        TARGET,
+        EdgeKind::Tell,
+        None,
+        None,
+    );
+    assert_eq!(blocked.message_resolution, Resolution::Unresolved);
+}
+
+#[test]
+fn tuple_scrutinees_and_branch_initializers() {
+    let output = scan_lib("measured");
+    let ping = Some("measured::msgs::Ping");
+    assert_eq!(
+        measured_locations(&output, "tuple", EdgeKind::Tell, ping),
+        2
+    );
+    assert_eq!(
+        measured_locations(&output, "branches", EdgeKind::Tell, ping),
+        1
+    );
+    assert_eq!(
+        measured_locations(
+            &output,
+            "branches",
+            EdgeKind::Tell,
+            Some("measured::Report")
+        ),
+        1
+    );
+    // `if flag { Report } else { Ping }` disagrees: message `?`.
+    assert_eq!(
+        measured_locations(&output, "branches", EdgeKind::Tell, None),
+        1
+    );
+}
+
+#[test]
+fn declared_signatures_state_return_types() {
+    let output = scan_lib("measured");
+    // `self.target()`, `make_target()`, `self.connect().await.unwrap()`,
+    // `Wrapper<ActorRef<Target>>::get()` with the impl parameter substituted.
+    assert_eq!(
+        measured_locations(
+            &output,
+            "signatures",
+            EdgeKind::Tell,
+            Some("measured::msgs::Ping")
+        ),
+        3
+    );
+    // `Self::make_ref()` and `Ok(t)` over a crate-level `Result` alias.
+    assert_eq!(
+        measured_locations(
+            &output,
+            "self_and_alias",
+            EdgeKind::Tell,
+            Some("measured::msgs::Ping")
+        ),
+        2
+    );
+    // `Report::success().with_code(3)`: `-> Self` twice, exact.
+    let report = find_edge(
+        &output,
+        &holder_fn("signatures"),
+        TARGET,
+        EdgeKind::Tell,
+        None,
+        Some("measured::Report"),
+    );
+    assert_eq!(report.message_resolution, Resolution::Exact);
+    assert_eq!(report.receiver_resolution, Resolution::Exact);
+}
+
+#[test]
+fn expression_macros_are_walked() {
+    let output = scan_lib("measured");
+    let ping = Some("measured::msgs::Ping");
+    assert_eq!(
+        measured_locations(&output, "macros", EdgeKind::Ask, ping),
+        2
+    );
+    assert_eq!(
+        measured_locations(&output, "macros", EdgeKind::Tell, ping),
+        1
+    );
+    assert!(reports(&output, Category::MacroCandidate).is_empty());
+}
+
+#[test]
+fn measured_fixture_reports_only_the_undecidable() {
+    let output = scan_lib("measured");
+    // `Writer::spawn` / `Self::spawn` are not rsactor spawns (G7).
+    assert!(reports(&output, Category::UnresolvedSpawn).is_empty());
+    // Only the blocked glob and the disagreeing `if` remain.
+    assert_eq!(
+        reports(&output, Category::UnresolvedEdge).len(),
+        2,
+        "{:#?}",
+        output.report.entries
+    );
+    assert_eq!(
+        output.report.entries.len(),
+        2,
         "{:#?}",
         output.report.entries
     );

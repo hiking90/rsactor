@@ -149,8 +149,9 @@ const PRIMITIVES: &[&str] = &[
     "u128", "usize", "f32", "f64",
 ];
 
+/// One name brought in by a `use` declaration.
 #[derive(Debug, Clone)]
-enum Import {
+pub enum Import {
     Named {
         alias: String,
         path: Vec<String>,
@@ -283,6 +284,103 @@ impl<'a> Index<'a> {
         segments: &[String],
         leading_colon: bool,
     ) -> Option<Resolved> {
+        self.resolve_segments_inner(krate, module, segments, leading_colon, true)
+    }
+
+    /// Like [`Index::resolve_path`], but `use` declarations written inside
+    /// the enclosing function body (`blocks`, innermost last) are consulted
+    /// first. Rust makes a block-level `use` visible in the whole block.
+    pub fn resolve_path_scoped(
+        &self,
+        krate: usize,
+        module: ModId,
+        path: &syn::Path,
+        blocks: &[Vec<Import>],
+    ) -> Option<Resolved> {
+        let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        self.resolve_segments_scoped(
+            krate,
+            module,
+            &segments,
+            path.leading_colon.is_some(),
+            blocks,
+        )
+    }
+
+    pub fn resolve_segments_scoped(
+        &self,
+        krate: usize,
+        module: ModId,
+        segments: &[String],
+        leading_colon: bool,
+        blocks: &[Vec<Import>],
+    ) -> Option<Resolved> {
+        if blocks.is_empty() || leading_colon {
+            return self.resolve_segments(krate, module, segments, leading_colon);
+        }
+        let (first, rest) = segments.split_first()?;
+        if !matches!(first.as_str(), "crate" | "self" | "super") {
+            for imports in blocks.iter().rev() {
+                for import in imports {
+                    if let Import::Named {
+                        alias,
+                        path,
+                        leading_colon,
+                    } = import
+                    {
+                        if alias == first {
+                            let mut full = path.clone();
+                            full.extend(rest.iter().cloned());
+                            return self.resolve_segments(krate, module, &full, *leading_colon);
+                        }
+                    }
+                }
+                if rest.is_empty() {
+                    for import in imports {
+                        if let Import::Glob {
+                            path,
+                            leading_colon,
+                        } = import
+                        {
+                            let mut full = path.clone();
+                            full.push(first.clone());
+                            if let Some(res) =
+                                self.resolve_exact(krate, module, &full, *leading_colon)
+                            {
+                                return Some(Resolved {
+                                    res,
+                                    inferred: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // A block-level glob reaching outside the declaration scope blocks
+        // the fallback just as a module-level one does.
+        let outside = blocks.iter().flatten().any(|import| match import {
+            Import::Glob {
+                path,
+                leading_colon,
+            } => match self.resolve_use(krate, module, path, *leading_colon) {
+                Some(Res::Module(c, m)) => self.glob_reaches_outside(c, m, &mut HashSet::new()),
+                Some(Res::Rsactor(_)) | Some(Res::Decl(_)) => false,
+                _ => true,
+            },
+            Import::Named { .. } => false,
+        });
+        self.resolve_segments_inner(krate, module, segments, leading_colon, !outside)
+    }
+
+    fn resolve_segments_inner(
+        &self,
+        krate: usize,
+        module: ModId,
+        segments: &[String],
+        leading_colon: bool,
+        allow_fallback: bool,
+    ) -> Option<Resolved> {
         if let Some(res) = self.resolve_exact(krate, module, segments, leading_colon) {
             return Some(Resolved {
                 res,
@@ -290,7 +388,8 @@ impl<'a> Index<'a> {
             });
         }
         let (first, rest) = segments.split_first()?;
-        let relative_root = matches!(first.as_str(), "crate" | "self" | "super");
+        // `Self::f` is an associated item of the impl's type, never a crate.
+        let relative_root = matches!(first.as_str(), "crate" | "self" | "super" | "Self");
         if !rest.is_empty() && !relative_root && self.lookup(krate, module, first).is_none() {
             // `tokio::task::JoinHandle` with no `use`: a path rooted at a name
             // that is neither in scope nor a known crate is an external crate.
@@ -300,7 +399,7 @@ impl<'a> Index<'a> {
             });
         }
         let last = segments.last()?;
-        if self.glob_reaches_outside(krate, module, &mut HashSet::new()) {
+        if !allow_fallback || self.glob_reaches_outside(krate, module, &mut HashSet::new()) {
             return None;
         }
         match self.by_last_segment.get(last).map(Vec::as_slice) {
@@ -520,6 +619,18 @@ pub fn type_params(generics: &syn::Generics) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// The imports of one `use` item, for block-level `use` (§4.5).
+pub fn imports_of(item_use: &syn::ItemUse) -> Vec<Import> {
+    let mut out = Vec::new();
+    flatten_use(
+        &item_use.tree,
+        Vec::new(),
+        item_use.leading_colon.is_some(),
+        &mut out,
+    );
+    out
 }
 
 fn flatten_use(tree: &UseTree, prefix: Vec<String>, leading_colon: bool, out: &mut Vec<Import>) {

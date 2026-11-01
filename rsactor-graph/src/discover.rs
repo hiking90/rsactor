@@ -4,7 +4,7 @@
 //! Graph assembly: actors and handled messages (§4.1, §4.2), holds edges and
 //! type-erased handler nodes (§4.3). Call sites are scanned by [`crate::calls`].
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use quote::ToTokens;
@@ -65,6 +65,18 @@ struct EdgeKey {
     message_resolution: Resolution,
 }
 
+/// A function or method declared in the declaration scope. Its signature
+/// states the return type, which needs no inference to read (G4).
+pub struct FnDecl<'a> {
+    pub krate: usize,
+    pub module: ModId,
+    /// Generic parameters of the enclosing impl.
+    pub impl_generics: Vec<String>,
+    /// Arguments of the impl's self type, e.g. `[T]` for `impl<T> W<T>`.
+    pub impl_self_args: Vec<Ty>,
+    pub sig: &'a syn::Signature,
+}
+
 /// Collects nodes and edges while the scan runs.
 pub struct Builder<'i, 'a> {
     pub index: &'i Index<'a>,
@@ -74,6 +86,11 @@ pub struct Builder<'i, 'a> {
     /// Types with an `impl Deref`/`DerefMut`: a method call on them may reach
     /// an `ActorRef` inside, so a send on them is never dropped (§4.4).
     pub deref_impls: HashSet<DeclId>,
+    /// Methods and associated functions by (type, name). Several entries
+    /// mean several impls (inherent and trait) declare the name.
+    pub methods: HashMap<(DeclId, String), Vec<FnDecl<'a>>>,
+    /// Free functions by full path.
+    pub functions: HashMap<String, FnDecl<'a>>,
     extra: BTreeMap<String, Node>,
     handlers: BTreeMap<String, (HandlerSig, String)>,
     edges: BTreeMap<EdgeKey, BTreeSet<Location>>,
@@ -222,6 +239,8 @@ pub fn discover(index: &Index, base: &Path, report: &mut Report) -> Graph {
         report,
         actors: BTreeMap::new(),
         deref_impls: HashSet::new(),
+        methods: HashMap::new(),
+        functions: HashMap::new(),
         extra: BTreeMap::new(),
         handlers: BTreeMap::new(),
         edges: BTreeMap::new(),
@@ -232,7 +251,7 @@ pub fn discover(index: &Index, base: &Path, report: &mut Report) -> Graph {
     assemble(builder)
 }
 
-fn collect_actors(b: &mut Builder) {
+fn collect_actors(b: &mut Builder<'_, '_>) {
     let index = b.index;
     for (c, krate) in index.crates.iter().enumerate() {
         for (m, module) in krate.modules.iter().enumerate() {
@@ -249,10 +268,54 @@ fn collect_actors(b: &mut Builder) {
                 }
                 if let Item::Impl(imp) = item {
                     record_deref(b, c, m, imp);
+                    record_methods(b, c, m, imp);
                     scan_impl(b, c, m, &module.file, imp);
+                }
+                if let Item::Fn(f) = item {
+                    let mut path = krate.module_path(m);
+                    path.push(f.sig.ident.to_string());
+                    b.functions.insert(
+                        path.join("::"),
+                        FnDecl {
+                            krate: c,
+                            module: m,
+                            impl_generics: Vec::new(),
+                            impl_self_args: Vec::new(),
+                            sig: &f.sig,
+                        },
+                    );
                 }
             }
         }
+    }
+}
+
+fn record_methods<'a>(b: &mut Builder<'_, 'a>, krate: usize, module: ModId, imp: &'a ItemImpl) {
+    let generics = type_params(&imp.generics);
+    let ty = TyCtx {
+        index: b.index,
+        krate,
+        module,
+        generics: &generics,
+        self_ty: None,
+        blocks: &[],
+    }
+    .resolve(&imp.self_ty);
+    let Ty::Decl { id, args, .. } = ty else {
+        return;
+    };
+    for item in &imp.items {
+        let ImplItem::Fn(f) = item else { continue };
+        b.methods
+            .entry((id, f.sig.ident.to_string()))
+            .or_default()
+            .push(FnDecl {
+                krate,
+                module,
+                impl_generics: generics.clone(),
+                impl_self_args: args.clone(),
+                sig: &f.sig,
+            });
     }
 }
 
@@ -272,6 +335,7 @@ fn record_deref(b: &mut Builder, krate: usize, module: ModId, imp: &ItemImpl) {
         module,
         generics: &generics,
         self_ty: None,
+        blocks: &[],
     }
     .resolve(&imp.self_ty);
     if let Ty::Decl { id, .. } = ty {
@@ -293,6 +357,7 @@ fn scan_impl(b: &mut Builder, krate: usize, module: ModId, file: &Path, imp: &It
         module,
         generics: &impl_generics,
         self_ty: None,
+        blocks: &[],
     };
     let self_ty = plain.resolve(&imp.self_ty);
     let Ty::Decl { id, .. } = self_ty else {
@@ -446,6 +511,7 @@ fn holds_edges(b: &mut Builder) {
             module: decl.module,
             generics: &decl.generics,
             self_ty: Some(&self_ty),
+            blocks: &[],
         };
         let mut types: Vec<(Ty, Location)> = Vec::new();
         let mut push_fields = |fields: &syn::Fields| {

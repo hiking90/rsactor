@@ -14,18 +14,84 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
     Expr, ExprCall, ExprClosure, ExprForLoop, ExprIf, ExprLet, ExprMatch, ExprMethodCall,
     ExprWhile, Fields, GenericArgument, ImplItem, Item, ItemFn, ItemImpl, ItemTrait, Local, Macro,
-    Member, Pat, PathArguments, Signature, TraitItem, UnOp,
+    Member, Pat, PathArguments, ReturnType, Signature, Stmt, Token, TraitItem, UnOp,
 };
 
 use crate::crate_tree::{location_of, ModId};
-use crate::discover::{handler_sig, impl_role, Builder, EdgeData, Endpoint, HandlerSig, ImplRole};
+use crate::discover::{
+    handler_sig, impl_role, Builder, EdgeData, Endpoint, FnDecl, HandlerSig, ImplRole,
+};
 use crate::model::{Category, EdgeKind, Location, Resolution};
-use crate::resolve::{type_params, DeclId, DeclKind, Res};
+use crate::resolve::{imports_of, type_params, DeclId, DeclKind, Import, Res, Resolved};
 use crate::types::{Ty, TyCtx};
+
+/// Macros whose arguments are comma-separated expressions; their tokens are
+/// re-parsed and walked like ordinary code (G6). `format!`-style literals
+/// parse as expressions too. Anything that fails to parse falls back to the
+/// token scan.
+const EXPR_MACROS: &[&str] = &[
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "dbg",
+    "debug",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "eprint",
+    "eprintln",
+    "error",
+    "format",
+    "format_args",
+    "info",
+    "join",
+    "panic",
+    "print",
+    "println",
+    "trace",
+    "try_join",
+    "vec",
+    "warn",
+    "write",
+    "writeln",
+];
+
+/// Macros that never return, so a branch ending in one does not contribute
+/// a type (G3).
+const DIVERGING_MACROS: &[&str] = &["panic", "todo", "unimplemented", "unreachable"];
+
+fn macro_name(mac: &Macro) -> String {
+    mac.path
+        .segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .unwrap_or_default()
+}
+
+/// The first comma-separated expression of a macro's tokens, for
+/// `matches!(expr, pattern)` whose second part is a pattern.
+fn first_macro_expr(tokens: &TokenStream) -> Option<Expr> {
+    let head: TokenStream = tokens
+        .clone()
+        .into_iter()
+        .take_while(|t| !matches!(t, TokenTree::Punct(p) if p.as_char() == ','))
+        .collect();
+    syn::parse2(head).ok()
+}
+
+fn diverges(expr: &Expr) -> bool {
+    match strip(expr) {
+        Expr::Return(_) | Expr::Break(_) | Expr::Continue(_) => true,
+        Expr::Macro(m) => DIVERGING_MACROS.contains(&macro_name(&m.mac).as_str()),
+        _ => false,
+    }
+}
 
 /// rsactor's spawn functions (`src/lib.rs`).
 const SPAWN_FNS: &[&str] = &["spawn", "spawn_with_mailbox_capacity", "spawn_with_options"];
@@ -141,6 +207,7 @@ fn scan_impl(b: &mut Builder, place: Place, imp: &ItemImpl) {
         module: place.module,
         generics: &impl_generics,
         self_ty: None,
+        blocks: &[],
     }
     .resolve(&imp.self_ty);
     let actor: Option<DeclId> = match &self_ty {
@@ -218,6 +285,8 @@ struct Walker<'w, 'i, 'a, 'f> {
     closure_hint: Option<(usize, Option<Ty>)>,
     /// Calls already handled from `visit_local`, keyed by position.
     handled: HashSet<(usize, usize)>,
+    /// `use` declarations of the enclosing blocks, innermost last (G1).
+    blocks: Vec<Vec<Import>>,
 }
 
 impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
@@ -239,7 +308,118 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             scopes: Vec::new(),
             closure_hint: None,
             handled: HashSet::new(),
+            blocks: Vec::new(),
         }
+    }
+
+    fn resolve_path(&self, path: &syn::Path) -> Option<Resolved> {
+        self.b
+            .index
+            .resolve_path_scoped(self.place.krate, self.place.module, path, &self.blocks)
+    }
+
+    fn resolve_segments(&self, segments: &[String], leading_colon: bool) -> Option<Resolved> {
+        self.b.index.resolve_segments_scoped(
+            self.place.krate,
+            self.place.module,
+            segments,
+            leading_colon,
+            &self.blocks,
+        )
+    }
+
+    /// The declared type in front of an associated function call
+    /// (`Type::f(..)`, `Self::f(..)`), if the prefix names one.
+    fn assoc_owner(&self, path: &syn::Path) -> Option<Ty> {
+        let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let (_, prefix) = segments.split_last()?;
+        if prefix.is_empty() {
+            return None;
+        }
+        if prefix == ["Self"] {
+            return match &self.self_ty {
+                Some(t @ Ty::Decl { .. }) => Some(t.clone()),
+                _ => None,
+            };
+        }
+        let resolved = self.resolve_segments(prefix, path.leading_colon.is_some())?;
+        match resolved.res {
+            Res::Decl(id) => Some(Ty::Decl {
+                id,
+                args: Vec::new(),
+                inferred: resolved.inferred,
+            }),
+            _ => None,
+        }
+    }
+
+    /// `Enum::Name` is a variant only if the enum declares `Name`; otherwise
+    /// it is an associated item (`Enum::new()`).
+    fn is_variant(&self, id: DeclId, name: &str) -> bool {
+        match self.b.index.decl_item(id) {
+            Item::Enum(e) => e.variants.iter().any(|v| v.ident == name),
+            _ => false,
+        }
+    }
+
+    /// Return type stated by a declared signature (G4). `receiver` is what
+    /// `Self` stands for; the impl's generic parameters are replaced by the
+    /// receiver's arguments. A return type that is a bare generic parameter
+    /// of the function cannot be known without inference.
+    fn fn_return(&self, f: &FnDecl, receiver: Option<&Ty>) -> Option<Ty> {
+        let ReturnType::Type(_, ty) = &f.sig.output else {
+            return Some(Ty::Tuple(Vec::new()));
+        };
+        let mut generics = f.impl_generics.clone();
+        generics.extend(type_params(&f.sig.generics));
+        let self_ty = receiver.map(|r| r.auto_deref().clone());
+        let mut out = TyCtx {
+            index: self.b.index,
+            krate: f.krate,
+            module: f.module,
+            generics: &generics,
+            self_ty: self_ty.as_ref(),
+            blocks: &[],
+        }
+        .resolve(ty);
+        if let Some(Ty::Decl { args, .. }) = &self_ty {
+            let params: Vec<String> = f
+                .impl_self_args
+                .iter()
+                .map(|a| match a {
+                    Ty::Generic(g) => g.clone(),
+                    _ => String::new(),
+                })
+                .collect();
+            out = out.substitute(&params, args);
+        }
+        match out {
+            Ty::Generic(_) | Ty::ImplTrait(_) => None,
+            other => Some(other),
+        }
+    }
+
+    /// One answer from several declarations, or none if they disagree.
+    fn agree(&self, types: Vec<Ty>) -> Option<Ty> {
+        let first = types.first()?.clone();
+        let key = first.key(self.b.index);
+        types
+            .iter()
+            .all(|t| t.key(self.b.index) == key)
+            .then_some(first)
+    }
+
+    /// A method or associated function declared on a type in scope.
+    fn declared_method(&self, owner: &Ty, name: &str) -> Option<Ty> {
+        let Ty::Decl { id, .. } = owner.auto_deref() else {
+            return None;
+        };
+        let decls = self.b.methods.get(&(*id, name.to_string()))?;
+        let types = decls
+            .iter()
+            .map(|f| self.fn_return(f, Some(owner)))
+            .collect::<Option<Vec<Ty>>>()?;
+        self.agree(types)
     }
 
     fn walk_fn(&mut self, sig: &Signature, block: &syn::Block) {
@@ -263,6 +443,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             module: self.place.module,
             generics: &self.generics,
             self_ty: self.self_ty.as_ref(),
+            blocks: &self.blocks,
         }
     }
 
@@ -399,10 +580,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
 
     /// Fields of the struct or enum variant a pattern path names.
     fn named_fields(&self, path: &syn::Path, ty: &Ty) -> Option<Vec<(Option<String>, Ty)>> {
-        let resolved = self
-            .b
-            .index
-            .resolve_path(self.place.krate, self.place.module, path)?;
+        let resolved = self.resolve_path(path)?;
         let args = match ty.auto_deref() {
             Ty::Decl { args, .. } => args.clone(),
             _ => Vec::new(),
@@ -440,6 +618,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             module: decl.module,
             generics: &decl.generics,
             self_ty: Some(&self_ty),
+            blocks: &[],
         };
         Some(
             fields
@@ -490,9 +669,23 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             }
             Expr::MethodCall(mc) => {
                 let receiver = self.type_of(&mc.receiver)?;
-                method_return(&receiver, &mc.method.to_string())
+                let method = mc.method.to_string();
+                method_return(&receiver, &method)
+                    .or_else(|| self.declared_method(&receiver, &method))
             }
             Expr::Call(call) => self.call_return(call),
+            // The type a declared `async fn` states is what `.await` yields;
+            // `fn_return` already reports that type for the call itself.
+            Expr::Await(a) => self.type_of(&a.base),
+            Expr::Tuple(t) => Some(Ty::Tuple(
+                t.elems
+                    .iter()
+                    .map(|e| {
+                        self.type_of(e)
+                            .unwrap_or_else(|| Ty::Unknown("_".to_string()))
+                    })
+                    .collect(),
+            )),
             Expr::Reference(r) => self.type_of(&r.expr),
             Expr::Unary(u) if matches!(u.op, UnOp::Deref(_)) => {
                 self.type_of(&u.expr).map(|t| t.auto_deref().clone())
@@ -518,7 +711,8 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
     }
 
     /// Calls whose result type is known: rsactor spawns,
-    /// `ActorRef::downgrade(&r)`, tuple-struct and tuple-variant constructors.
+    /// `ActorRef::downgrade(&r)`, tuple-struct and tuple-variant
+    /// constructors, and functions whose signature states the type (G4).
     fn call_return(&self, call: &ExprCall) -> Option<Ty> {
         let Expr::Path(func) = &*call.func else {
             return None;
@@ -529,11 +723,22 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             .iter()
             .map(|s| s.ident.to_string())
             .collect();
-        let resolved = self
-            .b
-            .index
-            .resolve_path(self.place.krate, self.place.module, &func.path);
-        match resolved.map(|r| r.res) {
+        let resolved = self.resolve_path(&func.path).map(|r| r.res);
+        let last = segments.last()?;
+        if let Some(Res::Value(path)) = &resolved {
+            let f = self.b.functions.get(path)?;
+            return self.fn_return(f, None);
+        }
+        let is_assoc = match &resolved {
+            None => true,
+            Some(Res::Variant(id, name)) => !self.is_variant(*id, name),
+            _ => false,
+        };
+        if is_assoc {
+            let owner = self.assoc_owner(&func.path)?;
+            return self.declared_method(&owner, last);
+        }
+        match resolved {
             Some(Res::Rsactor(name)) if SPAWN_FNS.contains(&name.as_str()) => {
                 let target = self.spawn_target(call, None)?;
                 Some(Ty::Tuple(vec![
@@ -571,13 +776,10 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
     /// The type a struct or variant path names: a struct, or the enum of a
     /// variant (§4.4 M1).
     fn path_type(&self, path: &syn::Path) -> Option<(Ty, Resolution)> {
-        let resolved = self
-            .b
-            .index
-            .resolve_path(self.place.krate, self.place.module, path)?;
+        let resolved = self.resolve_path(path)?;
         let id = match resolved.res {
             Res::Decl(id) if self.b.index.decls[id].kind == DeclKind::Struct => id,
-            Res::Variant(id, _) => id,
+            Res::Variant(id, name) if self.is_variant(id, &name) => id,
             _ => return None,
         };
         let ty = Ty::Decl {
@@ -612,41 +814,119 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
                 if let Some(found) = self.path_type(&func.path) {
                     return Some(found);
                 }
-                // `M::new(..)`: assume `Self` only for a type declared in the
-                // declaration scope; `Box::new(..)` would otherwise give `Box`.
-                let segments = &func.path.segments;
-                if segments.len() < 2 {
-                    return None;
+                // A signature in scope states the type exactly (G4).
+                if let Some(ty) = self.call_return(call) {
+                    let resolution = ty.resolution();
+                    return Some((ty, resolution));
                 }
-                let prefix: Vec<String> = segments
-                    .iter()
-                    .take(segments.len() - 1)
-                    .map(|s| s.ident.to_string())
-                    .collect();
-                let resolved = self.b.index.resolve_segments(
-                    self.place.krate,
-                    self.place.module,
-                    &prefix,
-                    func.path.leading_colon.is_some(),
-                )?;
-                match resolved.res {
-                    Res::Decl(id) => {
-                        let ty = Ty::Decl {
-                            id,
-                            args: Vec::new(),
-                            inferred: resolved.inferred,
-                        };
-                        let resolution = ty.resolution().weakest(Resolution::Assumed);
-                        Some((ty, resolution))
-                    }
-                    _ => None,
-                }
+                // `M::new(..)` with no visible signature: assume `Self` only
+                // for a type declared in the declaration scope;
+                // `Box::new(..)` would otherwise give `Box`.
+                let owner = self.assoc_owner(&func.path)?;
+                let resolution = owner.resolution().weakest(Resolution::Assumed);
+                Some((owner, resolution))
             }
             other => self.type_of(other).map(|t| {
                 let r = t.resolution();
                 (t, r)
             }),
         }
+    }
+
+    // ----- branch expressions (G3) ----------------------------------------
+
+    /// The type of a `match`, `if`/`else` or block expression used as a
+    /// value: every branch that does not diverge must agree. `None` means
+    /// the expression diverges; `Some(None)` means the type is unknown.
+    /// Branch bindings live in temporary scopes, so nothing leaks out.
+    fn branch_type(&mut self, expr: &Expr) -> Option<Option<Ty>> {
+        if diverges(expr) {
+            return None;
+        }
+        match strip(expr) {
+            Expr::Block(b) => self.block_type(&b.block),
+            Expr::Unsafe(u) => self.block_type(&u.block),
+            Expr::If(expr_if) => {
+                let Some((_, else_branch)) = &expr_if.else_branch else {
+                    return Some(None);
+                };
+                self.scopes.push(Scope::new());
+                self.bind_condition(&expr_if.cond);
+                let then = self.block_type(&expr_if.then_branch);
+                self.scopes.pop();
+                let other = self.branch_type(else_branch);
+                self.merge(vec![then, other])
+            }
+            Expr::Match(expr_match) => {
+                let scrutinee = self.type_of(&expr_match.expr);
+                let mut arms = Vec::new();
+                for arm in &expr_match.arms {
+                    self.scopes.push(Scope::new());
+                    let pat = match &arm.pat {
+                        Pat::Guard(g) => &*g.pat,
+                        other => other,
+                    };
+                    self.bind_pat(pat, scrutinee.clone());
+                    arms.push(self.branch_type(&arm.body));
+                    self.scopes.pop();
+                }
+                self.merge(arms)
+            }
+            other => Some(self.type_of(other)),
+        }
+    }
+
+    fn block_type(&mut self, block: &syn::Block) -> Option<Option<Ty>> {
+        self.scopes.push(Scope::new());
+        let mut result = Some(None);
+        let count = block.stmts.len();
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            match stmt {
+                Stmt::Local(local) => {
+                    let ty = local
+                        .init
+                        .as_ref()
+                        .and_then(|init| self.type_of(&init.expr));
+                    self.bind_pat(&local.pat, ty);
+                }
+                Stmt::Expr(e, None) if i + 1 == count => result = self.branch_type(e),
+                Stmt::Expr(e, Some(_)) if diverges(e) => {
+                    result = None;
+                    break;
+                }
+                Stmt::Macro(m) if DIVERGING_MACROS.contains(&macro_name(&m.mac).as_str()) => {
+                    result = None;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        self.scopes.pop();
+        result
+    }
+
+    /// Binds the names of `if let` conditions, including `&&` chains.
+    fn bind_condition(&mut self, cond: &Expr) {
+        match strip(cond) {
+            Expr::Let(expr_let) => {
+                let ty = self.type_of(&expr_let.expr);
+                self.bind_pat(&expr_let.pat, ty);
+            }
+            Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_)) => {
+                self.bind_condition(&binary.left);
+                self.bind_condition(&binary.right);
+            }
+            _ => {}
+        }
+    }
+
+    fn merge(&self, branches: Vec<Option<Option<Ty>>>) -> Option<Option<Ty>> {
+        let live: Vec<Option<Ty>> = branches.into_iter().flatten().collect();
+        if live.is_empty() {
+            return None;
+        }
+        let types: Option<Vec<Ty>> = live.into_iter().collect();
+        Some(types.and_then(|t| self.agree(t)))
     }
 
     // ----- receivers -----------------------------------------------------
@@ -929,7 +1209,9 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
     /// `Some((name, resolved))` when the call is an rsactor spawn, or a call
     /// named like one whose path does not resolve (`resolved == false`).
     /// `tokio::spawn`, `task::spawn` and local `fn spawn` resolve elsewhere
-    /// and are not candidates.
+    /// and are not candidates. Neither is an associated function such as
+    /// `Writer::spawn(..)` or `Self::spawn(..)`: rsactor's spawns are free
+    /// functions (G7).
     fn spawn_fn(&self, call: &ExprCall) -> Option<(String, bool)> {
         let Expr::Path(path) = &*call.func else {
             return None;
@@ -938,11 +1220,16 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
         if !SPAWN_FNS.contains(&name.as_str()) {
             return None;
         }
-        match self
-            .b
-            .index
-            .resolve_path(self.place.krate, self.place.module, &path.path)
+        if self.assoc_owner(&path.path).is_some()
+            || path
+                .path
+                .segments
+                .first()
+                .is_some_and(|s| s.ident == "Self")
         {
+            return None;
+        }
+        match self.resolve_path(&path.path) {
             Some(r) if !r.inferred && r.res == Res::Rsactor(name.clone()) => Some((name, true)),
             Some(_) => None,
             None => Some((name, false)),
@@ -1078,10 +1365,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             },
             _ => return None,
         };
-        let resolved = self
-            .b
-            .index
-            .resolve_path(self.place.krate, self.place.module, path)?;
+        let resolved = self.resolve_path(path)?;
         match resolved.res {
             Res::Decl(id)
                 if !resolved.inferred && self.b.index.decls[id].kind == DeclKind::Struct =>
@@ -1319,10 +1603,22 @@ fn strip(expr: &Expr) -> &Expr {
 }
 
 impl<'ast> Visit<'ast> for Walker<'_, '_, '_, '_> {
+    /// A block-level `use` is visible in the whole block (G1).
     fn visit_block(&mut self, block: &'ast syn::Block) {
+        let imports: Vec<Import> = block
+            .stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Item(Item::Use(item_use)) => Some(imports_of(item_use)),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        self.blocks.push(imports);
         self.scopes.push(Scope::new());
         visit::visit_block(self, block);
         self.scopes.pop();
+        self.blocks.pop();
     }
 
     /// The initializer is walked and typed before the pattern binds, so
@@ -1340,7 +1636,9 @@ impl<'ast> Visit<'ast> for Walker<'_, '_, '_, '_> {
                     }
                 }
                 self.visit_expr(&init.expr);
-                let ty = self.type_of(&init.expr);
+                let ty = self
+                    .type_of(&init.expr)
+                    .or_else(|| self.branch_type(&init.expr).flatten());
                 if let Some((_, diverge)) = &init.diverge {
                     self.visit_expr(diverge);
                 }
@@ -1443,17 +1741,37 @@ impl<'ast> Visit<'ast> for Walker<'_, '_, '_, '_> {
         }
     }
 
+    /// Expression macros are re-parsed and walked as code (G6); any other
+    /// macro, or one whose tokens do not parse, gets the token scan.
     fn visit_macro(&mut self, mac: &'ast Macro) {
+        let name = macro_name(mac);
+        if name == "matches" {
+            if let Some(expr) = first_macro_expr(&mac.tokens) {
+                self.visit_expr(&expr);
+                return;
+            }
+        } else if EXPR_MACROS.contains(&name.as_str()) {
+            let parsed = Punctuated::<Expr, Token![,]>::parse_terminated.parse2(mac.tokens.clone());
+            if let Ok(exprs) = parsed {
+                for expr in &exprs {
+                    self.visit_expr(expr);
+                }
+                return;
+            }
+        }
         self.macro_candidates(mac);
     }
 
     /// A nested `fn` is its own sender, not part of the enclosing method,
-    /// and cannot see the enclosing bindings.
+    /// and cannot see the enclosing bindings. It does see block-level `use`
+    /// declarations, which are items.
     fn visit_item_fn(&mut self, f: &'ast ItemFn) {
         let path = format!("{}::{}", self.fn_path, f.sig.ident);
         let sender = fn_endpoint(self.b, self.place.krate, &path);
         let generics = type_params(&f.sig.generics);
+        let blocks = self.blocks.clone();
         let mut nested = Walker::new(self.b, self.place, sender, path, generics, None);
+        nested.blocks = blocks;
         nested.walk_fn(&f.sig, &f.block);
     }
 

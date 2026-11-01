@@ -122,6 +122,31 @@
         "variant": null,
         "from": "external",
         "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
+        "message": "message_macro_demo::GetCount",
+        "message_label": "GetCount",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 69
+          },
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 83
+          },
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 89
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
         "message": "message_macro_demo::Multiply",
         "message_label": "Multiply",
         "reply": "u32",
@@ -171,34 +196,6 @@
     ]
   },
   "report": {
-    "entries": [
-      {
-        "category": "macro_candidate",
-        "location": {
-          "file": "examples/message_macro_demo.rs",
-          "line": 69
-        },
-        "sender": "external",
-        "detail": "`.ask(..)` inside `println!`"
-      },
-      {
-        "category": "macro_candidate",
-        "location": {
-          "file": "examples/message_macro_demo.rs",
-          "line": 83
-        },
-        "sender": "external",
-        "detail": "`.ask(..)` inside `println!`"
-      },
-      {
-        "category": "macro_candidate",
-        "location": {
-          "file": "examples/message_macro_demo.rs",
-          "line": 89
-        },
-        "sender": "external",
-        "detail": "`.ask(..)` inside `println!`"
-      }
-    ]
+    "entries": []
   }
 }

@@ -11,6 +11,9 @@ pub enum Command {
 pub struct Job;
 pub struct Query;
 pub struct Made;
+/// Declared here, but its `make()` is not visible to the scanner (no impl
+/// in scope): `Built::make()` stays `assumed`.
+pub struct Built;
 pub struct Unhandled;
 pub struct LogLine;
 pub struct Reply {
@@ -38,6 +41,8 @@ impl Router {
     #[handler]
     async fn made(&mut self, _m: Made, _: &ActorRef<Self>) {}
     #[handler]
+    async fn built(&mut self, _m: Built, _: &ActorRef<Self>) {}
+    #[handler]
     async fn query(&mut self, _m: Query, _: &ActorRef<Self>) -> u32 {
         0
     }
@@ -52,6 +57,7 @@ pub struct Client {
 
 /// A newtype wrapper: the scanner does not follow it, so it is reported.
 pub struct RouterHandle(ActorRef<Router>);
+/// A type alias is expanded to its declared target: sends reach Router.
 pub type RouterRef = ActorRef<Router>;
 
 /// Has its own `tell` and holds no actor: calls on it are dropped.
@@ -97,8 +103,10 @@ impl Worker {
         // Enum variants of every shape → the enum.
         self.router.tell(Command::Run(1)).await.ok();
         self.router.tell(Command::Stop { now: true }).await.ok();
-        // Associated function of a declared type → assumed.
+        // `Made::new()` is declared `-> Self` in scope → exact (G4).
         self.router.tell(Made::new()).await.ok();
+        // No visible signature for `Built::make()` → assumed.
+        self.router.tell(Built::make()).await.ok();
         // `Box::new(..)` is not assumed to be `Box` → message `?`.
         self.router.tell(Box::new(Job)).await.ok();
         // Local binding initialised by a struct literal (M2).

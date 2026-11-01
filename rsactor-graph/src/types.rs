@@ -4,11 +4,11 @@
 //! Resolved type representation and the message key rules (§4.2).
 
 use quote::ToTokens;
-use syn::{GenericArgument, PathArguments, Type, TypeParamBound};
+use syn::{GenericArgument, Item, PathArguments, Type, TypeParamBound};
 
 use crate::crate_tree::{compact_tokens, ModId};
 use crate::model::Resolution;
-use crate::resolve::{DeclId, Index, Res};
+use crate::resolve::{DeclId, DeclKind, Import, Index, Res};
 
 /// A `syn::Type` with every path resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +54,9 @@ pub struct TyCtx<'i, 'a> {
     pub generics: &'i [String],
     /// What `Self` stands for, if anything.
     pub self_ty: Option<&'i Ty>,
+    /// `use` declarations of the enclosing function body's blocks,
+    /// innermost last. Empty outside function bodies.
+    pub blocks: &'i [Vec<Import>],
 }
 
 impl TyCtx<'_, '_> {
@@ -89,8 +92,18 @@ impl TyCtx<'_, '_> {
             .last()
             .map(|last| self.generic_args(&last.arguments))
             .unwrap_or_default();
-        match self.index.resolve_path(self.krate, self.module, path) {
+        match self
+            .index
+            .resolve_path_scoped(self.krate, self.module, path, self.blocks)
+        {
             Some(resolved) => match resolved.res {
+                Res::Decl(id) if self.index.decls[id].kind == DeclKind::TypeAlias => {
+                    self.expand_alias(id, &args).unwrap_or(Ty::Decl {
+                        id,
+                        args,
+                        inferred: resolved.inferred,
+                    })
+                }
                 Res::Decl(id) => Ty::Decl {
                     id,
                     args,
@@ -103,6 +116,37 @@ impl TyCtx<'_, '_> {
             },
             None => unknown(whole),
         }
+    }
+
+    /// `type Result<T> = std::result::Result<T, Error>` used as `Result<X>`:
+    /// the declared target with the alias parameters replaced. The target is
+    /// written in the declaration, so this needs no inference. Depth is
+    /// capped because a last-segment fallback could otherwise loop.
+    fn expand_alias(&self, id: DeclId, args: &[Ty]) -> Option<Ty> {
+        thread_local! {
+            static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let Item::Type(alias) = self.index.decl_item(id) else {
+            return None;
+        };
+        let depth = DEPTH.with(|d| d.get());
+        if depth >= 8 {
+            return None;
+        }
+        DEPTH.with(|d| d.set(depth + 1));
+        let decl = &self.index.decls[id];
+        let target = TyCtx {
+            index: self.index,
+            krate: decl.krate,
+            module: decl.module,
+            generics: &decl.generics,
+            self_ty: None,
+            blocks: &[],
+        }
+        .resolve(&alias.ty)
+        .substitute(&decl.generics, args);
+        DEPTH.with(|d| d.set(depth));
+        Some(target)
     }
 
     fn generic_args(&self, arguments: &PathArguments) -> Vec<Ty> {

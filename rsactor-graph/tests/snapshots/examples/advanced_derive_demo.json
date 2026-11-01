@@ -249,6 +249,23 @@
         "variant": null,
         "from": "external",
         "to": "actor:example:advanced_derive_demo:advanced_derive_demo::CounterActor",
+        "message": "advanced_derive_demo::GetCount",
+        "message_label": "GetCount",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/advanced_derive_demo.rs",
+            "line": 138
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:advanced_derive_demo:advanced_derive_demo::CounterActor",
         "message": "advanced_derive_demo::Increment",
         "message_label": "Increment",
         "reply": "u32",
@@ -353,16 +370,6 @@
     ]
   },
   "report": {
-    "entries": [
-      {
-        "category": "macro_candidate",
-        "location": {
-          "file": "examples/advanced_derive_demo.rs",
-          "line": 138
-        },
-        "sender": "external",
-        "detail": "`.ask(..)` inside `println!`"
-      }
-    ]
+    "entries": []
   }
 }
