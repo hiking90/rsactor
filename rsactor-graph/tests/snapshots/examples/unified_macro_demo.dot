@@ -6,9 +6,7 @@ digraph "unified_macro_demo" {
   "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="{unified_macro_demo::SimpleActor|GetCount -\> i32\lIncrement\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [label="ask GetValue -> Option<T>\ntell SetValue"];
   "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [style="bold", label="spawn"];
-  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [label="tell SetValue"];
-  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="tell Increment"];
-  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [label="ask GetValue -> Option<T>"];
-  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="ask GetCount -> i32"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="ask GetCount -> i32\ntell Increment"];
 }

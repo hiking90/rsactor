@@ -5,11 +5,9 @@ digraph "dining_philosophers" {
   "actor:example:dining_philosophers:dining_philosophers::Philosopher" [label="{dining_philosophers::Philosopher|StartEating\lStartThinking\l}"];
   "actor:example:dining_philosophers:dining_philosophers::Table" [label="{dining_philosophers::Table|RegisterPhilosopher\lReleaseFork\lRequestFork -\> bool\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
-  "actor:example:dining_philosophers:dining_philosophers::Philosopher" -> "actor:example:dining_philosophers:dining_philosophers::Table" [style="dotted", color=gray50];
+  "actor:example:dining_philosophers:dining_philosophers::Philosopher" -> "actor:example:dining_philosophers:dining_philosophers::Philosopher" [label="tell StartEating\ntell StartThinking"];
+  "actor:example:dining_philosophers:dining_philosophers::Philosopher" -> "actor:example:dining_philosophers:dining_philosophers::Table" [label="ask RequestFork -> bool\ntell RegisterPhilosopher\ntell ReleaseFork"];
   "actor:example:dining_philosophers:dining_philosophers::Table" -> "actor:example:dining_philosophers:dining_philosophers::Philosopher" [style="dotted", color=gray50];
   "external" -> "actor:example:dining_philosophers:dining_philosophers::Philosopher" [style="bold", label="spawn"];
   "external" -> "actor:example:dining_philosophers:dining_philosophers::Table" [style="bold", label="spawn"];
-  "actor:example:dining_philosophers:dining_philosophers::Philosopher" -> "actor:example:dining_philosophers:dining_philosophers::Philosopher" [label="tell StartEating\ntell StartThinking"];
-  "actor:example:dining_philosophers:dining_philosophers::Philosopher" -> "actor:example:dining_philosophers:dining_philosophers::Table" [label="tell RegisterPhilosopher\ntell ReleaseFork"];
-  "actor:example:dining_philosophers:dining_philosophers::Philosopher" -> "actor:example:dining_philosophers:dining_philosophers::Table" [label="ask RequestFork -> bool"];
 }

@@ -7,10 +7,9 @@ digraph "advanced_derive_demo" {
   "actor:example:advanced_derive_demo:advanced_derive_demo::WorkerActor" [label="{advanced_derive_demo::WorkerActor|DoWork -\> String\lGetTasksCompleted -\> u32\lGetWorkerId -\> u32\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::CounterActor" [style="bold", label="spawn"];
-  "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::SimpleActor" [style="bold", label="spawn"];
-  "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::WorkerActor" [style="bold", label="spawn"];
-  "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::SimpleActor" [label="tell SetName"];
   "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::CounterActor" [label="ask Decrement -> u32\nask GetCount -> u32\nask Increment -> u32\nask IsAtMax -> bool"];
-  "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::SimpleActor" [label="ask GetName -> String"];
+  "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::SimpleActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::SimpleActor" [label="ask GetName -> String\ntell SetName"];
+  "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::WorkerActor" [style="bold", label="spawn"];
   "external" -> "actor:example:advanced_derive_demo:advanced_derive_demo::WorkerActor" [label="ask DoWork -> String\nask GetTasksCompleted -> u32\nask GetWorkerId -> u32"];
 }

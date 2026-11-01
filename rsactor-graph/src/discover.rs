@@ -37,6 +37,7 @@ pub enum Endpoint {
     Fn {
         target: String,
         path: String,
+        owner: Option<String>,
     },
     External,
     Handlers(HandlerSig),
@@ -150,13 +151,18 @@ impl<'i, 'a> Builder<'i, 'a> {
                 });
                 id
             }
-            Endpoint::Fn { target, path } => {
+            Endpoint::Fn {
+                target,
+                path,
+                owner,
+            } => {
                 let id = format!("fn:{target}:{path}");
                 self.extra.entry(id.clone()).or_insert_with(|| {
                     Node::Fn(FnNode {
                         id: id.clone(),
                         target: target.clone(),
                         path: path.clone(),
+                        owner: owner.clone(),
                     })
                 });
                 id

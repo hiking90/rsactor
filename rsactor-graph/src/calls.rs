@@ -164,7 +164,8 @@ pub fn scan_bodies(b: &mut Builder) {
                         let sender = if has_main && m == 0 && f.sig.ident == "main" {
                             Endpoint::External
                         } else {
-                            fn_endpoint(b, c, &path)
+                            // Free functions group by module in DOT output.
+                            fn_endpoint(b, c, &path, Some(&module_path))
                         };
                         let generics = type_params(&f.sig.generics);
                         let mut walker = Walker::new(b, place, sender, path, generics, None);
@@ -186,10 +187,11 @@ struct Place<'f> {
     file: &'f Path,
 }
 
-fn fn_endpoint(b: &Builder, krate: usize, path: &str) -> Endpoint {
+fn fn_endpoint(b: &Builder, krate: usize, path: &str, owner: Option<&str>) -> Endpoint {
     Endpoint::Fn {
         target: b.index.crates[krate].spec.target.clone(),
         path: path.to_string(),
+        owner: owner.map(str::to_string),
     }
 }
 
@@ -229,7 +231,7 @@ fn scan_impl(b: &mut Builder, place: Place, imp: &ItemImpl) {
             Some(id) if f.sig.receiver().is_some() || trait_methods_send_as_actor => {
                 Endpoint::Actor(id)
             }
-            _ => fn_endpoint(b, place.krate, &path),
+            _ => fn_endpoint(b, place.krate, &path, Some(&type_path)),
         };
         let mut generics = impl_generics.clone();
         generics.extend(type_params(&f.sig.generics));
@@ -243,8 +245,9 @@ fn scan_trait(b: &mut Builder, place: Place, module_path: &str, t: &ItemTrait) {
     for item in &t.items {
         let TraitItem::Fn(f) = item else { continue };
         let Some(block) = &f.default else { continue };
-        let path = format!("{module_path}::{}::{}", t.ident, f.sig.ident);
-        let sender = fn_endpoint(b, place.krate, &path);
+        let owner = format!("{module_path}::{}", t.ident);
+        let path = format!("{owner}::{}", f.sig.ident);
+        let sender = fn_endpoint(b, place.krate, &path, Some(&owner));
         let mut generics = type_params(&t.generics);
         generics.extend(type_params(&f.sig.generics));
         generics.push("Self".to_string());
@@ -1767,7 +1770,7 @@ impl<'ast> Visit<'ast> for Walker<'_, '_, '_, '_> {
     /// declarations, which are items.
     fn visit_item_fn(&mut self, f: &'ast ItemFn) {
         let path = format!("{}::{}", self.fn_path, f.sig.ident);
-        let sender = fn_endpoint(self.b, self.place.krate, &path);
+        let sender = fn_endpoint(self.b, self.place.krate, &path, None);
         let generics = type_params(&f.sig.generics);
         let blocks = self.blocks.clone();
         let mut nested = Walker::new(self.b, self.place, sender, path, generics, None);

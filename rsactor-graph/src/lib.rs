@@ -20,6 +20,7 @@ pub mod model;
 pub mod render;
 pub mod resolve;
 pub mod types;
+pub mod view;
 pub mod workspace;
 
 use std::path::PathBuf;

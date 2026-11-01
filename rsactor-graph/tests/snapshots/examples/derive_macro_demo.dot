@@ -5,6 +5,5 @@ digraph "derive_macro_demo" {
   "actor:example:derive_macro_demo:derive_macro_demo::MyActor" [label="{derive_macro_demo::MyActor|GetCount -\> u32\lGetName -\> String\lIncrement\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
   "external" -> "actor:example:derive_macro_demo:derive_macro_demo::MyActor" [style="bold", label="spawn"];
-  "external" -> "actor:example:derive_macro_demo:derive_macro_demo::MyActor" [label="tell Increment"];
-  "external" -> "actor:example:derive_macro_demo:derive_macro_demo::MyActor" [label="ask GetCount -> u32\nask GetName -> String"];
+  "external" -> "actor:example:derive_macro_demo:derive_macro_demo::MyActor" [label="ask GetCount -> u32\nask GetName -> String\ntell Increment"];
 }

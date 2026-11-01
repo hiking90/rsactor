@@ -108,6 +108,11 @@ pub struct FnNode {
     pub target: String,
     /// e.g. `app::util::broadcast`, `app::Router::connect`.
     pub path: String,
+    /// What the function belongs to: its type or trait (`app::Router` for
+    /// `app::Router::connect`), or its module for a free function;
+    /// `None` for nested functions. DOT output groups functions that share
+    /// an owner.
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use rsactor_graph::render::{self, SvgError};
+use rsactor_graph::render::{self, DotOptions, HoldsMode, SvgError};
 use rsactor_graph::workspace::{Selection, Workspace};
 
 const USAGE: &str = "\
@@ -21,6 +21,15 @@ Options:
   --format <FORMAT>       json, dot or svg [default: dot]
   -o, --output <FILE>     Write to FILE instead of stdout
   --report                Print the judgement report to stderr
+  --focus <ACTOR>         Keep only nodes near ACTOR (full path or unique suffix)
+  --depth <N>             Edges to follow from --focus [default: 1]
+
+DOT/SVG only (JSON always carries the full model):
+  --holds <MODE>          all, uncovered or none [default: uncovered]
+                          uncovered: hide a holds edge where a send or spawn
+                          arrow already joins the same two nodes
+  --no-group-fns          Draw every function sender separately instead of
+                          one node per owning type or trait
   -h, --help              Print this help
 ";
 
@@ -36,6 +45,9 @@ struct Args {
     format: Format,
     output: Option<PathBuf>,
     report: bool,
+    focus: Option<String>,
+    depth: usize,
+    dot: DotOptions,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -44,6 +56,9 @@ fn parse_args() -> Result<Option<Args>, String> {
         format: Format::Dot,
         output: None,
         report: false,
+        focus: None,
+        depth: 1,
+        dot: DotOptions::default(),
     };
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -66,6 +81,22 @@ fn parse_args() -> Result<Option<Args>, String> {
             }
             "-o" | "--output" => args.output = Some(value(&arg)?.into()),
             "--report" => args.report = true,
+            "--focus" => args.focus = Some(value(&arg)?),
+            "--depth" => {
+                let text = value(&arg)?;
+                args.depth = text
+                    .parse()
+                    .map_err(|_| format!("--depth expects a number, got `{text}`"))?;
+            }
+            "--holds" => {
+                args.dot.holds = match value(&arg)?.as_str() {
+                    "all" => HoldsMode::All,
+                    "uncovered" => HoldsMode::Uncovered,
+                    "none" => HoldsMode::None,
+                    other => return Err(format!("unknown --holds mode `{other}`")),
+                }
+            }
+            "--no-group-fns" => args.dot.group_fns = false,
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
@@ -104,12 +135,16 @@ fn run(args: &Args) -> Result<(), String> {
     if output.actors().next().is_none() && args.selection.example.is_none() {
         return Err(no_actors_guidance(&workspace, &args.selection, &input.name));
     }
+    let output = match &args.focus {
+        Some(actor) => rsactor_graph::view::focus(output, actor, args.depth)?,
+        None => output,
+    };
 
     let text = match args.format {
         Format::Json => render::to_json(&output),
-        Format::Dot => render::to_dot(&output),
+        Format::Dot => render::to_dot_with(&output, &args.dot),
         Format::Svg => {
-            let dot = render::to_dot(&output);
+            let dot = render::to_dot_with(&output, &args.dot);
             match render::dot_to_svg(&dot) {
                 Ok(svg) => svg,
                 Err(SvgError::DotNotFound) => {

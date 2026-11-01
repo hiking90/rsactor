@@ -3,11 +3,12 @@
 
 //! JSON, DOT and SVG output (§6).
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
-use crate::model::{ActorNode, Edge, EdgeKind, HandlersNode, Node, Output, Resolution};
+use crate::model::{ActorNode, Edge, EdgeKind, FnNode, HandlersNode, Node, Output, Resolution};
 
 pub fn to_json(output: &Output) -> String {
     let mut text = serde_json::to_string_pretty(output).expect("model serialises");
@@ -15,23 +16,117 @@ pub fn to_json(output: &Output) -> String {
     text
 }
 
+/// Which holds edges DOT output draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldsMode {
+    All,
+    /// Only between nodes with no send or spawn arrow already: a holds
+    /// edge next to a send arrow repeats what the send shows.
+    Uncovered,
+    None,
+}
+
+/// Readability options for DOT/SVG. The JSON model is never reduced by
+/// these; it stays the full judgement record.
+#[derive(Debug, Clone, Copy)]
+pub struct DotOptions {
+    /// Draw functions sharing an owner type or trait as one node.
+    pub group_fns: bool,
+    pub holds: HoldsMode,
+}
+
+impl Default for DotOptions {
+    fn default() -> Self {
+        DotOptions {
+            group_fns: true,
+            holds: HoldsMode::Uncovered,
+        }
+    }
+}
+
 pub fn to_dot(output: &Output) -> String {
+    to_dot_with(output, &DotOptions::default())
+}
+
+/// Arrow classes drawn separately between the same two nodes. All sends
+/// (tell and ask, every variant) share one arrow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ArrowClass {
+    Holds,
+    Spawn,
+    Send,
+}
+
+fn arrow_class(kind: EdgeKind) -> ArrowClass {
+    match kind {
+        EdgeKind::Holds => ArrowClass::Holds,
+        EdgeKind::Spawn => ArrowClass::Spawn,
+        EdgeKind::Tell | EdgeKind::Ask => ArrowClass::Send,
+    }
+}
+
+pub fn to_dot_with(output: &Output, options: &DotOptions) -> String {
+    // Function nodes that share (target, owner) with at least one other
+    // function are drawn as one group node.
+    let mut owners: BTreeMap<(String, String), Vec<&FnNode>> = BTreeMap::new();
+    if options.group_fns {
+        for node in &output.graph.nodes {
+            if let Node::Fn(f) = node {
+                if let Some(owner) = &f.owner {
+                    owners
+                        .entry((f.target.clone(), owner.clone()))
+                        .or_default()
+                        .push(f);
+                }
+            }
+        }
+        owners.retain(|_, members| members.len() > 1);
+    }
+    let mut remap: HashMap<String, String> = HashMap::new();
+    for ((target, owner), members) in &owners {
+        let group = format!("fngroup:{target}:{owner}");
+        for f in members {
+            remap.insert(f.id.clone(), group.clone());
+        }
+    }
+    // A sender's `?` node follows its sender into the group.
+    for node in &output.graph.nodes {
+        if let Node::Unknown(u) = node {
+            if let Some(group) = remap.get(&u.sender) {
+                remap.insert(u.id.clone(), format!("unknown:{group}"));
+            }
+        }
+    }
+    let id_of = |id: &str| remap.get(id).cloned().unwrap_or_else(|| id.to_string());
+
     let mut dot = String::new();
     let _ = writeln!(dot, "digraph {} {{", quote_id(&output.name));
     dot.push_str("  rankdir=LR;\n");
     dot.push_str("  node [shape=record, fontname=\"Helvetica\", fontsize=10];\n");
     dot.push_str("  edge [fontname=\"Helvetica\", fontsize=9];\n");
+    let mut emitted: HashSet<String> = HashSet::new();
     for node in &output.graph.nodes {
-        let id = quote_id(node.id());
+        let id = id_of(node.id());
+        if !emitted.insert(id.clone()) {
+            continue;
+        }
         let attrs = match node {
             Node::Actor(actor) => format!("label=\"{}\"", actor_label(actor)),
             Node::ExternalActor(n) => format!(
                 "shape=box, style=dashed, label=\"{}\\n(outside the workspace)\"",
                 escape_text(&n.path)
             ),
-            Node::Fn(n) => format!(
+            Node::Fn(f) if id != f.id => {
+                let owner = f.owner.clone().unwrap_or_default();
+                let members = &owners[&(f.target.clone(), owner.clone())];
+                format!(
+                    "shape=box, style=rounded, label=\"{}\"",
+                    escape_text(&group_label(&owner, members))
+                )
+            }
+            Node::Fn(f) => format!(
                 "shape=box, style=rounded, label=\"fn {}\"",
-                escape_text(&n.path)
+                escape_text(&f.path)
             ),
             Node::External(_) => "shape=ellipse, style=dashed, label=\"external (main)\"".into(),
             Node::Handlers(h) => format!(
@@ -40,52 +135,78 @@ pub fn to_dot(output: &Output) -> String {
             ),
             Node::Unknown(_) => "shape=circle, color=red, fontcolor=red, label=\"?\"".to_string(),
         };
-        let _ = writeln!(dot, "  {id} [{attrs}];");
+        let _ = writeln!(dot, "  {} [{attrs}];", quote_id(&id));
     }
-    for group in edge_groups(&output.graph.edges) {
-        let first = group[0];
+
+    let mut arrows: BTreeMap<(String, String, ArrowClass), Vec<&Edge>> = BTreeMap::new();
+    for edge in &output.graph.edges {
+        let key = (id_of(&edge.from), id_of(&edge.to), arrow_class(edge.kind));
+        arrows.entry(key).or_default().push(edge);
+    }
+    let covered: HashSet<(String, String)> = arrows
+        .keys()
+        .filter(|(_, _, class)| *class != ArrowClass::Holds)
+        .map(|(from, to, _)| (from.clone(), to.clone()))
+        .collect();
+    for ((from, to, class), edges) in &arrows {
+        if *class == ArrowClass::Holds {
+            let skip = match options.holds {
+                HoldsMode::All => false,
+                HoldsMode::None => true,
+                HoldsMode::Uncovered => covered.contains(&(from.clone(), to.clone())),
+            };
+            if skip {
+                continue;
+            }
+        }
         let _ = writeln!(
             dot,
             "  {} -> {} [{}];",
-            quote_id(&first.from),
-            quote_id(&first.to),
-            edge_attrs(&group)
+            quote_id(from),
+            quote_id(to),
+            arrow_attrs(*class, edges)
         );
     }
     dot.push_str("}\n");
     dot
 }
 
-/// Edges sharing (from, to, kind, receiver resolution, message resolution)
-/// are drawn as one arrow listing every message (§6.2). `edges` is sorted,
-/// so members of a group are adjacent.
-fn edge_groups(edges: &[Edge]) -> Vec<Vec<&Edge>> {
-    let key = |e: &Edge| {
-        (
-            e.from.clone(),
-            e.to.clone(),
-            e.kind,
-            e.receiver_resolution,
-            e.message_resolution,
-        )
+/// `owner` plus the member function names, at most six of them.
+fn group_label(owner: &str, members: &[&FnNode]) -> String {
+    let mut names: Vec<&str> = members
+        .iter()
+        .map(|f| f.path.rsplit("::").next().unwrap_or(&f.path))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    let shown: Vec<&str> = names.iter().take(6).copied().collect();
+    let more = if names.len() > shown.len() {
+        format!(", ... (+{})", names.len() - shown.len())
+    } else {
+        String::new()
     };
-    let mut groups: Vec<Vec<&Edge>> = Vec::new();
-    for edge in edges {
-        match groups.last_mut() {
-            Some(group) if key(group[0]) == key(edge) => group.push(edge),
-            _ => groups.push(vec![edge]),
-        }
-    }
-    groups
+    format!("{owner}\n{} fns: {}{more}", names.len(), shown.join(", "))
 }
 
-fn edge_attrs(group: &[&Edge]) -> String {
-    let first = group[0];
-    let weakest = first.receiver_resolution.weakest(first.message_resolution);
-    let guessed = matches!(weakest, Resolution::Assumed | Resolution::Inferred);
+fn guess_marker(resolution: Resolution) -> Option<&'static str> {
+    match resolution {
+        Resolution::Assumed => Some(" (assumed)"),
+        Resolution::Inferred => Some(" (inferred)"),
+        Resolution::Exact | Resolution::Unresolved => None,
+    }
+}
+
+/// One arrow for every edge of a class between two nodes (§6.2): a line
+/// per distinct message, each marked when its judgement was guessed. The
+/// arrow is dashed only when every line was guessed.
+fn arrow_attrs(class: ArrowClass, edges: &[&Edge]) -> String {
     let mut lines: Vec<String> = Vec::new();
-    for edge in group {
-        let line = match edge.kind {
+    let mut all_guessed = true;
+    for edge in edges {
+        let weakest = edge.receiver_resolution.weakest(edge.message_resolution);
+        let marker = guess_marker(weakest);
+        all_guessed &= marker.is_some();
+        let mut line = match edge.kind {
             EdgeKind::Holds => String::new(),
             EdgeKind::Spawn => match &edge.variant {
                 Some(variant) => format!("spawn ({variant})"),
@@ -103,26 +224,32 @@ fn edge_attrs(group: &[&Edge]) -> String {
                 }
             }
         };
+        if let Some(marker) = marker {
+            if line.is_empty() {
+                // A holds edge has no text of its own.
+                line = marker.trim_start().to_string();
+            } else {
+                line.push_str(marker);
+            }
+        }
         if !line.is_empty() && !lines.contains(&line) {
             lines.push(line);
         }
     }
-    if guessed {
-        lines.push(format!("({weakest:?})").to_lowercase());
-    }
-    let mut style = match first.kind {
-        EdgeKind::Holds => vec!["dotted"],
-        EdgeKind::Spawn => vec!["bold"],
-        EdgeKind::Tell | EdgeKind::Ask => vec![],
+    lines.sort();
+    let mut style = match class {
+        ArrowClass::Holds => vec!["dotted"],
+        ArrowClass::Spawn => vec!["bold"],
+        ArrowClass::Send => vec![],
     };
-    if guessed && first.kind != EdgeKind::Holds {
+    if all_guessed && class != ArrowClass::Holds {
         style.push("dashed");
     }
     let mut attrs = Vec::new();
     if !style.is_empty() {
         attrs.push(format!("style=\"{}\"", style.join(",")));
     }
-    if first.kind == EdgeKind::Holds {
+    if class == ArrowClass::Holds {
         attrs.push("color=gray50".to_string());
     }
     if !lines.is_empty() {

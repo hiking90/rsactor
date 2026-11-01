@@ -4,7 +4,7 @@ digraph "actor_blocking_task" {
   edge [fontname="Helvetica", fontsize=9];
   "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor" [label="{actor_blocking_task::SyncDataProcessorActor|GetState -\> (f64, Option\<f64\>, Option\<Instant\>)\lProcessedData\lSetFactor -\> f64\lTaskCommand -\> bool\l}"];
   "external" [shape=ellipse, style=dashed, label="external (main)"];
-  "external" -> "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor" [style="bold", label="spawn"];
   "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor" -> "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor" [label="blocking_tell ProcessedData"];
+  "external" -> "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor" [style="bold", label="spawn"];
   "external" -> "actor:example:actor_blocking_task:actor_blocking_task::SyncDataProcessorActor" [label="ask GetState -> (f64, Option<f64>, Option<Instant>)\nask SetFactor -> f64\nask TaskCommand -> bool"];
 }

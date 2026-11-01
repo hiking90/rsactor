@@ -57,13 +57,15 @@
         "kind": "fn",
         "id": "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_ask_with_timeout",
         "target": "example:actor_with_timeout",
-        "path": "actor_with_timeout::demonstrate_ask_with_timeout"
+        "path": "actor_with_timeout::demonstrate_ask_with_timeout",
+        "owner": "actor_with_timeout"
       },
       {
         "kind": "fn",
         "id": "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_tell_with_timeout",
         "target": "example:actor_with_timeout",
-        "path": "actor_with_timeout::demonstrate_tell_with_timeout"
+        "path": "actor_with_timeout::demonstrate_tell_with_timeout",
+        "owner": "actor_with_timeout"
       },
       {
         "kind": "external",

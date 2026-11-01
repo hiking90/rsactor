@@ -9,6 +9,6 @@ digraph "handler_demo" {
   "handlers:TellHandler:handler_demo::Ping" [shape=box, style="rounded,dashed", label="TellHandler<Ping>\ncandidates: handler_demo::CounterActor, handler_demo::LoggerActor"];
   "external" -> "actor:example:handler_demo:handler_demo::CounterActor" [style="bold", label="spawn"];
   "external" -> "actor:example:handler_demo:handler_demo::LoggerActor" [style="bold", label="spawn"];
-  "external" -> "handlers:TellHandler:handler_demo::Ping" [label="tell Ping"];
   "external" -> "handlers:AskHandler:handler_demo::GetStatus:handler_demo::Status" [label="ask GetStatus -> Status"];
+  "external" -> "handlers:TellHandler:handler_demo::Ping" [label="tell Ping"];
 }
