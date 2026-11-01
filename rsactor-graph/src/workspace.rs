@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Turns `cargo metadata` output into a [`ScanInput`] (§3).
+//! Turns `cargo metadata` output into a [`ScanInput`].
 //!
 //! `cargo metadata --format-version 1 --no-deps` is run directly and only the
 //! fields used here are deserialised. The `cargo_metadata` crate would pull
@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::{CrateSpec, ScanInput};
 
-/// The rsactor crate itself is never in the declaration scope (§3): its
+/// The rsactor crate itself is never in the declaration scope: its
 /// items are built-in knowledge, and its own sources declare no actors
 /// outside doc comments and `#[cfg(test)]`.
 const RSACTOR_PACKAGE: &str = "rsactor";
@@ -158,7 +158,7 @@ impl Workspace {
 
         // The package lib (for an example) and the libs of workspace members
         // the package depends on. rsactor is excluded even when it is "the
-        // package lib", which is the case for the rsactor examples (§3).
+        // package lib", which is the case for the rsactor examples.
         let mut declarations: Vec<CrateSpec> = Vec::new();
         if selection.example.is_some() && !is_rsactor {
             declarations.extend(

@@ -1,5 +1,5 @@
-// Fixture: rules added after measuring real code (plan §8, G1-G7).
-// Each case mirrors a shape found in kairox, rsinit or moru. Not compiled.
+// Fixture: rules added after measuring the tool on real applications. Each
+// case mirrors a shape found there. Not compiled.
 use rsactor::{message_handlers, Actor, ActorRef};
 
 pub mod msgs {
@@ -58,7 +58,7 @@ pub fn make_target() -> ActorRef<Target> {
     todo!()
 }
 
-/// A crate-level `Result` alias (rsinit errors.rs:15): expanded to its target.
+/// A crate-level `Result` alias: expanded to its target.
 pub type Res<T> = std::result::Result<T, ()>;
 
 pub fn lookup() -> Res<ActorRef<Target>> {
@@ -78,20 +78,20 @@ impl Holder {
         todo!()
     }
 
-    // G1: `use` inside the function body (moru event_dispatch.rs:799).
+    // `use` inside the function body.
     async fn block_use(&self, t: ActorRef<Target>) {
         use crate::msgs::Ping;
         t.tell(Ping).await.ok();
     }
 
-    // G1: an external glob inside the body blocks the fallback, which would
+    // An external glob inside the body blocks the fallback, which would
     // otherwise pick `msgs::Status`.
     async fn block_glob(&self, t: ActorRef<Target>) {
         use ext_crate::*;
         t.tell(Status).await.ok();
     }
 
-    // G2: tuple scrutinee (kairox sns_actor.rs:1477, live.rs:2090).
+    // Tuple scrutinees.
     async fn tuple(&self, a: Option<u32>) {
         match (a, self.target.clone()) {
             (Some(_), Some(t)) => {
@@ -104,8 +104,8 @@ impl Holder {
         }
     }
 
-    // G3: `match`/`if` initializers (kairox sns_actor.rs:2384, rsinit
-    // handler.rs:125). Diverging arms do not count; disagreeing ones give `?`.
+    // `match`/`if` initializers. Diverging arms do not count; disagreeing
+    // ones give `?`.
     async fn branches(&self, flag: bool) {
         let t = match self.target.clone() {
             Some(t) => t,
@@ -122,7 +122,7 @@ impl Holder {
         t.tell(mixed).await.ok();
     }
 
-    // G4: return types stated by declared signatures (rsinit handler.rs:765).
+    // Return types stated by declared signatures.
     async fn signatures(&self) {
         self.target().tell(Report::success().with_code(3)).await.ok();
         make_target().tell(msgs::Ping).await.ok();
@@ -136,8 +136,7 @@ impl Holder {
         todo!()
     }
 
-    // `Self::f(..)` (rsinit handler.rs:783) and a `Result` alias matched
-    // with `Ok(..)` (rsinit notify_monitor.rs:332).
+    // `Self::f(..)` and a `Result` alias matched with `Ok(..)`.
     async fn self_and_alias(&self) {
         Self::make_ref().tell(msgs::Ping).await.ok();
         match lookup() {
@@ -148,7 +147,7 @@ impl Holder {
         }
     }
 
-    // G6: expression macros are walked as code (kairox `matches!`).
+    // Expression macros, including `matches!`, are walked as code.
     async fn macros(&self, t: ActorRef<Target>) {
         assert!(matches!(t.ask(msgs::Ping).await, Ok(_)));
         println!("{:?}", t.ask(msgs::Ping).await);
@@ -156,8 +155,7 @@ impl Holder {
     }
 }
 
-// G7: an associated function named `spawn` is not rsactor's (moru
-// file_storage.rs:112).
+// An associated function named `spawn` is not rsactor's.
 pub struct Writer;
 
 impl Writer {

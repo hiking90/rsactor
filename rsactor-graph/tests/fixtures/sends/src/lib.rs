@@ -1,4 +1,4 @@
-// Fixture: the type environment and send classification (§4.4). Not compiled.
+// Fixture: the type environment and send classification. Not compiled.
 use rsactor::ActorRef as Ref;
 use rsactor::{message_handlers, Actor, ActorRef, ActorWeak, AskHandler, TellHandler};
 use std::collections::HashMap;
@@ -103,7 +103,7 @@ impl Worker {
         // Enum variants of every shape → the enum.
         self.router.tell(Command::Run(1)).await.ok();
         self.router.tell(Command::Stop { now: true }).await.ok();
-        // `Made::new()` is declared `-> Self` in scope → exact (G4).
+        // `Made::new()` is declared `-> Self` in scope → exact.
         self.router.tell(Made::new()).await.ok();
         // No visible signature for `Built::make()` → assumed.
         self.router.tell(Built::make()).await.ok();

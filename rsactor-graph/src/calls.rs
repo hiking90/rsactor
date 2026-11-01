@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Function bodies of target crates (§4.4): who the sender is, what each
+//! Function bodies of target crates: who the sender is, what each
 //! binding's type is, and the spawn and send edges that follow.
 //!
 //! The walk keeps a lexical type environment: one map per scope (block,
@@ -32,7 +32,7 @@ use crate::resolve::{imports_of, type_params, DeclId, DeclKind, Import, Res, Res
 use crate::types::{Ty, TyCtx};
 
 /// Macros whose arguments are comma-separated expressions; their tokens are
-/// re-parsed and walked like ordinary code (G6). `format!`-style literals
+/// re-parsed and walked like ordinary code. `format!`-style literals
 /// parse as expressions too. Anything that fails to parse falls back to the
 /// token scan.
 const EXPR_MACROS: &[&str] = &[
@@ -63,7 +63,7 @@ const EXPR_MACROS: &[&str] = &[
 ];
 
 /// Macros that never return, so a branch ending in one does not contribute
-/// a type (G3).
+/// a type.
 const DIVERGING_MACROS: &[&str] = &["panic", "todo", "unimplemented", "unreachable"];
 
 fn macro_name(mac: &Macro) -> String {
@@ -122,7 +122,7 @@ const HANDLER_SENDS: &[&str] = &[
     "blocking_ask",
 ];
 
-/// Iterator adapters whose closure receives the iterator's element (§4.4 R3).
+/// Iterator adapters whose closure receives the iterator's element.
 const ADAPTERS: &[&str] = &[
     "for_each",
     "map",
@@ -195,7 +195,7 @@ fn fn_endpoint(b: &Builder, krate: usize, path: &str, owner: Option<&str>) -> En
     }
 }
 
-/// Sender rules for methods (§4.4): an actor's `self` methods and its
+/// Sender rules for methods: an actor's `self` methods and its
 /// `Actor`/`Message` trait methods send as the actor; any other function in
 /// the impl is a function node. Treating `self`-less associated functions as
 /// the actor would turn `Counter::incr(r)` called from `main` into a false
@@ -240,7 +240,7 @@ fn scan_impl(b: &mut Builder, place: Place, imp: &ItemImpl) {
     }
 }
 
-/// Trait default method bodies send as the trait method (§4.4).
+/// Trait default method bodies send as the trait method.
 fn scan_trait(b: &mut Builder, place: Place, module_path: &str, t: &ItemTrait) {
     for item in &t.items {
         let TraitItem::Fn(f) = item else { continue };
@@ -256,7 +256,7 @@ fn scan_trait(b: &mut Builder, place: Place, module_path: &str, t: &ItemTrait) {
     }
 }
 
-/// How a send's receiver was classified (§4.4 후보 분류).
+/// How a send's receiver was classified.
 enum Receiver {
     Actor {
         to: Endpoint,
@@ -288,7 +288,7 @@ struct Walker<'w, 'i, 'a, 'f> {
     closure_hint: Option<(usize, Option<Ty>)>,
     /// Calls already handled from `visit_local`, keyed by position.
     handled: HashSet<(usize, usize)>,
-    /// `use` declarations of the enclosing blocks, innermost last (G1).
+    /// `use` declarations of the enclosing blocks, innermost last.
     blocks: Vec<Vec<Import>>,
 }
 
@@ -365,7 +365,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
         }
     }
 
-    /// Return type stated by a declared signature (G4). `receiver` is what
+    /// Return type stated by a declared signature. `receiver` is what
     /// `Self` stands for; the impl's generic parameters are replaced by the
     /// receiver's arguments. A return type that is a bare generic parameter
     /// of the function cannot be known without inference.
@@ -455,7 +455,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
     }
 
     /// A parameter or annotation type. `Self::Args` becomes the actor's
-    /// `type Args` (§4.4 R2); everything else resolves normally.
+    /// `type Args`; everything else resolves normally.
     fn param_ty(&self, ty: &syn::Type) -> Ty {
         if let syn::Type::Path(tp) = ty {
             let segments: Vec<String> = tp
@@ -648,8 +648,8 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
         }
     }
 
-    /// The type of an expression, as far as the rules of §4.4 and the
-    /// return type table of §4.4.1 go.
+    /// The type of an expression, as far as the binding rules and the
+    /// built-in return type table go.
     fn type_of(&self, expr: &Expr) -> Option<Ty> {
         match strip(expr) {
             Expr::Path(p) if p.qself.is_none() => {
@@ -715,7 +715,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
 
     /// Calls whose result type is known: rsactor spawns,
     /// `ActorRef::downgrade(&r)`, tuple-struct and tuple-variant
-    /// constructors, and functions whose signature states the type (G4).
+    /// constructors, and functions whose signature states the type.
     fn call_return(&self, call: &ExprCall) -> Option<Ty> {
         let Expr::Path(func) = &*call.func else {
             return None;
@@ -777,7 +777,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
     }
 
     /// The type a struct or variant path names: a struct, or the enum of a
-    /// variant (§4.4 M1).
+    /// variant.
     fn path_type(&self, path: &syn::Path) -> Option<(Ty, Resolution)> {
         let resolved = self.resolve_path(path)?;
         let id = match resolved.res {
@@ -794,7 +794,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
         Some((ty, resolution))
     }
 
-    /// §4.4 M1/M2: the message type of a send argument.
+    /// The message type of a send argument.
     fn message_of(&self, expr: &Expr) -> Option<(Ty, Resolution)> {
         match strip(expr) {
             Expr::Struct(s) => self.path_type(&s.path),
@@ -817,7 +817,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
                 if let Some(found) = self.path_type(&func.path) {
                     return Some(found);
                 }
-                // A signature in scope states the type exactly (G4).
+                // A signature in scope states the type exactly.
                 if let Some(ty) = self.call_return(call) {
                     let resolution = ty.resolution();
                     return Some((ty, resolution));
@@ -836,7 +836,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
         }
     }
 
-    // ----- branch expressions (G3) ----------------------------------------
+    // ----- branch expressions ----------------------------------------
 
     /// The type of a `match`, `if`/`else` or block expression used as a
     /// value: every branch that does not diverge must agree. `None` means
@@ -1050,7 +1050,8 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             .any(|a| a.messages.iter().any(|m| m.key == key))
     }
 
-    /// A method call named like a send (§4.4 후보 분류).
+    /// A method call named like a send: classify its receiver, then record
+    /// an edge or a report entry.
     fn send(&mut self, mc: &ExprMethodCall, method: &str, ask: bool) {
         let index = self.b.index;
         let location = self.location(mc.method.span());
@@ -1214,7 +1215,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
     /// `tokio::spawn`, `task::spawn` and local `fn spawn` resolve elsewhere
     /// and are not candidates. Neither is an associated function such as
     /// `Writer::spawn(..)` or `Self::spawn(..)`: rsactor's spawns are free
-    /// functions (G7).
+    /// functions.
     fn spawn_fn(&self, call: &ExprCall) -> Option<(String, bool)> {
         let Expr::Path(path) = &*call.func else {
             return None;
@@ -1282,7 +1283,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
             .collect()
     }
 
-    /// §4.4 spawn: turbofish, then the binding annotation, then a struct
+    /// Spawn judgement: turbofish, then the binding annotation, then a struct
     /// literal of a `#[derive(Actor)]` type; otherwise report.
     fn spawn(
         &mut self,
@@ -1381,7 +1382,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
 
     // ----- token fallbacks -------------------------------------------------
 
-    /// `ActorRef::tell(&r, m)` and friends (§4.4 UFCS): reported, not judged.
+    /// `ActorRef::tell(&r, m)` and friends: reported, not judged.
     fn ufcs(&mut self, call: &ExprCall) {
         let Expr::Path(func) = &*call.func else {
             return;
@@ -1408,7 +1409,7 @@ impl<'w, 'i, 'a, 'f> Walker<'w, 'i, 'a, 'f> {
         );
     }
 
-    /// Macro arguments are opaque to the AST visitor (§4.4): find
+    /// Macro arguments are opaque to the AST visitor: find
     /// `.method(` sequences in the tokens, including nested groups, and
     /// report them with their location.
     fn macro_candidates(&mut self, mac: &Macro) {
@@ -1495,7 +1496,8 @@ fn boxed_dyn(name: &str, args: &[Ty]) -> Ty {
     }
 }
 
-/// The built-in return type table (§4.4.1).
+/// The built-in return type table for rsactor, Option/Result, std
+/// collections and iterators.
 fn method_return(receiver: &Ty, method: &str) -> Option<Ty> {
     match method {
         "clone" | "clone_boxed" | "to_owned" => return Some(receiver.clone()),
@@ -1606,7 +1608,7 @@ fn strip(expr: &Expr) -> &Expr {
 }
 
 impl<'ast> Visit<'ast> for Walker<'_, '_, '_, '_> {
-    /// A block-level `use` is visible in the whole block (G1).
+    /// A block-level `use` is visible in the whole block.
     fn visit_block(&mut self, block: &'ast syn::Block) {
         let imports: Vec<Import> = block
             .stmts
@@ -1744,7 +1746,7 @@ impl<'ast> Visit<'ast> for Walker<'_, '_, '_, '_> {
         }
     }
 
-    /// Expression macros are re-parsed and walked as code (G6); any other
+    /// Expression macros are re-parsed and walked as code; any other
     /// macro, or one whose tokens do not parse, gets the token scan.
     fn visit_macro(&mut self, mac: &'ast Macro) {
         let name = macro_name(mac);

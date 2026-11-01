@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Resolved type representation and the message key rules (§4.2).
+//! Resolved type representation and the message key rules.
 
 use quote::ToTokens;
 use syn::{GenericArgument, Item, PathArguments, Type, TypeParamBound};
@@ -38,8 +38,7 @@ pub enum Ty {
     Dyn(Vec<Ty>),
     ImplTrait(Vec<Ty>),
     /// An iterator yielding the inner type. Never written in source; the
-    /// type environment produces it for `iter()`, `values()` and friends
-    /// (§4.4.1).
+    /// type environment produces it for `iter()`, `values()` and friends.
     Iter(Box<Ty>),
     /// Could not be resolved; holds the type as written (compacted).
     Unknown(String),
@@ -192,7 +191,7 @@ fn unknown(ty: &Type) -> Ty {
 }
 
 impl Ty {
-    /// Comparison key (§4.2): a declared type is its full path with generic
+    /// Comparison key: a declared type is its full path with generic
     /// arguments dropped; anything else is the whole type with every inner
     /// path normalised, so `Box<dyn Calculator>` and `Box<dyn FnOnce()>` stay
     /// apart while `Box<dyn crate::calc::Calculator>` matches the first.
@@ -209,7 +208,7 @@ impl Ty {
     }
 
     /// Strips references and the smart pointers method calls see through
-    /// (auto-deref, §4.4): `&T`, `Box<T>`, `Arc<T>`, `Rc<T>`.
+    /// (auto-deref): `&T`, `Box<T>`, `Arc<T>`, `Rc<T>`.
     pub fn auto_deref(&self) -> &Ty {
         match self {
             Ty::Ref(inner) => inner.auto_deref(),

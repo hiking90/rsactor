@@ -1,8 +1,9 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Graph assembly: actors and handled messages (§4.1, §4.2), holds edges and
-//! type-erased handler nodes (§4.3). Call sites are scanned by [`crate::calls`].
+//! Graph assembly: actors and handled messages, holds edges, type-erased
+//! handler nodes and declared signatures. Call sites are scanned by
+//! [`crate::calls`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -67,7 +68,7 @@ struct EdgeKey {
 }
 
 /// A function or method declared in the declaration scope. Its signature
-/// states the return type, which needs no inference to read (G4).
+/// states the return type, which needs no inference to read.
 pub struct FnDecl<'a> {
     pub krate: usize,
     pub module: ModId,
@@ -85,7 +86,7 @@ pub struct Builder<'i, 'a> {
     pub report: &'i mut Report,
     pub actors: BTreeMap<DeclId, ActorInfo>,
     /// Types with an `impl Deref`/`DerefMut`: a method call on them may reach
-    /// an `ActorRef` inside, so a send on them is never dropped (§4.4).
+    /// an `ActorRef` inside, so a send on them is never dropped.
     pub deref_impls: HashSet<DeclId>,
     /// Methods and associated functions by (type, name). Several entries
     /// mean several impls (inherent and trait) declare the name.
@@ -499,7 +500,7 @@ pub fn impl_role(index: &Index, krate: usize, module: ModId, imp: &ItemImpl) -> 
     }
 }
 
-/// Holds edges from actor fields and `type Args` (§4.3).
+/// Holds edges from actor fields and `type Args`.
 fn holds_edges(b: &mut Builder) {
     let index = b.index;
     let ids: Vec<DeclId> = b.actors.keys().copied().collect();
@@ -717,7 +718,7 @@ fn handled(
 }
 
 /// The message type is the impl's own type parameter, so the handled set has
-/// no bound (§4.2 `open`).
+/// no bound: the actor is marked `open`.
 fn is_impl_generic(ty: &Ty, impl_generics: &[String]) -> bool {
     matches!(ty, Ty::Generic(name) if impl_generics.contains(name))
 }

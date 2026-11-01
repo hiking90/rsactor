@@ -1,5 +1,5 @@
 // Fixture: an actor outside the workspace makes handler candidates
-// incomplete (§4.3). Not compiled.
+// incomplete. Not compiled.
 use rsactor::{message_handlers, Actor, ActorRef, TellHandler};
 
 pub struct Ping;

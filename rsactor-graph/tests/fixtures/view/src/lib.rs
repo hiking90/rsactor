@@ -1,4 +1,4 @@
-// Fixture: DOT readability options and `--focus` (plan §8, stage 6).
+// Fixture: DOT readability options and `--focus`.
 // Not compiled.
 use rsactor::{message_handlers, Actor, ActorRef};
 

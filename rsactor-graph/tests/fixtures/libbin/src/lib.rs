@@ -1,4 +1,5 @@
-// Fixture: a lib and a bin with the same crate name (§6.1 node key).
+// Fixture: a lib and a bin with the same crate name (node keys include the
+// target).
 // Not compiled.
 use rsactor::Actor;
 

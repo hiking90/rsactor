@@ -1,4 +1,4 @@
-// Fixture: handler recognition, `open` actors and message keys (§4.2).
+// Fixture: handler recognition, `open` actors and message keys.
 // Not compiled.
 use rsactor::{message_handlers, Actor, ActorRef, Message};
 use std::marker::PhantomData;

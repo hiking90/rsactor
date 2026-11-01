@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Rule tests over the source trees in `tests/fixtures/` (plan §7.2). The
+//! Rule tests over the source trees in `tests/fixtures/`. The
 //! fixtures are scanner input only; they are not compiled.
 
 use std::collections::BTreeSet;
@@ -504,7 +504,7 @@ fn messages_follow_m1_and_m2() {
         None,
         Some("sends::Made"),
     );
-    // `Made::new` is declared `-> Self` in scope: exact, not assumed (G4).
+    // `Made::new` is declared `-> Self` in scope: exact, not assumed.
     assert_eq!(made.message_resolution, Resolution::Exact);
     let built = find_edge(
         &output,
@@ -607,7 +607,7 @@ fn candidates_that_cannot_be_drawn_are_reported() {
 
     assert_eq!(reports(&output, Category::Ufcs).len(), 1);
 
-    // `println!` is re-parsed and its `ask` becomes an edge (G6); `select!`
+    // `println!` is re-parsed and its `ask` becomes an edge; `select!`
     // has its own syntax and stays a token-scan candidate.
     let in_macros = reports(&output, Category::MacroCandidate);
     assert_eq!(in_macros.len(), 1, "{in_macros:#?}");
@@ -760,7 +760,7 @@ fn expression_macros_are_walked() {
 #[test]
 fn measured_fixture_reports_only_the_undecidable() {
     let output = scan_lib("measured");
-    // `Writer::spawn` / `Self::spawn` are not rsactor spawns (G7).
+    // `Writer::spawn` / `Self::spawn` are not rsactor spawns.
     assert!(reports(&output, Category::UnresolvedSpawn).is_empty());
     // Only the blocked glob and the disagreeing `if` remain.
     assert_eq!(

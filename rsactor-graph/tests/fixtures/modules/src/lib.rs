@@ -1,4 +1,4 @@
-// Fixture: module tree and name resolution (§4.5). Not compiled.
+// Fixture: module tree and name resolution. Not compiled.
 use rsactor::{message_handlers, Actor, ActorRef};
 
 mod actors;

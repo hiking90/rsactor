@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Name resolution in the type namespace (§4.5).
+//! Name resolution in the type namespace.
 //!
 //! Resolution follows `use` declarations (renames, groups, globs, re-exports),
 //! child modules and local items across every crate in the declaration scope.
@@ -53,7 +53,7 @@ pub enum Res {
     Decl(DeclId),
     /// `Enum::Variant`.
     Variant(DeclId, String),
-    /// An item of the rsactor crate, by name. rsactor is never parsed (§3);
+    /// An item of the rsactor crate, by name. rsactor is never parsed;
     /// its public names are listed in [`RSACTOR_NAMES`].
     Rsactor(String),
     /// A `std`/`core`/`alloc` path (or a primitive), normalised to `std::`.
@@ -557,7 +557,7 @@ impl<'a> Index<'a> {
 
     /// Whether any glob reachable from this module's scope (directly or
     /// through globs of other in-scope modules) leads outside the declaration
-    /// scope (§4.5). An unresolvable glob target counts as outside.
+    /// scope. An unresolvable glob target counts as outside.
     fn glob_reaches_outside(
         &self,
         krate: usize,
@@ -621,7 +621,7 @@ pub fn type_params(generics: &syn::Generics) -> Vec<String> {
         .collect()
 }
 
-/// The imports of one `use` item, for block-level `use` (§4.5).
+/// The imports of one `use` item, for block-level `use`.
 pub fn imports_of(item_use: &syn::ItemUse) -> Vec<Import> {
     let mut out = Vec::new();
     flatten_use(

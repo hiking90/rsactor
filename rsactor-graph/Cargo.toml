@@ -8,8 +8,9 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 license.workspace = true
+readme = "README.md"
 keywords = ["actor", "rsactor", "graph", "graphviz"]
-# Distribution on crates.io is still undecided (plan/02-topology-graph.md §12).
+# Distribution on crates.io is still undecided.
 publish = false
 
 [[bin]]

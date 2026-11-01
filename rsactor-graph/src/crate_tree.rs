@@ -1,11 +1,12 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Loads a crate's module tree from its root file (§4.5).
+//! Loads a crate's module tree from its root file.
 //!
 //! Inline `mod x { .. }` bodies are moved into their own [`Module`], so every
 //! module owns exactly the items written directly inside it. `#[cfg(test)]`
-//! modules and items are dropped here (§3), before anything else sees them.
+//! modules and items are dropped here, before anything else sees them:
+//! test-only code is not part of the application's topology.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,7 +32,7 @@ pub struct Module {
 pub struct Crate {
     pub spec: CrateSpec,
     /// Call sites in a target crate produce edges; other crates only supply
-    /// declarations (§3).
+    /// declarations.
     pub is_target: bool,
     /// `modules[0]` is the crate root.
     pub modules: Vec<Module>,
@@ -242,7 +243,8 @@ fn path_attr(attrs: &[Attribute]) -> Option<String> {
 }
 
 /// `#[cfg(test)]` and `#[cfg(all(test, ..))]`. Predicates are not evaluated
-/// in general (§9.2); only test-only code is recognised, because §3 excludes it.
+/// in general; only test-only code is recognised, because it is excluded
+/// from the scan.
 pub fn is_cfg_test(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
         if !attr.path().is_ident("cfg") {

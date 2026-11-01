@@ -4,14 +4,16 @@
 //! Static analysis of the actor topology of an rsactor application.
 //!
 //! The tool parses source files with `syn` (no type inference) and builds a
-//! type-level graph: actor types, the messages each one handles, and — in
-//! later stages — references, spawns and sends between them. The design and
-//! its rules live in `plan/02-topology-graph.md`; section numbers in comments
-//! (`§4.5`) refer to that document.
+//! type-level graph: actor types, the messages each one handles, and the
+//! references, spawns and sends between them. A call it cannot judge goes to
+//! the report instead of becoming a guessed edge. Usage and the meaning of
+//! the output are described in the crate's README.
 //!
 //! Pipeline: [`crate_tree`] loads module trees, [`resolve`] builds the name
-//! index, [`types`] turns `syn::Type` into [`types::Ty`], [`discover`] extracts
-//! the graph, and [`render`] writes JSON, DOT or SVG.
+//! index, [`types`] turns `syn::Type` into [`types::Ty`], [`discover`]
+//! collects actors, holds edges and signatures, [`calls`] walks function
+//! bodies for spawns and sends, [`view`] narrows the result for `--focus`,
+//! and [`render`] writes JSON, DOT or SVG.
 
 pub mod calls;
 pub mod crate_tree;
@@ -34,14 +36,15 @@ pub struct CrateSpec {
     /// Crate name as written in paths (`-` already replaced by `_`).
     pub name: String,
     /// Target id, unique within one scan, e.g. `lib:app`, `bin:app`,
-    /// `example:basic`. Part of every node key (§6.1), because a lib and a bin
+    /// `example:basic`. Part of every node key, because a lib and a bin
     /// of the same package share the crate name.
     pub target: String,
     /// Crate root source file.
     pub root: PathBuf,
 }
 
-/// Everything one scan needs (§3).
+/// Everything one scan needs: the crates whose call sites produce edges and
+/// the crates read only for declarations.
 #[derive(Debug, Clone)]
 pub struct ScanInput {
     /// Graph name shown in the output.

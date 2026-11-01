@@ -1,4 +1,4 @@
-// Fixture: holds edges and type-erased handler nodes (§4.3). Not compiled.
+// Fixture: holds edges and type-erased handler nodes. Not compiled.
 use rsactor::{
     message_handlers, Actor, ActorControl, ActorRef, ActorWeak, AskHandler, TellHandler,
 };

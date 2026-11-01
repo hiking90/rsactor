@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! The graph model shared by every output format (§6.1).
+//! The graph model shared by every output format.
 //!
 //! Every collection is sorted in [`Output::new`]: golden snapshots compare
 //! bytes, so nothing may depend on `HashMap` iteration order.
@@ -60,19 +60,19 @@ pub struct Graph {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Node {
     Actor(ActorNode),
-    /// An actor declared in a crate outside the declaration scope (§3). Only
+    /// An actor declared in a crate outside the declaration scope. Only
     /// its path is known.
     ExternalActor(ExternalActorNode),
     /// A sender that is not an actor: free function, associated function
     /// without `self`, method of a non-actor type, trait default method,
-    /// nested `fn` (§4.4).
+    /// nested `fn`.
     Fn(FnNode),
     /// `main`.
     External(ExternalNode),
-    /// "Every actor that handles M" for a type-erased handler (§4.3).
+    /// "Every actor that handles M" for a type-erased handler.
     Handlers(HandlersNode),
     /// Receiver that could not be determined. One per sender, so unresolved
-    /// sends do not pile onto a single hub node (§6.1).
+    /// sends do not pile onto a single hub node.
     Unknown(UnknownNode),
 }
 
@@ -142,13 +142,13 @@ pub struct HandlersNode {
 pub struct ActorNode {
     /// Node id, `actor:<target>:<path>`.
     pub id: String,
-    /// Target id of the crate that declares the actor (§6.1 node key).
+    /// Target id of the crate that declares the actor; part of the node key.
     pub target: String,
     /// Full path without generic arguments, e.g. `app::router::Router`.
     pub path: String,
     /// Full path with the declared generic parameters, e.g. `app::Worker<T>`.
     pub display: String,
-    /// The handled-message set cannot be enumerated (§4.2).
+    /// The handled-message set cannot be enumerated.
     pub open: bool,
     pub messages: Vec<HandledMessage>,
     pub location: Location,
@@ -156,13 +156,14 @@ pub struct ActorNode {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct HandledMessage {
-    /// Comparison key (§4.2 "메시지 key").
+    /// Comparison key: the full path for a type declared in the scanned
+    /// crates, the whole normalised type otherwise (see [`crate::types::Ty::key`]).
     pub key: String,
     /// Short form for display.
     pub label: String,
     /// Reply type label; `None` for `()`.
     pub reply: Option<String>,
-    /// Reply type key, compared against `AskHandler<M, R>` (§4.3).
+    /// Reply type key, compared against `AskHandler<M, R>`.
     pub reply_key: Option<String>,
     pub resolution: Resolution,
     /// `cfg` predicates copied from the handler, not evaluated.
@@ -171,7 +172,7 @@ pub struct HandledMessage {
 }
 
 /// One edge. `from`/`to` are node ids. Edges that differ only in location
-/// are merged, with every location kept (§6.1).
+/// are merged, with every location kept.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Edge {
     pub kind: EdgeKind,
@@ -180,7 +181,7 @@ pub struct Edge {
     pub variant: Option<String>,
     pub from: String,
     pub to: String,
-    /// Message key (§4.2); `None` for holds and spawn edges and for a
+    /// Message key; `None` for holds and spawn edges and for a
     /// message that could not be determined.
     pub message: Option<String>,
     /// Short form of the message for display.
@@ -201,14 +202,15 @@ pub enum EdgeKind {
     Ask,
 }
 
-/// How much guessing went into a judgement, strongest first (§6.1).
+/// How much guessing went into a judgement, strongest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Resolution {
     Exact,
-    /// M1 assumed that an associated function returns `Self`.
+    /// A message `T::f(..)` with no visible signature was assumed to be `T`.
     Assumed,
-    /// §4.5 picked the only declared type with a matching last segment.
+    /// Name resolution fell back to the only declared type with a matching
+    /// last segment.
     Inferred,
     Unresolved,
 }
@@ -266,7 +268,7 @@ pub struct ReportEntry {
     pub detail: String,
 }
 
-/// Report categories (§6.4).
+/// Report categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {

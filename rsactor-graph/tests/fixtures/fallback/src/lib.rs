@@ -1,4 +1,4 @@
-// Fixture: the last-segment fallback of §4.5. Not compiled.
+// Fixture: the last-segment fallback of name resolution. Not compiled.
 mod msgs {
     pub struct Shutdown;
     pub struct Lonely;

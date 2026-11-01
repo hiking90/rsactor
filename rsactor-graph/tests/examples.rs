@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Golden snapshots of every rsactor example (plan §7.1), and the CLI guidance
+//! Golden snapshots of every rsactor example, and the CLI guidance
 //! for the repository itself.
 //!
 //! Regenerate after an intended change with

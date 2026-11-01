@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! `rsactor-graph` command line (§5).
+//! `rsactor-graph` command line.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -29,7 +29,7 @@ DOT/SVG only (JSON always carries the full model):
                           uncovered: hide a holds edge where a send or spawn
                           arrow already joins the same two nodes
   --no-group-fns          Draw every function sender separately instead of
-                          one node per owning type or trait
+                          one node per owning type, trait or module
   -h, --help              Print this help
 ";
 
@@ -148,7 +148,7 @@ fn run(args: &Args) -> Result<(), String> {
             match render::dot_to_svg(&dot) {
                 Ok(svg) => svg,
                 Err(SvgError::DotNotFound) => {
-                    // Keep the DOT so the work is not lost (§6.3).
+                    // Keep the DOT so the work is not lost.
                     let kept = match &args.output {
                         Some(path) => {
                             let dot_path = path.with_extension("dot");
@@ -181,7 +181,7 @@ fn write(path: &Option<PathBuf>, text: &str) -> Result<(), String> {
 }
 
 /// No actor in the lib and bins (always the case for the rsactor repo itself,
-/// §3): list the examples that do contain actors.
+/// whose lib is never scanned): list the examples that do contain actors.
 fn no_actors_guidance(workspace: &Workspace, selection: &Selection, name: &str) -> String {
     let mut with_actors = Vec::new();
     if let Ok(examples) = workspace.examples(selection) {

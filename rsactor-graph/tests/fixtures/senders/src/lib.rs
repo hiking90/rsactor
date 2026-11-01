@@ -1,4 +1,4 @@
-// Fixture: sender determination and spawn forms (§4.4). Not compiled.
+// Fixture: sender determination and spawn forms. Not compiled.
 use rsactor::{spawn, spawn_with_options, Actor, ActorRef, SpawnOptions};
 
 #[derive(Actor)]

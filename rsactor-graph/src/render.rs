@@ -1,7 +1,7 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! JSON, DOT and SVG output (§6).
+//! JSON, DOT and SVG output.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -196,7 +196,7 @@ fn guess_marker(resolution: Resolution) -> Option<&'static str> {
     }
 }
 
-/// One arrow for every edge of a class between two nodes (§6.2): a line
+/// One arrow for every edge of a class between two nodes: a line
 /// per distinct message, each marked when its judgement was guessed. The
 /// arrow is dashed only when every line was guessed.
 fn arrow_attrs(class: ArrowClass, edges: &[&Edge]) -> String {
@@ -329,7 +329,7 @@ fn actor_label(actor: &ActorNode) -> String {
     format!("{{{title}|{lines}}}")
 }
 
-/// Escapes the characters that carry structure inside a record label (§6.2).
+/// Escapes the characters that carry structure inside a record label.
 /// `JoinHandle<String>` or `Box<dyn Calculator>` would otherwise be read as
 /// port or field syntax.
 pub fn escape_record(text: &str) -> String {
@@ -374,7 +374,8 @@ impl std::fmt::Display for SvgError {
     }
 }
 
-/// Runs the external Graphviz `dot` (§6.3). Graphviz is never bundled.
+/// Runs the external Graphviz `dot`. Graphviz is never bundled: distributing
+/// it would carry its EPL-2.0 obligations into this tool's artifacts.
 pub fn dot_to_svg(dot: &str) -> Result<String, SvgError> {
     let mut child = Command::new("dot")
         .arg("-Tsvg")

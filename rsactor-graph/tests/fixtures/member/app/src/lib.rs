@@ -1,4 +1,4 @@
-// Fixture: a target crate that uses an actor from a workspace member (§3).
+// Fixture: a target crate that uses an actor from a workspace member.
 // Not compiled.
 use core_actors::Start;
 use rsactor::{message_handlers, Actor, ActorRef};
