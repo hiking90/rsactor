@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use rsactor_graph::model::{ActorNode, Category, Output, Resolution};
+use rsactor_graph::model::{ActorNode, Category, EdgeKind, Node, Output, Resolution};
 use rsactor_graph::render::{escape_record, to_dot};
 use rsactor_graph::{scan, CrateSpec, ScanInput};
 
@@ -263,4 +263,157 @@ fn dot_escapes_record_syntax() {
 fn escape_record_covers_every_structural_character() {
     assert_eq!(escape_record("a{b}|<c>\"\\"), "a\\{b\\}\\|\\<c\\>\\\"\\\\");
     assert_eq!(escape_record("x\ny"), "x\\ny");
+}
+
+/// `(from, to, variant)` of every edge of one kind.
+fn edges(output: &Output, kind: EdgeKind) -> BTreeSet<(String, String, Option<String>)> {
+    output
+        .graph
+        .edges
+        .iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| (e.from.clone(), e.to.clone(), e.variant.clone()))
+        .collect()
+}
+
+fn edge(from: &str, to: &str, variant: Option<&str>) -> (String, String, Option<String>) {
+    (
+        from.to_string(),
+        to.to_string(),
+        variant.map(str::to_string),
+    )
+}
+
+#[test]
+fn senders_follow_the_method_rules() {
+    let dir = fixture_dir("senders");
+    let output = scan(&ScanInput {
+        name: "senders".to_string(),
+        targets: vec![
+            spec("lib", "senders", dir.join("src/lib.rs")),
+            spec("bin", "senders", dir.join("src/main.rs")),
+        ],
+        declarations: Vec::new(),
+        base_dir: dir,
+    });
+
+    let parent = "actor:lib:senders:senders::Parent";
+    let child = "actor:lib:senders:senders::Child";
+    let derived = "actor:lib:senders:senders::Derived";
+    assert_eq!(
+        edges(&output, EdgeKind::Spawn),
+        [
+            // `on_start` (trait method without `self`) and a `self` method.
+            edge(parent, child, None),
+            edge(parent, child, Some("spawn_with_options")),
+            // Closure/async block inside a `self` method; unit-struct literal
+            // of a `#[derive(Actor)]` type without a turbofish.
+            edge(parent, derived, None),
+            // `self`-less associated function: not Parent.
+            edge("fn:lib:senders:senders::Parent::assoc", child, None),
+            edge("fn:lib:senders:senders::Parent::outer::inner", child, None),
+            edge("fn:lib:senders:senders::Boot::boot", child, None),
+            edge("fn:lib:senders:senders::Helper::go", child, None),
+            // Binding annotation `(ActorRef<Child>, _)`.
+            edge("fn:lib:senders:senders::free", child, None),
+            // `main` of the bin.
+            edge("external", child, None),
+        ]
+        .into_iter()
+        .collect()
+    );
+
+    let unresolved: Vec<_> = output
+        .report
+        .entries
+        .iter()
+        .filter(|e| e.category == Category::UnresolvedSpawn)
+        .map(|e| (e.sender.clone().unwrap_or_default(), e.detail.clone()))
+        .collect();
+    assert_eq!(unresolved.len(), 3, "{unresolved:#?}");
+    assert!(unresolved
+        .iter()
+        .any(|(s, d)| s == "fn senders::free" && d.contains("without a type argument")));
+    assert!(unresolved
+        .iter()
+        .any(|(s, d)| s == "fn senders::ambiguous" && d.contains("senders::Wrapper")));
+    assert!(unresolved
+        .iter()
+        .any(|(s, d)| s == "fn senders::generic" && d.contains("not a concrete actor")));
+    // `tokio::spawn` and the local `fn spawn` produce nothing.
+    assert_eq!(
+        output.report.entries.len(),
+        3,
+        "{:#?}",
+        output.report.entries
+    );
+}
+
+#[test]
+fn holds_edges_and_handler_candidates() {
+    let output = scan_lib("holds");
+    let a = "actor:lib:holds:holds::A";
+    let b = "actor:lib:holds:holds::B";
+    let c = "actor:lib:holds:holds::C";
+    let tell_ping = "handlers:TellHandler:holds::Ping";
+    let ask_query = "handlers:AskHandler:holds::Query:u32";
+    assert_eq!(
+        edges(&output, EdgeKind::Holds),
+        [
+            edge(a, b, None),
+            edge(a, c, None),
+            edge(a, tell_ping, None),
+            edge(a, ask_query, None),
+            edge("actor:lib:holds:holds::E", b, None),
+        ]
+        .into_iter()
+        .collect()
+    );
+
+    // `b` and `weak_b` merge into one edge with both locations.
+    let a_to_b = output
+        .graph
+        .edges
+        .iter()
+        .find(|e| e.from == a && e.to == b)
+        .unwrap();
+    assert_eq!(a_to_b.locations.len(), 2, "{a_to_b:?}");
+
+    let Some(Node::Handlers(tell)) = output.node(tell_ping) else {
+        panic!("no {tell_ping}");
+    };
+    assert_eq!(tell.candidates, vec![b.to_string(), c.to_string()]);
+    assert!(!tell.may_be_outside);
+
+    // `D` handles `Query` but replies `String`.
+    let Some(Node::Handlers(ask)) = output.node(ask_query) else {
+        panic!("no {ask_query}");
+    };
+    assert_eq!(ask.candidates, vec![c.to_string()]);
+
+    // `ActorRef<T>` in the generic actor: field and `type Args`.
+    let generic: Vec<_> = output
+        .report
+        .entries
+        .iter()
+        .filter(|e| e.category == Category::Declaration)
+        .collect();
+    assert_eq!(generic.len(), 2, "{generic:#?}");
+    assert!(generic.iter().all(|e| e.detail.contains("ActorRef<T>")));
+}
+
+#[test]
+fn an_actor_outside_the_workspace_widens_handler_candidates() {
+    let output = scan_lib("holds_outside");
+    let local = "actor:lib:holds_outside:holds_outside::Local";
+    assert!(edges(&output, EdgeKind::Holds).contains(&edge(
+        local,
+        "external_actor:remote_crate::Remote",
+        None
+    )));
+    let Some(Node::Handlers(tell)) = output.node("handlers:TellHandler:holds_outside::Ping") else {
+        panic!("no handler node");
+    };
+    assert_eq!(tell.candidates, vec![local.to_string()]);
+    assert!(tell.may_be_outside);
 }

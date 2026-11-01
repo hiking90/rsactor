@@ -60,6 +60,9 @@ pub enum Res {
     Std(String),
     /// A path into a crate outside the declaration scope.
     External(String),
+    /// A local `fn`, `const` or `static`, by full path. Tracked so that a
+    /// local `fn spawn()` is not mistaken for `rsactor::spawn`.
+    Value(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +165,7 @@ enum Import {
 #[derive(Debug, Default)]
 struct Scope {
     types: HashMap<String, DeclId>,
+    values: HashSet<String>,
     imports: Vec<Import>,
 }
 
@@ -210,6 +214,18 @@ impl<'a> Index<'a> {
                         });
                         by_last_segment.entry(name.clone()).or_default().push(id);
                         scope.types.insert(name, id);
+                    }
+                    match item {
+                        Item::Fn(i) => {
+                            scope.values.insert(i.sig.ident.to_string());
+                        }
+                        Item::Const(i) => {
+                            scope.values.insert(i.ident.to_string());
+                        }
+                        Item::Static(i) => {
+                            scope.values.insert(i.ident.to_string());
+                        }
+                        _ => {}
                     }
                     if let Item::Use(item_use) = item {
                         flatten_use(
@@ -373,6 +389,11 @@ impl<'a> Index<'a> {
         let scope = &self.scopes[krate][module];
         if let Some(&id) = scope.types.get(name) {
             return Some(Res::Decl(id));
+        }
+        if scope.values.contains(name) {
+            let mut path = self.crates[krate].module_path(module);
+            path.push(name.to_string());
+            return Some(Res::Value(path.join("::")));
         }
         for import in &scope.imports {
             if let Import::Named {

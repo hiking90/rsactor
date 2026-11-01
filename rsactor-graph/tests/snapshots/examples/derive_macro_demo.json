@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:derive_macro_demo:derive_macro_demo::MyActor",
         "target": "example:derive_macro_demo",
         "path": "derive_macro_demo::MyActor",
         "display": "derive_macro_demo::MyActor",
@@ -14,6 +15,7 @@
             "key": "derive_macro_demo::GetCount",
             "label": "GetCount",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "derive_macro_demo::GetName",
             "label": "GetName",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "derive_macro_demo::Increment",
             "label": "Increment",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -48,9 +52,30 @@
           "file": "examples/derive_macro_demo.rs",
           "line": 6
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:derive_macro_demo:derive_macro_demo::MyActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/derive_macro_demo.rs",
+            "line": 49
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

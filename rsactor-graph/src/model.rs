@@ -39,9 +39,14 @@ impl Output {
 
     /// Actor nodes, in output order.
     pub fn actors(&self) -> impl Iterator<Item = &ActorNode> {
-        self.graph.nodes.iter().map(|node| match node {
-            Node::Actor(actor) => actor,
+        self.graph.nodes.iter().filter_map(|node| match node {
+            Node::Actor(actor) => Some(actor),
+            _ => None,
         })
+    }
+
+    pub fn node(&self, id: &str) -> Option<&Node> {
+        self.graph.nodes.iter().find(|n| n.id() == id)
     }
 }
 
@@ -55,10 +60,72 @@ pub struct Graph {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Node {
     Actor(ActorNode),
+    /// An actor declared in a crate outside the declaration scope (§3). Only
+    /// its path is known.
+    ExternalActor(ExternalActorNode),
+    /// A sender that is not an actor: free function, associated function
+    /// without `self`, method of a non-actor type, trait default method,
+    /// nested `fn` (§4.4).
+    Fn(FnNode),
+    /// `main`.
+    External(ExternalNode),
+    /// "Every actor that handles M" for a type-erased handler (§4.3).
+    Handlers(HandlersNode),
+}
+
+impl Node {
+    pub fn id(&self) -> &str {
+        match self {
+            Node::Actor(n) => &n.id,
+            Node::ExternalActor(n) => &n.id,
+            Node::Fn(n) => &n.id,
+            Node::External(n) => &n.id,
+            Node::Handlers(n) => &n.id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct ExternalActorNode {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct FnNode {
+    pub id: String,
+    pub target: String,
+    /// e.g. `app::util::broadcast`, `app::Router::connect`.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct ExternalNode {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct HandlersNode {
+    pub id: String,
+    /// `TellHandler` or `AskHandler` (weak variants map to these).
+    pub handler: String,
+    /// Message key and label.
+    pub message: String,
+    pub message_label: String,
+    /// Reply key and label, for `AskHandler<M, R>`.
+    pub reply: Option<String>,
+    pub reply_label: Option<String>,
+    /// Ids of the actors in the declaration scope that qualify.
+    pub candidates: Vec<String>,
+    /// An `open` or external actor exists, so the real receiver may be
+    /// outside `candidates`.
+    pub may_be_outside: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ActorNode {
+    /// Node id, `actor:<target>:<path>`.
+    pub id: String,
     /// Target id of the crate that declares the actor (§6.1 node key).
     pub target: String,
     /// Full path without generic arguments, e.g. `app::router::Router`.
@@ -79,17 +146,21 @@ pub struct HandledMessage {
     pub label: String,
     /// Reply type label; `None` for `()`.
     pub reply: Option<String>,
+    /// Reply type key, compared against `AskHandler<M, R>` (§4.3).
+    pub reply_key: Option<String>,
     pub resolution: Resolution,
     /// `cfg` predicates copied from the handler, not evaluated.
     pub cfg: Vec<String>,
     pub location: Location,
 }
 
-/// Edges arrive in stage 2; the shape is fixed now so the schema does not
-/// move under the snapshots later.
+/// One edge. `from`/`to` are node ids. Edges that differ only in location
+/// are merged, with every location kept (§6.1).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Edge {
     pub kind: EdgeKind,
+    /// The rsactor function or method when it is not the plain one, e.g.
+    /// `spawn_with_options`, `tell_priority`.
     pub variant: Option<String>,
     pub from: String,
     pub to: String,
@@ -146,6 +217,21 @@ impl Report {
             category,
             location,
             sender: None,
+            detail,
+        });
+    }
+
+    pub fn push_from(
+        &mut self,
+        category: Category,
+        location: Location,
+        sender: &str,
+        detail: String,
+    ) {
+        self.entries.push(ReportEntry {
+            category,
+            location: Some(location),
+            sender: Some(sender.to_string()),
             detail,
         });
     }

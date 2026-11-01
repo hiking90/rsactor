@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
-use crate::model::{ActorNode, Output, Resolution};
+use crate::model::{ActorNode, Edge, EdgeKind, HandlersNode, Node, Output, Resolution};
 
 pub fn to_json(output: &Output) -> String {
     let mut text = serde_json::to_string_pretty(output).expect("model serialises");
@@ -21,20 +21,154 @@ pub fn to_dot(output: &Output) -> String {
     dot.push_str("  rankdir=LR;\n");
     dot.push_str("  node [shape=record, fontname=\"Helvetica\", fontsize=10];\n");
     dot.push_str("  edge [fontname=\"Helvetica\", fontsize=9];\n");
-    for actor in output.actors() {
+    for node in &output.graph.nodes {
+        let id = quote_id(node.id());
+        let attrs = match node {
+            Node::Actor(actor) => format!("label=\"{}\"", actor_label(actor)),
+            Node::ExternalActor(n) => format!(
+                "shape=box, style=dashed, label=\"{}\\n(outside the workspace)\"",
+                escape_text(&n.path)
+            ),
+            Node::Fn(n) => format!(
+                "shape=box, style=rounded, label=\"fn {}\"",
+                escape_text(&n.path)
+            ),
+            Node::External(_) => "shape=ellipse, style=dashed, label=\"external (main)\"".into(),
+            Node::Handlers(h) => format!(
+                "shape=box, style=\"rounded,dashed\", label=\"{}\"",
+                handlers_label(output, h)
+            ),
+        };
+        let _ = writeln!(dot, "  {id} [{attrs}];");
+    }
+    for group in edge_groups(&output.graph.edges) {
+        let first = group[0];
         let _ = writeln!(
             dot,
-            "  {} [label=\"{}\"];",
-            quote_id(&node_id(actor)),
-            actor_label(actor)
+            "  {} -> {} [{}];",
+            quote_id(&first.from),
+            quote_id(&first.to),
+            edge_attrs(&group)
         );
     }
     dot.push_str("}\n");
     dot
 }
 
-fn node_id(actor: &ActorNode) -> String {
-    format!("{}:{}", actor.target, actor.path)
+/// Edges sharing (from, to, kind, receiver resolution, message resolution)
+/// are drawn as one arrow listing every message (§6.2). `edges` is sorted,
+/// so members of a group are adjacent.
+fn edge_groups(edges: &[Edge]) -> Vec<Vec<&Edge>> {
+    let key = |e: &Edge| {
+        (
+            e.from.clone(),
+            e.to.clone(),
+            e.kind,
+            e.receiver_resolution,
+            e.message_resolution,
+        )
+    };
+    let mut groups: Vec<Vec<&Edge>> = Vec::new();
+    for edge in edges {
+        match groups.last_mut() {
+            Some(group) if key(group[0]) == key(edge) => group.push(edge),
+            _ => groups.push(vec![edge]),
+        }
+    }
+    groups
+}
+
+fn edge_attrs(group: &[&Edge]) -> String {
+    let first = group[0];
+    let weakest = first.receiver_resolution.weakest(first.message_resolution);
+    let guessed = matches!(weakest, Resolution::Assumed | Resolution::Inferred);
+    let mut lines: Vec<String> = Vec::new();
+    for edge in group {
+        let line = match edge.kind {
+            EdgeKind::Holds => String::new(),
+            EdgeKind::Spawn => match &edge.variant {
+                Some(variant) => format!("spawn ({variant})"),
+                None => "spawn".to_string(),
+            },
+            EdgeKind::Tell | EdgeKind::Ask => {
+                let verb = edge.variant.as_deref().unwrap_or(match edge.kind {
+                    EdgeKind::Ask => "ask",
+                    _ => "tell",
+                });
+                let message = edge.message.as_deref().unwrap_or("?");
+                match &edge.reply {
+                    Some(reply) => format!("{verb} {message} -> {reply}"),
+                    None => format!("{verb} {message}"),
+                }
+            }
+        };
+        if !line.is_empty() && !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    if guessed {
+        lines.push(format!("({weakest:?})").to_lowercase());
+    }
+    let mut style = match first.kind {
+        EdgeKind::Holds => vec!["dotted"],
+        EdgeKind::Spawn => vec!["bold"],
+        EdgeKind::Tell | EdgeKind::Ask => vec![],
+    };
+    if guessed && first.kind != EdgeKind::Holds {
+        style.push("dashed");
+    }
+    let mut attrs = Vec::new();
+    if !style.is_empty() {
+        attrs.push(format!("style=\"{}\"", style.join(",")));
+    }
+    if first.kind == EdgeKind::Holds {
+        attrs.push("color=gray50".to_string());
+    }
+    if !lines.is_empty() {
+        attrs.push(format!("label=\"{}\"", escape_text(&lines.join("\n"))));
+    }
+    attrs.join(", ")
+}
+
+fn handlers_label(output: &Output, h: &HandlersNode) -> String {
+    let signature = match &h.reply_label {
+        Some(reply) => format!("{}<{}, {reply}>", h.handler, h.message_label),
+        None => format!("{}<{}>", h.handler, h.message_label),
+    };
+    let candidates: Vec<&str> = h
+        .candidates
+        .iter()
+        .map(|id| match output.node(id) {
+            Some(Node::Actor(a)) => a.path.as_str(),
+            _ => id.as_str(),
+        })
+        .collect();
+    let mut text = format!("{signature}\ncandidates: ");
+    if candidates.is_empty() {
+        text.push_str("none in scope");
+    } else {
+        text.push_str(&candidates.join(", "));
+    }
+    if h.may_be_outside {
+        text.push_str("\n(may also be an actor outside this list)");
+    }
+    escape_text(&text)
+}
+
+/// Escapes a plain (non-record) quoted label.
+fn escape_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// `{path|Msg -> Reply\lOther\l}`. Every piece goes through [`escape_record`].

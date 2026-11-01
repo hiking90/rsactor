@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
         "target": "example:ask_join_demo",
         "path": "ask_join_demo::WorkerActor",
         "display": "ask_join_demo::WorkerActor",
@@ -14,6 +15,7 @@
             "key": "ask_join_demo::FileProcessingTask",
             "label": "FileProcessingTask",
             "reply": "JoinHandle<String>",
+            "reply_key": "tokio::task::JoinHandle<std::string::String>",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "ask_join_demo::GetTaskCount",
             "label": "GetTaskCount",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "ask_join_demo::HeavyComputationTask",
             "label": "HeavyComputationTask",
             "reply": "JoinHandle<u64>",
+            "reply_key": "tokio::task::JoinHandle<u64>",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -47,6 +51,7 @@
             "key": "ask_join_demo::PanicTask",
             "label": "PanicTask",
             "reply": "JoinHandle<String>",
+            "reply_key": "tokio::task::JoinHandle<std::string::String>",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -59,9 +64,30 @@
           "file": "examples/ask_join_demo.rs",
           "line": 24
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 143
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

@@ -2,5 +2,7 @@ digraph "ask_join_demo" {
   rankdir=LR;
   node [shape=record, fontname="Helvetica", fontsize=10];
   edge [fontname="Helvetica", fontsize=9];
-  "example:ask_join_demo:ask_join_demo::WorkerActor" [label="{ask_join_demo::WorkerActor|FileProcessingTask -\> JoinHandle\<String\>\lGetTaskCount -\> u32\lHeavyComputationTask -\> JoinHandle\<u64\>\lPanicTask -\> JoinHandle\<String\>\l}"];
+  "actor:example:ask_join_demo:ask_join_demo::WorkerActor" [label="{ask_join_demo::WorkerActor|FileProcessingTask -\> JoinHandle\<String\>\lGetTaskCount -\> u32\lHeavyComputationTask -\> JoinHandle\<u64\>\lPanicTask -\> JoinHandle\<String\>\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "external" -> "actor:example:ask_join_demo:ask_join_demo::WorkerActor" [style="bold", label="spawn"];
 }

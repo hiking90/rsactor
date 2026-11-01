@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:message_macro_demo:message_macro_demo::Calculator",
         "target": "example:message_macro_demo",
         "path": "message_macro_demo::Calculator",
         "display": "message_macro_demo::Calculator",
@@ -14,6 +15,7 @@
             "key": "message_macro_demo::Add",
             "label": "Add",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "message_macro_demo::GetCount",
             "label": "GetCount",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "message_macro_demo::Multiply",
             "label": "Multiply",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -47,6 +51,7 @@
             "key": "message_macro_demo::Reset",
             "label": "Reset",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -58,6 +63,7 @@
             "key": "message_macro_demo::SetCount",
             "label": "SetCount",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -70,9 +76,30 @@
           "file": "examples/message_macro_demo.rs",
           "line": 18
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:message_macro_demo:message_macro_demo::Calculator",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/message_macro_demo.rs",
+            "line": 67
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

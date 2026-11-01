@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:priority_signal:priority_signal::WorkerActor",
         "target": "example:priority_signal",
         "path": "priority_signal::WorkerActor",
         "display": "priority_signal::WorkerActor",
@@ -14,6 +15,7 @@
             "key": "priority_signal::HealthCheck",
             "label": "HealthCheck",
             "reply": "HealthSnapshot",
+            "reply_key": "priority_signal::HealthSnapshot",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "priority_signal::PauseProcessing",
             "label": "PauseProcessing",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "priority_signal::ProcessJob",
             "label": "ProcessJob",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -47,6 +51,7 @@
             "key": "priority_signal::ResumeProcessing",
             "label": "ResumeProcessing",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -59,9 +64,30 @@
           "file": "examples/priority_signal.rs",
           "line": 25
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": "spawn_with_options",
+        "from": "external",
+        "to": "actor:example:priority_signal:priority_signal::WorkerActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/priority_signal.rs",
+            "line": 113
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

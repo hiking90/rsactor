@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:metrics_demo:metrics_demo::WorkerActor",
         "target": "example:metrics_demo",
         "path": "metrics_demo::WorkerActor",
         "display": "metrics_demo::WorkerActor",
@@ -14,6 +15,7 @@
             "key": "metrics_demo::FastTask",
             "label": "FastTask",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "metrics_demo::GetName",
             "label": "GetName",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "metrics_demo::SlowTask",
             "label": "SlowTask",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -48,9 +52,30 @@
           "file": "examples/metrics_demo.rs",
           "line": 20
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 65
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

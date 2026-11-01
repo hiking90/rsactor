@@ -95,7 +95,7 @@ impl TyCtx<'_, '_> {
                 Res::Rsactor(name) => Ty::Rsactor { name, args },
                 Res::Std(path) => Ty::Std { path, args },
                 Res::External(path) => Ty::External { path, args },
-                Res::Module(..) | Res::Variant(..) => unknown(whole),
+                Res::Module(..) | Res::Variant(..) | Res::Value(..) => unknown(whole),
             },
             None => unknown(whole),
         }

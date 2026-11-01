@@ -13,6 +13,7 @@
 //! index, [`types`] turns `syn::Type` into [`types::Ty`], [`discover`] extracts
 //! the graph, and [`render`] writes JSON, DOT or SVG.
 
+pub mod calls;
 pub mod crate_tree;
 pub mod discover;
 pub mod model;

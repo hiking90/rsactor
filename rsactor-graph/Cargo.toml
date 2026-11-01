@@ -17,7 +17,7 @@ name = "rsactor-graph"
 path = "src/main.rs"
 
 [dependencies]
-syn.workspace = true
+syn = { workspace = true, features = ["visit"] }
 quote.workspace = true
 # `span-locations` makes `Span::start()` report real line numbers for source
 # parsed outside a proc macro, which is how this tool parses every file.

@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
         "target": "example:actor_with_timeout",
         "path": "actor_with_timeout::TimeoutDemoActor",
         "display": "actor_with_timeout::TimeoutDemoActor",
@@ -14,6 +15,7 @@
             "key": "actor_with_timeout::ConfigurableQuery",
             "label": "ConfigurableQuery",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "actor_with_timeout::FastQuery",
             "label": "FastQuery",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "actor_with_timeout::SlowQuery",
             "label": "SlowQuery",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -48,9 +52,30 @@
           "file": "examples/actor_with_timeout.rs",
           "line": 13
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_with_timeout.rs",
+            "line": 139
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

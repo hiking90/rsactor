@@ -2,5 +2,7 @@ digraph "actor_with_timeout" {
   rankdir=LR;
   node [shape=record, fontname="Helvetica", fontsize=10];
   edge [fontname="Helvetica", fontsize=9];
-  "example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [label="{actor_with_timeout::TimeoutDemoActor|ConfigurableQuery -\> String\lFastQuery -\> String\lSlowQuery -\> String\l}"];
+  "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [label="{actor_with_timeout::TimeoutDemoActor|ConfigurableQuery -\> String\lFastQuery -\> String\lSlowQuery -\> String\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "external" -> "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor" [style="bold", label="spawn"];
 }

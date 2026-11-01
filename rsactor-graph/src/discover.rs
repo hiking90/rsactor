@@ -1,9 +1,10 @@
 // Copyright 2022 Jeff Kim <hiking90@gmail.com>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Actor and handled-message discovery (§4.1, §4.2).
+//! Graph assembly: actors and handled messages (§4.1, §4.2), holds edges and
+//! type-erased handler nodes (§4.3). Call sites are scanned by [`crate::calls`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use quote::ToTokens;
@@ -11,103 +12,209 @@ use syn::punctuated::Punctuated;
 use syn::{Attribute, FnArg, ImplItem, Item, ItemImpl, Meta, ReturnType, Token};
 
 use crate::crate_tree::{compact_tokens, location_of, ModId};
-use crate::model::{ActorNode, Category, Graph, HandledMessage, Location, Node, Report};
+use crate::model::{
+    ActorNode, Category, Edge, EdgeKind, ExternalActorNode, ExternalNode, FnNode, Graph,
+    HandledMessage, HandlersNode, Location, Node, Report, Resolution,
+};
 use crate::resolve::{type_params, DeclId, Index, Res};
 use crate::types::{Ty, TyCtx};
 
 #[derive(Default)]
-struct ActorInfo {
-    open: bool,
-    messages: Vec<HandledMessage>,
+pub struct ActorInfo {
+    pub open: bool,
+    /// `#[derive(Actor)]`, which sets `type Args = Self`.
+    pub derive: bool,
+    /// `type Args` of `impl Actor for X`, with its location.
+    pub args: Option<(Ty, Location)>,
+    pub messages: Vec<HandledMessage>,
 }
 
-/// Builds the stage-1 graph: one node per actor type in the declaration
-/// scope, with the messages it handles.
-pub fn discover(index: &Index, base: &Path, report: &mut Report) -> Graph {
-    let mut actors: BTreeMap<DeclId, ActorInfo> = BTreeMap::new();
-    for (c, krate) in index.crates.iter().enumerate() {
-        for (m, module) in krate.modules.iter().enumerate() {
-            for item in &module.items {
-                match item {
-                    Item::Struct(s) if derives_actor(index, c, m, &s.attrs) => {
-                        if let Some(id) = index.local_decl(c, m, &s.ident.to_string()) {
-                            actors.entry(id).or_default();
-                        }
-                    }
-                    Item::Enum(e) if derives_actor(index, c, m, &e.attrs) => {
-                        if let Some(id) = index.local_decl(c, m, &e.ident.to_string()) {
-                            actors.entry(id).or_default();
-                        }
-                    }
-                    Item::Impl(imp) => {
-                        let file = &module.file;
-                        scan_impl(index, c, m, file, base, imp, &mut actors, report);
-                    }
-                    _ => {}
-                }
+/// A node an edge can point at.
+#[derive(Debug, Clone)]
+pub enum Endpoint {
+    Actor(DeclId),
+    ExternalActor(String),
+    Fn { target: String, path: String },
+    External,
+    Handlers(HandlerSig),
+}
+
+/// `TellHandler<M>` or `AskHandler<M, R>`.
+#[derive(Debug, Clone)]
+pub struct HandlerSig {
+    pub ask: bool,
+    pub message: Ty,
+    pub reply: Option<Ty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct EdgeKey {
+    kind: EdgeKind,
+    variant: Option<String>,
+    from: String,
+    to: String,
+    message: Option<String>,
+    reply: Option<String>,
+    receiver_resolution: Resolution,
+    message_resolution: Resolution,
+}
+
+/// Collects nodes and edges while the scan runs.
+pub struct Builder<'i, 'a> {
+    pub index: &'i Index<'a>,
+    pub base: &'i Path,
+    pub report: &'i mut Report,
+    pub actors: BTreeMap<DeclId, ActorInfo>,
+    extra: BTreeMap<String, Node>,
+    handlers: BTreeMap<String, (HandlerSig, String)>,
+    edges: BTreeMap<EdgeKey, BTreeSet<Location>>,
+}
+
+/// Per-edge data beyond its endpoints.
+pub struct EdgeData {
+    pub kind: EdgeKind,
+    pub variant: Option<String>,
+    pub message: Option<String>,
+    pub reply: Option<String>,
+    pub receiver_resolution: Resolution,
+    pub message_resolution: Resolution,
+    pub location: Location,
+}
+
+impl<'i, 'a> Builder<'i, 'a> {
+    /// Node id for an endpoint, registering the node on first use. Sender
+    /// nodes (`fn`, `external`) exist only when an edge starts at them.
+    pub fn endpoint_id(&mut self, endpoint: &Endpoint) -> String {
+        match endpoint {
+            Endpoint::Actor(id) => {
+                // `ActorRef<Y>`/`spawn::<Y>` proves `Y: Actor` even when the
+                // scanner did not see its `impl Actor`.
+                self.actors.entry(*id).or_default();
+                actor_id(self.index, *id)
+            }
+            Endpoint::ExternalActor(path) => {
+                let id = format!("external_actor:{path}");
+                self.extra.entry(id.clone()).or_insert_with(|| {
+                    Node::ExternalActor(ExternalActorNode {
+                        id: id.clone(),
+                        path: path.clone(),
+                    })
+                });
+                id
+            }
+            Endpoint::Fn { target, path } => {
+                let id = format!("fn:{target}:{path}");
+                self.extra.entry(id.clone()).or_insert_with(|| {
+                    Node::Fn(FnNode {
+                        id: id.clone(),
+                        target: target.clone(),
+                        path: path.clone(),
+                    })
+                });
+                id
+            }
+            Endpoint::External => {
+                let id = "external".to_string();
+                self.extra
+                    .entry(id.clone())
+                    .or_insert_with(|| Node::External(ExternalNode { id: id.clone() }));
+                id
+            }
+            Endpoint::Handlers(sig) => {
+                let message = sig.message.key(self.index);
+                let reply = sig.reply.as_ref().map(|r| r.key(self.index));
+                let handler = if sig.ask { "AskHandler" } else { "TellHandler" };
+                let id = match &reply {
+                    Some(reply) => format!("handlers:{handler}:{message}:{reply}"),
+                    None => format!("handlers:{handler}:{message}"),
+                };
+                self.handlers
+                    .entry(id.clone())
+                    .or_insert_with(|| (sig.clone(), handler.to_string()));
+                id
             }
         }
     }
 
-    let mut graph = Graph::default();
-    for (id, info) in actors {
-        let decl = &index.decls[id];
-        let krate = &index.crates[decl.krate];
-        let file = &krate.modules[decl.module].file;
-        let path = index.decl_path(id);
-        let display = if decl.generics.is_empty() {
-            path.clone()
-        } else {
-            format!("{path}<{}>", decl.generics.join(", "))
-        };
-        let mut messages = info.messages;
-        messages.sort();
-        messages.dedup();
-        graph.nodes.push(Node::Actor(ActorNode {
-            target: krate.spec.target.clone(),
-            path,
-            display,
-            open: info.open,
-            messages,
-            location: location_of(file, decl_ident_span(index, id), base),
-        }));
+    /// A short name for report entries.
+    pub fn endpoint_display(&self, endpoint: &Endpoint) -> String {
+        match endpoint {
+            Endpoint::Actor(id) => self.index.decl_path(*id),
+            Endpoint::ExternalActor(path) => path.clone(),
+            Endpoint::Fn { path, .. } => format!("fn {path}"),
+            Endpoint::External => "external".to_string(),
+            Endpoint::Handlers(sig) => sig.message.label(self.index),
+        }
     }
-    graph
+
+    pub fn add_edge(&mut self, from: &Endpoint, to: &Endpoint, data: EdgeData) {
+        let key = EdgeKey {
+            kind: data.kind,
+            variant: data.variant,
+            from: self.endpoint_id(from),
+            to: self.endpoint_id(to),
+            message: data.message,
+            reply: data.reply,
+            receiver_resolution: data.receiver_resolution,
+            message_resolution: data.message_resolution,
+        };
+        self.edges.entry(key).or_default().insert(data.location);
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn scan_impl(
-    index: &Index,
-    krate: usize,
-    module: ModId,
-    file: &Path,
-    base: &Path,
-    imp: &ItemImpl,
-    actors: &mut BTreeMap<DeclId, ActorInfo>,
-    report: &mut Report,
-) {
-    // Which rsactor item this impl is about. A trait or attribute merely named
-    // `Actor`/`Message` from another crate must not turn a type into an actor.
-    let role = match &imp.trait_ {
-        Some((path, _)) => match path.segments.last().map(|s| s.ident.to_string()).as_deref() {
-            Some(name @ ("Actor" | "Message")) if is_rsactor(index, krate, module, path) => {
-                Some(name.to_string())
-            }
-            _ => None,
-        },
-        None => imp
-            .attrs
-            .iter()
-            .find(|attr| {
-                attr.path()
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == "message_handlers")
-            })
-            .filter(|attr| is_rsactor(index, krate, module, attr.path()))
-            .map(|_| "message_handlers".to_string()),
+pub fn actor_id(index: &Index, id: DeclId) -> String {
+    let decl = &index.decls[id];
+    format!(
+        "actor:{}:{}",
+        index.crates[decl.krate].spec.target,
+        index.decl_path(id)
+    )
+}
+
+/// Builds the graph for the loaded crates.
+pub fn discover(index: &Index, base: &Path, report: &mut Report) -> Graph {
+    let mut builder = Builder {
+        index,
+        base,
+        report,
+        actors: BTreeMap::new(),
+        extra: BTreeMap::new(),
+        handlers: BTreeMap::new(),
+        edges: BTreeMap::new(),
     };
-    let Some(role) = role else {
+    collect_actors(&mut builder);
+    holds_edges(&mut builder);
+    crate::calls::scan_bodies(&mut builder);
+    assemble(builder)
+}
+
+fn collect_actors(b: &mut Builder) {
+    let index = b.index;
+    for (c, krate) in index.crates.iter().enumerate() {
+        for (m, module) in krate.modules.iter().enumerate() {
+            for item in &module.items {
+                let derived = match item {
+                    Item::Struct(s) if derives_actor(index, c, m, &s.attrs) => Some(&s.ident),
+                    Item::Enum(e) if derives_actor(index, c, m, &e.attrs) => Some(&e.ident),
+                    _ => None,
+                };
+                if let Some(ident) = derived {
+                    if let Some(id) = index.local_decl(c, m, &ident.to_string()) {
+                        b.actors.entry(id).or_default().derive = true;
+                    }
+                }
+                if let Item::Impl(imp) = item {
+                    scan_impl(b, c, m, &module.file, imp);
+                }
+            }
+        }
+    }
+}
+
+fn scan_impl(b: &mut Builder, krate: usize, module: ModId, file: &Path, imp: &ItemImpl) {
+    let index = b.index;
+    let base = b.base;
+    let Some(role) = impl_role(index, krate, module, imp) else {
         return;
     };
 
@@ -121,7 +228,7 @@ fn scan_impl(
     };
     let self_ty = plain.resolve(&imp.self_ty);
     let Ty::Decl { id, .. } = self_ty else {
-        report.push(
+        b.report.push(
             Category::Declaration,
             Some(location_of(file, imp.impl_token.span, base)),
             format!(
@@ -135,11 +242,18 @@ fn scan_impl(
         self_ty: Some(&self_ty),
         ..plain
     };
-    let info = actors.entry(id).or_default();
+    let info = b.actors.entry(id).or_default();
 
-    match role.as_str() {
-        "Actor" => {}
-        "Message" => {
+    match role {
+        ImplRole::Actor => {
+            info.args = imp.items.iter().find_map(|item| match item {
+                ImplItem::Type(t) if t.ident == "Args" => {
+                    Some((cx.resolve(&t.ty), location_of(file, t.ident.span(), base)))
+                }
+                _ => None,
+            });
+        }
+        ImplRole::Message => {
             let Some(message) = imp
                 .trait_
                 .as_ref()
@@ -165,7 +279,7 @@ fn scan_impl(
                 location_of(file, imp.impl_token.span, base),
             ));
         }
-        _ => {
+        ImplRole::MessageHandlers => {
             for item in &imp.items {
                 let ImplItem::Fn(f) = item else { continue };
                 // The derive macro matches `is_ident("handler")` exactly
@@ -176,7 +290,7 @@ fn scan_impl(
                 }
                 let location = location_of(file, f.sig.ident.span(), base);
                 if f.sig.inputs.len() != 3 {
-                    report.push(
+                    b.report.push(
                         Category::Declaration,
                         Some(location),
                         format!(
@@ -191,6 +305,7 @@ fn scan_impl(
                     continue;
                 };
                 let message_ty = cx.resolve(&message.ty);
+                let info = b.actors.entry(id).or_default();
                 if is_impl_generic(&message_ty, &impl_generics) {
                     info.open = true;
                     continue;
@@ -211,6 +326,244 @@ fn scan_impl(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImplRole {
+    Actor,
+    Message,
+    MessageHandlers,
+}
+
+/// Which rsactor item an impl is about. A trait or attribute merely named
+/// `Actor`/`Message` from another crate must not turn a type into an actor.
+pub fn impl_role(index: &Index, krate: usize, module: ModId, imp: &ItemImpl) -> Option<ImplRole> {
+    match &imp.trait_ {
+        Some((path, _)) => {
+            let last = path.segments.last()?.ident.to_string();
+            let role = match last.as_str() {
+                "Actor" => ImplRole::Actor,
+                "Message" => ImplRole::Message,
+                _ => return None,
+            };
+            is_rsactor(index, krate, module, path).then_some(role)
+        }
+        None => imp
+            .attrs
+            .iter()
+            .find(|attr| {
+                attr.path()
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "message_handlers")
+            })
+            .filter(|attr| is_rsactor(index, krate, module, attr.path()))
+            .map(|_| ImplRole::MessageHandlers),
+    }
+}
+
+/// Holds edges from actor fields and `type Args` (§4.3).
+fn holds_edges(b: &mut Builder) {
+    let index = b.index;
+    let ids: Vec<DeclId> = b.actors.keys().copied().collect();
+    for id in ids {
+        let decl = &index.decls[id];
+        let file = index.crates[decl.krate].modules[decl.module].file.clone();
+        let self_ty = Ty::Decl {
+            id,
+            args: decl.generics.iter().cloned().map(Ty::Generic).collect(),
+            inferred: false,
+        };
+        let cx = TyCtx {
+            index,
+            krate: decl.krate,
+            module: decl.module,
+            generics: &decl.generics,
+            self_ty: Some(&self_ty),
+        };
+        let mut types: Vec<(Ty, Location)> = Vec::new();
+        let mut push_fields = |fields: &syn::Fields| {
+            for field in fields {
+                let span = field
+                    .ident
+                    .as_ref()
+                    .map(|i| i.span())
+                    .unwrap_or_else(|| syn::spanned::Spanned::span(&field.ty));
+                types.push((cx.resolve(&field.ty), location_of(&file, span, b.base)));
+            }
+        };
+        match index.decl_item(id) {
+            Item::Struct(s) => push_fields(&s.fields),
+            Item::Enum(e) => e.variants.iter().for_each(|v| push_fields(&v.fields)),
+            _ => {}
+        }
+        if let Some((args, location)) = b.actors.get(&id).and_then(|i| i.args.clone()) {
+            types.push((args, location));
+        }
+
+        let from = Endpoint::Actor(id);
+        for (ty, location) in types {
+            let mut found = Vec::new();
+            held_refs(index, &ty, &mut found);
+            for held in found {
+                match held {
+                    Held::Endpoint(to, resolution) => b.add_edge(
+                        &from,
+                        &to,
+                        EdgeData {
+                            kind: EdgeKind::Holds,
+                            variant: None,
+                            message: None,
+                            reply: None,
+                            receiver_resolution: resolution,
+                            message_resolution: Resolution::Exact,
+                            location: location.clone(),
+                        },
+                    ),
+                    Held::Unsupported(what) => b.report.push(
+                        Category::Declaration,
+                        Some(location.clone()),
+                        format!("holds {what}; the referenced actor cannot be determined"),
+                    ),
+                }
+            }
+        }
+    }
+}
+
+enum Held {
+    Endpoint(Endpoint, Resolution),
+    /// `ActorRef<T>` with a generic or unresolved `T`.
+    Unsupported(String),
+}
+
+/// Actor references and type-erased handlers anywhere inside a type.
+fn held_refs(index: &Index, ty: &Ty, out: &mut Vec<Held>) {
+    let recurse = |items: &[Ty], out: &mut Vec<Held>| {
+        items.iter().for_each(|a| held_refs(index, a, out));
+    };
+    match ty {
+        Ty::Rsactor { name, args } => match name.as_str() {
+            "ActorRef" | "ActorWeak" => match args.first() {
+                Some(target @ Ty::Decl { id, .. }) => {
+                    out.push(Held::Endpoint(Endpoint::Actor(*id), target.resolution()))
+                }
+                Some(Ty::External { path, .. }) => out.push(Held::Endpoint(
+                    Endpoint::ExternalActor(path.clone()),
+                    Resolution::Exact,
+                )),
+                Some(other) => {
+                    out.push(Held::Unsupported(format!("{name}<{}>", other.label(index))))
+                }
+                None => {}
+            },
+            "TellHandler" | "WeakTellHandler" | "AskHandler" | "WeakAskHandler" => {
+                if let Some(sig) = handler_sig(name, args) {
+                    let resolution = sig.message.resolution();
+                    out.push(Held::Endpoint(Endpoint::Handlers(sig), resolution));
+                }
+            }
+            _ => recurse(args, out),
+        },
+        Ty::Decl { args, .. } | Ty::Std { args, .. } | Ty::External { args, .. } => {
+            recurse(args, out)
+        }
+        Ty::Ref(inner) | Ty::Slice(inner) => held_refs(index, inner, out),
+        Ty::Tuple(items) | Ty::Dyn(items) | Ty::ImplTrait(items) => recurse(items, out),
+        Ty::Generic(_) | Ty::Unknown(_) => {}
+    }
+}
+
+pub fn handler_sig(name: &str, args: &[Ty]) -> Option<HandlerSig> {
+    let ask = name.contains("Ask");
+    let message = args.first()?.clone();
+    let reply = if ask { args.get(1).cloned() } else { None };
+    Some(HandlerSig {
+        ask,
+        message,
+        reply,
+    })
+}
+
+fn assemble(b: Builder) -> Graph {
+    let index = b.index;
+    let mut graph = Graph::default();
+    let may_be_outside = b.actors.values().any(|a| a.open)
+        || b.extra
+            .values()
+            .any(|n| matches!(n, Node::ExternalActor(_)));
+
+    let mut actor_nodes = Vec::new();
+    for (id, info) in &b.actors {
+        let decl = &index.decls[*id];
+        let krate = &index.crates[decl.krate];
+        let file = &krate.modules[decl.module].file;
+        let path = index.decl_path(*id);
+        let display = if decl.generics.is_empty() {
+            path.clone()
+        } else {
+            format!("{path}<{}>", decl.generics.join(", "))
+        };
+        let mut messages = info.messages.clone();
+        messages.sort();
+        messages.dedup();
+        actor_nodes.push(ActorNode {
+            id: actor_id(index, *id),
+            target: krate.spec.target.clone(),
+            path,
+            display,
+            open: info.open,
+            messages,
+            location: location_of(file, decl_ident_span(index, *id), b.base),
+        });
+    }
+
+    for (id, (sig, handler)) in &b.handlers {
+        let message = sig.message.key(index);
+        // `AskHandler<M, ()>` matches a handler whose reply is `()`, which
+        // `HandledMessage` records as `None`.
+        let reply = sig
+            .reply
+            .as_ref()
+            .map(|r| r.key(index))
+            .filter(|r| r != "()");
+        let candidates = actor_nodes
+            .iter()
+            .filter(|a| {
+                a.messages
+                    .iter()
+                    .any(|m| m.key == message && (!sig.ask || m.reply_key == reply))
+            })
+            .map(|a| a.id.clone())
+            .collect();
+        graph.nodes.push(Node::Handlers(HandlersNode {
+            id: id.clone(),
+            handler: handler.clone(),
+            message,
+            message_label: sig.message.label(index),
+            reply: sig.reply.as_ref().map(|r| r.key(index)),
+            reply_label: sig.reply.as_ref().map(|r| r.label(index)),
+            candidates,
+            may_be_outside,
+        }));
+    }
+
+    graph.nodes.extend(actor_nodes.into_iter().map(Node::Actor));
+    graph.nodes.extend(b.extra.into_values());
+    for (key, locations) in b.edges {
+        graph.edges.push(Edge {
+            kind: key.kind,
+            variant: key.variant,
+            from: key.from,
+            to: key.to,
+            message: key.message,
+            reply: key.reply,
+            receiver_resolution: key.receiver_resolution,
+            message_resolution: key.message_resolution,
+            locations: locations.into_iter().collect(),
+        });
+    }
+    graph
+}
+
 fn handled(
     index: &Index,
     message: &Ty,
@@ -223,6 +576,7 @@ fn handled(
         key: message.key(index),
         label: message.label(index),
         reply: reply.map(|r| r.label(index)),
+        reply_key: reply.map(|r| r.key(index)),
         resolution: message.resolution(),
         cfg,
         location,
@@ -266,7 +620,7 @@ fn derives_actor(index: &Index, krate: usize, module: ModId, attrs: &[Attribute]
 /// `use rsactor::..`, which resolves; refusing unresolved ones would drop
 /// actors behind an import form the resolver does not follow. A name that
 /// resolves to anything else (a local trait, another crate) is refused.
-fn is_rsactor(index: &Index, krate: usize, module: ModId, path: &syn::Path) -> bool {
+pub fn is_rsactor(index: &Index, krate: usize, module: ModId, path: &syn::Path) -> bool {
     match index.resolve_path(krate, module, path) {
         Some(resolved) => matches!(resolved.res, Res::Rsactor(_)) && !resolved.inferred,
         None => true,

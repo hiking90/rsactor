@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:actor_task:actor_task::DataProcessorActor",
         "target": "example:actor_task",
         "path": "actor_task::DataProcessorActor",
         "display": "actor_task::DataProcessorActor",
@@ -14,6 +15,7 @@
             "key": "actor_task::GetState",
             "label": "GetState",
             "reply": "(f64, Option<f64>, Option<Instant>)",
+            "reply_key": "(f64, std::option::Option<f64>, std::option::Option<std::time::Instant>)",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "actor_task::ProcessedData",
             "label": "ProcessedData",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "actor_task::SendTaskCommand",
             "label": "SendTaskCommand",
             "reply": "bool",
+            "reply_key": "bool",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -47,6 +51,7 @@
             "key": "actor_task::SetFactor",
             "label": "SetFactor",
             "reply": "f64",
+            "reply_key": "f64",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -59,9 +64,30 @@
           "file": "examples/actor_task.rs",
           "line": 50
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_task:actor_task::DataProcessorActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_task.rs",
+            "line": 210
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

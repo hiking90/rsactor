@@ -2,6 +2,9 @@ digraph "unified_macro_demo" {
   rankdir=LR;
   node [shape=record, fontname="Helvetica", fontsize=10];
   edge [fontname="Helvetica", fontsize=9];
-  "example:unified_macro_demo:unified_macro_demo::GenericActor" [label="{unified_macro_demo::GenericActor\<T\>|GetValue -\> Option\<T\>\lSetValue\<T\>\l}"];
-  "example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="{unified_macro_demo::SimpleActor|GetCount -\> i32\lIncrement\l}"];
+  "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [label="{unified_macro_demo::GenericActor\<T\>|GetValue -\> Option\<T\>\lSetValue\<T\>\l}"];
+  "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [label="{unified_macro_demo::SimpleActor|GetCount -\> i32\lIncrement\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::GenericActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor" [style="bold", label="spawn"];
 }

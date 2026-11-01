@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
         "target": "example:weak_reference_demo",
         "path": "weak_reference_demo::PingActor",
         "display": "weak_reference_demo::PingActor",
@@ -14,6 +15,7 @@
             "key": "weak_reference_demo::GetStatus",
             "label": "GetStatus",
             "reply": "Status",
+            "reply_key": "weak_reference_demo::Status",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "weak_reference_demo::Ping",
             "label": "Ping",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -37,9 +40,30 @@
           "file": "examples/weak_reference_demo.rs",
           "line": 20
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 103
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

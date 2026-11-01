@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:basic:basic::MyActor",
         "target": "example:basic",
         "path": "basic::MyActor",
         "display": "basic::MyActor",
@@ -14,6 +15,7 @@
             "key": "basic::Decrement",
             "label": "Decrement",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "basic::DummyMessage",
             "label": "DummyMessage",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "basic::Increment",
             "label": "Increment",
             "reply": "u32",
+            "reply_key": "u32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -48,9 +52,30 @@
           "file": "examples/basic.rs",
           "line": 23
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": "spawn_with_options",
+        "from": "external",
+        "to": "actor:example:basic:basic::MyActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/basic.rs",
+            "line": 108
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

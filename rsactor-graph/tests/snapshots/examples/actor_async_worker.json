@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
         "target": "example:actor_async_worker",
         "path": "actor_async_worker::RequesterActor",
         "display": "actor_async_worker::RequesterActor",
@@ -14,6 +15,7 @@
             "key": "actor_async_worker::GetResults",
             "label": "GetResults",
             "reply": "Vec<String>",
+            "reply_key": "std::vec::Vec<std::string::String>",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "actor_async_worker::RequestWork",
             "label": "RequestWork",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "actor_async_worker::WorkCompleted",
             "label": "WorkCompleted",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -51,6 +55,7 @@
       },
       {
         "kind": "actor",
+        "id": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
         "target": "example:actor_async_worker",
         "path": "actor_async_worker::WorkerActor",
         "display": "actor_async_worker::WorkerActor",
@@ -60,6 +65,7 @@
             "key": "actor_async_worker::ProcessTask",
             "label": "ProcessTask",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -72,9 +78,66 @@
           "file": "examples/actor_async_worker.rs",
           "line": 95
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "holds",
+        "variant": null,
+        "from": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 13
+          },
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 18
+          }
+        ]
+      },
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 157
+          }
+        ]
+      },
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 156
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

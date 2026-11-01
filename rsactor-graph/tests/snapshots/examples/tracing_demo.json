@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
         "target": "example:tracing_demo",
         "path": "tracing_demo::TracingDemoActor",
         "display": "tracing_demo::TracingDemoActor",
@@ -14,6 +15,7 @@
             "key": "tracing_demo::Echo",
             "label": "Echo",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "tracing_demo::FailingMessage",
             "label": "FailingMessage",
             "reply": "Result<String, String>",
+            "reply_key": "std::result::Result<std::string::String, std::string::String>",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -36,6 +39,7 @@
             "key": "tracing_demo::GetCounter",
             "label": "GetCounter",
             "reply": "u64",
+            "reply_key": "u64",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -47,6 +51,7 @@
             "key": "tracing_demo::Increment",
             "label": "Increment",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -58,6 +63,7 @@
             "key": "tracing_demo::Ping",
             "label": "Ping",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -69,6 +75,7 @@
             "key": "tracing_demo::SlowOperation",
             "label": "SlowOperation",
             "reply": "String",
+            "reply_key": "std::string::String",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -81,9 +88,30 @@
           "file": "examples/tracing_demo.rs",
           "line": 51
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 114
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []

@@ -5,6 +5,7 @@
     "nodes": [
       {
         "kind": "actor",
+        "id": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
         "target": "example:unified_macro_demo",
         "path": "unified_macro_demo::GenericActor",
         "display": "unified_macro_demo::GenericActor<T>",
@@ -14,6 +15,7 @@
             "key": "unified_macro_demo::GetValue",
             "label": "GetValue",
             "reply": "Option<T>",
+            "reply_key": "std::option::Option<T>",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -25,6 +27,7 @@
             "key": "unified_macro_demo::SetValue",
             "label": "SetValue<T>",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -40,6 +43,7 @@
       },
       {
         "kind": "actor",
+        "id": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
         "target": "example:unified_macro_demo",
         "path": "unified_macro_demo::SimpleActor",
         "display": "unified_macro_demo::SimpleActor",
@@ -49,6 +53,7 @@
             "key": "unified_macro_demo::GetCount",
             "label": "GetCount",
             "reply": "i32",
+            "reply_key": "i32",
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -60,6 +65,7 @@
             "key": "unified_macro_demo::Increment",
             "label": "Increment",
             "reply": null,
+            "reply_key": null,
             "resolution": "exact",
             "cfg": [],
             "location": {
@@ -72,9 +78,50 @@
           "file": "examples/unified_macro_demo.rs",
           "line": 5
         }
+      },
+      {
+        "kind": "external",
+        "id": "external"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 94
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 104
+          }
+        ]
+      },
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
+        "message": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 83
+          }
+        ]
+      }
+    ]
   },
   "report": {
     "entries": []
