@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "name": "derive_macro_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:derive_macro_demo:derive_macro_demo::MyActor",
+        "target": "example:derive_macro_demo",
+        "path": "derive_macro_demo::MyActor",
+        "display": "derive_macro_demo::MyActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "derive_macro_demo::GetCount",
+            "label": "GetCount",
+            "reply": "u32",
+            "reply_key": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/derive_macro_demo.rs",
+              "line": 30
+            }
+          },
+          {
+            "key": "derive_macro_demo::GetName",
+            "label": "GetName",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/derive_macro_demo.rs",
+              "line": 20
+            }
+          },
+          {
+            "key": "derive_macro_demo::Increment",
+            "label": "Increment",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/derive_macro_demo.rs",
+              "line": 25
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/derive_macro_demo.rs",
+          "line": 6
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:derive_macro_demo:derive_macro_demo::MyActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/derive_macro_demo.rs",
+            "line": 49
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:derive_macro_demo:derive_macro_demo::MyActor",
+        "message": "derive_macro_demo::Increment",
+        "message_label": "Increment",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/derive_macro_demo.rs",
+            "line": 58
+          },
+          {
+            "file": "examples/derive_macro_demo.rs",
+            "line": 59
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:derive_macro_demo:derive_macro_demo::MyActor",
+        "message": "derive_macro_demo::GetCount",
+        "message_label": "GetCount",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/derive_macro_demo.rs",
+            "line": 55
+          },
+          {
+            "file": "examples/derive_macro_demo.rs",
+            "line": 61
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:derive_macro_demo:derive_macro_demo::MyActor",
+        "message": "derive_macro_demo::GetName",
+        "message_label": "GetName",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/derive_macro_demo.rs",
+            "line": 52
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

@@ -49,6 +49,12 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # The root manifest is a package without `default-members`, so the
+      # commands above cover only `rsactor`. Workspace members that are not
+      # dependencies of it need their own steps.
+      - name: Run clippy (rsactor-graph)
+        run: cargo clippy -p rsactor-graph --all-targets -- -D warnings
+
   # Security audit
   security:
     name: Security Audit
@@ -111,6 +117,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose --all-features
+
+      - name: Run tests (rsactor-graph)
+        run: cargo test --verbose -p rsactor-graph
 
       - name: Run examples
         shell: bash

@@ -354,6 +354,7 @@ Actor control traits (`ActorControl`, `WeakActorControl`) provide type-erased li
 - **[Metrics Guide](./docs/metrics.md)** - Actor performance monitoring
 - **[Tracing Guide](./docs/tracing.md)** - Detailed observability with tracing
 - **[FAQ](./docs/FAQ.md)** - Common questions and answers
+- **[rsactor-graph](./rsactor-graph/README.md)** - Command-line tool in this repository that draws an application's actor topology (actors, messages, spawns, sends) as JSON, DOT or SVG by static analysis
 
 ## Contributing
 

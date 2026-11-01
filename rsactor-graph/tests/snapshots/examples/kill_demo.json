@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "name": "kill_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:kill_demo:kill_demo::DemoActor",
+        "target": "example:kill_demo",
+        "path": "kill_demo::DemoActor",
+        "display": "kill_demo::DemoActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "kill_demo::Ping",
+            "label": "Ping",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/kill_demo.rs",
+              "line": 57
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/kill_demo.rs",
+          "line": 12
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:kill_demo:kill_demo::DemoActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/kill_demo.rs",
+            "line": 72
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:kill_demo:kill_demo::DemoActor",
+        "message": "kill_demo::Ping",
+        "message_label": "Ping",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/kill_demo.rs",
+            "line": 75
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

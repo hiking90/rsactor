@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "name": "weak_reference_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
+        "target": "example:weak_reference_demo",
+        "path": "weak_reference_demo::PingActor",
+        "display": "weak_reference_demo::PingActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "weak_reference_demo::GetStatus",
+            "label": "GetStatus",
+            "reply": "Status",
+            "reply_key": "weak_reference_demo::Status",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/weak_reference_demo.rs",
+              "line": 85
+            }
+          },
+          {
+            "key": "weak_reference_demo::Ping",
+            "label": "Ping",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/weak_reference_demo.rs",
+              "line": 79
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/weak_reference_demo.rs",
+          "line": 20
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 103
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
+        "message": "weak_reference_demo::GetStatus",
+        "message_label": "GetStatus",
+        "reply": "Status",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 131
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:weak_reference_demo:weak_reference_demo::PingActor",
+        "message": "weak_reference_demo::Ping",
+        "message_label": "Ping",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 118
+          },
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 125
+          },
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 126
+          },
+          {
+            "file": "examples/weak_reference_demo.rs",
+            "line": 152
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

@@ -18,6 +18,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Before committing:** Always run `cargo fmt` and `cargo clippy --all-targets --all-features -- -D warnings` to ensure CI passes.
 
+The root manifest is a package without `default-members`, so the commands above cover only `rsactor`. For the graph tool also run `cargo clippy -p rsactor-graph --all-targets -- -D warnings` and `cargo test -p rsactor-graph`. Its example snapshots are regenerated with `RSACTOR_GRAPH_BLESS=1 cargo test -p rsactor-graph --test examples`; review the diff before committing. A change to the rsactor API (send methods, spawn functions, handler traits, public names) may need the matching lists in `rsactor-graph/src/calls.rs` and `rsactor-graph/src/resolve.rs` updated.
+
 ### Building and Examples
 - `cargo build --all-features` - Build with all features
 - `cargo run --example <name>` - Run a specific example (see examples/ directory)
@@ -39,6 +41,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Derive Macros (rsactor-derive/)
 - Procedural macro crate providing `#[derive(Actor)]` and `#[message_handlers]` attributes
 - Separate crate to isolate proc-macro dependencies
+
+### Topology Graph Tool (rsactor-graph/)
+- CLI that parses an rsactor application with `syn` (no type inference) and draws its actors, handled messages, holds, spawn and send edges as JSON, DOT or SVG (SVG through the external Graphviz `dot`)
+- Not a dependency of `rsactor`; `publish = false`. Usage and output conventions are in `rsactor-graph/README.md`
+- `tests/fixtures/` holds scanner input that is never compiled
 
 ### Key Design Patterns
 

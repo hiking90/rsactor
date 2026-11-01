@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "name": "actor_task",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:actor_task:actor_task::DataProcessorActor",
+        "target": "example:actor_task",
+        "path": "actor_task::DataProcessorActor",
+        "display": "actor_task::DataProcessorActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_task::GetState",
+            "label": "GetState",
+            "reply": "(f64, Option<f64>, Option<Instant>)",
+            "reply_key": "(f64, std::option::Option<f64>, std::option::Option<std::time::Instant>)",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 149
+            }
+          },
+          {
+            "key": "actor_task::ProcessedData",
+            "label": "ProcessedData",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 169
+            }
+          },
+          {
+            "key": "actor_task::SendTaskCommand",
+            "label": "SendTaskCommand",
+            "reply": "bool",
+            "reply_key": "bool",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 186
+            }
+          },
+          {
+            "key": "actor_task::SetFactor",
+            "label": "SetFactor",
+            "reply": "f64",
+            "reply_key": "f64",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_task.rs",
+              "line": 158
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_task.rs",
+          "line": 50
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_task:actor_task::DataProcessorActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_task.rs",
+            "line": 210
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_task:actor_task::DataProcessorActor",
+        "message": "actor_task::GetState",
+        "message_label": "GetState",
+        "reply": "(f64, Option<f64>, Option<Instant>)",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_task.rs",
+            "line": 217
+          },
+          {
+            "file": "examples/actor_task.rs",
+            "line": 250
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_task:actor_task::DataProcessorActor",
+        "message": "actor_task::SendTaskCommand",
+        "message_label": "SendTaskCommand",
+        "reply": "bool",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_task.rs",
+            "line": 234
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_task:actor_task::DataProcessorActor",
+        "message": "actor_task::SetFactor",
+        "message_label": "SetFactor",
+        "reply": "f64",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_task.rs",
+            "line": 226
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": [
+      {
+        "category": "macro_candidate",
+        "location": {
+          "file": "examples/actor_task.rs",
+          "line": 94
+        },
+        "sender": "actor_task::DataProcessorActor",
+        "detail": "`.tell(..)` inside `select!`"
+      }
+    ]
+  }
+}

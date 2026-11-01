@@ -1,0 +1,9 @@
+digraph "priority_signal" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "actor:example:priority_signal:priority_signal::WorkerActor" [label="{priority_signal::WorkerActor|HealthCheck -\> HealthSnapshot\lPauseProcessing\lProcessJob\lResumeProcessing\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "external" -> "actor:example:priority_signal:priority_signal::WorkerActor" [style="bold", label="spawn (spawn_with_options)"];
+  "external" -> "actor:example:priority_signal:priority_signal::WorkerActor" [label="ask_priority HealthCheck -> HealthSnapshot\ntell ProcessJob\ntell_priority PauseProcessing\ntell_priority ResumeProcessing"];
+}

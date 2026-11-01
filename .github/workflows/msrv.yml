@@ -117,6 +117,13 @@ jobs:
           echo "Running tests with all features using MSRV..."
           cargo test --verbose --all-features
 
+      # Not covered by the root-package commands above (no `default-members`).
+      - name: Test rsactor-graph with MSRV
+        shell: bash
+        run: |
+          echo "Building and testing rsactor-graph with MSRV..."
+          cargo test --verbose -p rsactor-graph
+
       - name: Build examples with MSRV
         shell: bash
         run: |

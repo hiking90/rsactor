@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "name": "actor_with_timeout",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
+        "target": "example:actor_with_timeout",
+        "path": "actor_with_timeout::TimeoutDemoActor",
+        "display": "actor_with_timeout::TimeoutDemoActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_with_timeout::ConfigurableQuery",
+            "label": "ConfigurableQuery",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_with_timeout.rs",
+              "line": 59
+            }
+          },
+          {
+            "key": "actor_with_timeout::FastQuery",
+            "label": "FastQuery",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_with_timeout.rs",
+              "line": 41
+            }
+          },
+          {
+            "key": "actor_with_timeout::SlowQuery",
+            "label": "SlowQuery",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_with_timeout.rs",
+              "line": 48
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_with_timeout.rs",
+          "line": 13
+        }
+      },
+      {
+        "kind": "fn",
+        "id": "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_ask_with_timeout",
+        "target": "example:actor_with_timeout",
+        "path": "actor_with_timeout::demonstrate_ask_with_timeout",
+        "owner": "actor_with_timeout"
+      },
+      {
+        "kind": "fn",
+        "id": "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_tell_with_timeout",
+        "target": "example:actor_with_timeout",
+        "path": "actor_with_timeout::demonstrate_tell_with_timeout",
+        "owner": "actor_with_timeout"
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_with_timeout.rs",
+            "line": 139
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": "tell_with_timeout",
+        "from": "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_tell_with_timeout",
+        "to": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
+        "message": "actor_with_timeout::ConfigurableQuery",
+        "message_label": "ConfigurableQuery",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_with_timeout.rs",
+            "line": 115
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_with_timeout",
+        "from": "external",
+        "to": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
+        "message": "actor_with_timeout::FastQuery",
+        "message_label": "FastQuery",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_with_timeout.rs",
+            "line": 144
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_with_timeout",
+        "from": "external",
+        "to": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
+        "message": "actor_with_timeout::SlowQuery",
+        "message_label": "SlowQuery",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_with_timeout.rs",
+            "line": 161
+          },
+          {
+            "file": "examples/actor_with_timeout.rs",
+            "line": 178
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_with_timeout",
+        "from": "fn:example:actor_with_timeout:actor_with_timeout::demonstrate_ask_with_timeout",
+        "to": "actor:example:actor_with_timeout:actor_with_timeout::TimeoutDemoActor",
+        "message": "actor_with_timeout::ConfigurableQuery",
+        "message_label": "ConfigurableQuery",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_with_timeout.rs",
+            "line": 87
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

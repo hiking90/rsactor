@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "name": "unified_macro_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
+        "target": "example:unified_macro_demo",
+        "path": "unified_macro_demo::GenericActor",
+        "display": "unified_macro_demo::GenericActor<T>",
+        "open": false,
+        "messages": [
+          {
+            "key": "unified_macro_demo::GetValue",
+            "label": "GetValue",
+            "reply": "Option<T>",
+            "reply_key": "std::option::Option<T>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 66
+            }
+          },
+          {
+            "key": "unified_macro_demo::SetValue",
+            "label": "SetValue<T>",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 60
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/unified_macro_demo.rs",
+          "line": 39
+        }
+      },
+      {
+        "kind": "actor",
+        "id": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
+        "target": "example:unified_macro_demo",
+        "path": "unified_macro_demo::SimpleActor",
+        "display": "unified_macro_demo::SimpleActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "unified_macro_demo::GetCount",
+            "label": "GetCount",
+            "reply": "i32",
+            "reply_key": "i32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 32
+            }
+          },
+          {
+            "key": "unified_macro_demo::Increment",
+            "label": "Increment",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/unified_macro_demo.rs",
+              "line": 26
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/unified_macro_demo.rs",
+          "line": 5
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 94
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 104
+          }
+        ]
+      },
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 83
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
+        "message": "unified_macro_demo::SetValue",
+        "message_label": "SetValue",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 96
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 106
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
+        "message": "unified_macro_demo::Increment",
+        "message_label": "Increment",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 85
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 86
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::GenericActor",
+        "message": "unified_macro_demo::GetValue",
+        "message_label": "GetValue",
+        "reply": "Option<T>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 97
+          },
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 107
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:unified_macro_demo:unified_macro_demo::SimpleActor",
+        "message": "unified_macro_demo::GetCount",
+        "message_label": "GetCount",
+        "reply": "i32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/unified_macro_demo.rs",
+            "line": 87
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

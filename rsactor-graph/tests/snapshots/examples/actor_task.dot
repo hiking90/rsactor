@@ -1,0 +1,9 @@
+digraph "actor_task" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "actor:example:actor_task:actor_task::DataProcessorActor" [label="{actor_task::DataProcessorActor|GetState -\> (f64, Option\<f64\>, Option\<Instant\>)\lProcessedData\lSendTaskCommand -\> bool\lSetFactor -\> f64\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "external" -> "actor:example:actor_task:actor_task::DataProcessorActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:actor_task:actor_task::DataProcessorActor" [label="ask GetState -> (f64, Option<f64>, Option<Instant>)\nask SendTaskCommand -> bool\nask SetFactor -> f64"];
+}

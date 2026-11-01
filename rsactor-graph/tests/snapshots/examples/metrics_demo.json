@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "name": "metrics_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "target": "example:metrics_demo",
+        "path": "metrics_demo::WorkerActor",
+        "display": "metrics_demo::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "metrics_demo::FastTask",
+            "label": "FastTask",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/metrics_demo.rs",
+              "line": 34
+            }
+          },
+          {
+            "key": "metrics_demo::GetName",
+            "label": "GetName",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/metrics_demo.rs",
+              "line": 45
+            }
+          },
+          {
+            "key": "metrics_demo::SlowTask",
+            "label": "SlowTask",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/metrics_demo.rs",
+              "line": 39
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/metrics_demo.rs",
+          "line": 20
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 65
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": "metrics_demo::FastTask",
+        "message_label": "FastTask",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 80
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": "metrics_demo::SlowTask",
+        "message_label": "SlowTask",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 102
+          },
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 103
+          },
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 104
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:metrics_demo:metrics_demo::WorkerActor",
+        "message": "metrics_demo::GetName",
+        "message_label": "GetName",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/metrics_demo.rs",
+            "line": 129
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

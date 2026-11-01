@@ -1,0 +1,9 @@
+digraph "message_macro_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "actor:example:message_macro_demo:message_macro_demo::Calculator" [label="{message_macro_demo::Calculator|Add -\> u32\lGetCount -\> u32\lMultiply -\> u32\lReset -\> String\lSetCount -\> u32\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "external" -> "actor:example:message_macro_demo:message_macro_demo::Calculator" [style="bold", label="spawn"];
+  "external" -> "actor:example:message_macro_demo:message_macro_demo::Calculator" [label="ask Add -> u32\nask GetCount -> u32\nask Multiply -> u32\nask Reset -> String\nask SetCount -> u32"];
+}

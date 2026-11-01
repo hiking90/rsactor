@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "name": "basic",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:basic:basic::MyActor",
+        "target": "example:basic",
+        "path": "basic::MyActor",
+        "display": "basic::MyActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "basic::Decrement",
+            "label": "Decrement",
+            "reply": "u32",
+            "reply_key": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/basic.rs",
+              "line": 79
+            }
+          },
+          {
+            "key": "basic::DummyMessage",
+            "label": "DummyMessage",
+            "reply": "u32",
+            "reply_key": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/basic.rs",
+              "line": 86
+            }
+          },
+          {
+            "key": "basic::Increment",
+            "label": "Increment",
+            "reply": "u32",
+            "reply_key": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/basic.rs",
+              "line": 72
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/basic.rs",
+          "line": 23
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": "spawn_with_options",
+        "from": "external",
+        "to": "actor:example:basic:basic::MyActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/basic.rs",
+            "line": 108
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:basic:basic::MyActor",
+        "message": "basic::Decrement",
+        "message_label": "Decrement",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/basic.rs",
+            "line": 119
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:basic:basic::MyActor",
+        "message": "basic::Increment",
+        "message_label": "Increment",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/basic.rs",
+            "line": 114
+          },
+          {
+            "file": "examples/basic.rs",
+            "line": 124
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

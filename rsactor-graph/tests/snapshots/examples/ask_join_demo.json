@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "name": "ask_join_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "target": "example:ask_join_demo",
+        "path": "ask_join_demo::WorkerActor",
+        "display": "ask_join_demo::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "ask_join_demo::FileProcessingTask",
+            "label": "FileProcessingTask",
+            "reply": "JoinHandle<String>",
+            "reply_key": "tokio::task::JoinHandle<std::string::String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 93
+            }
+          },
+          {
+            "key": "ask_join_demo::GetTaskCount",
+            "label": "GetTaskCount",
+            "reply": "u32",
+            "reply_key": "u32",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 129
+            }
+          },
+          {
+            "key": "ask_join_demo::HeavyComputationTask",
+            "label": "HeavyComputationTask",
+            "reply": "JoinHandle<u64>",
+            "reply_key": "tokio::task::JoinHandle<u64>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 60
+            }
+          },
+          {
+            "key": "ask_join_demo::PanicTask",
+            "label": "PanicTask",
+            "reply": "JoinHandle<String>",
+            "reply_key": "tokio::task::JoinHandle<std::string::String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/ask_join_demo.rs",
+              "line": 34
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/ask_join_demo.rs",
+          "line": 24
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 143
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "message": "ask_join_demo::GetTaskCount",
+        "message_label": "GetTaskCount",
+        "reply": "u32",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 280
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "message": "ask_join_demo::HeavyComputationTask",
+        "message_label": "HeavyComputationTask",
+        "reply": "JoinHandle<u64>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 258
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_join",
+        "from": "external",
+        "to": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "unresolved",
+        "locations": [
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 176
+          },
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 219
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_join",
+        "from": "external",
+        "to": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "message": "ask_join_demo::HeavyComputationTask",
+        "message_label": "HeavyComputationTask",
+        "reply": "JoinHandle<u64>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 271
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_join",
+        "from": "external",
+        "to": "actor:example:ask_join_demo:ask_join_demo::WorkerActor",
+        "message": "ask_join_demo::PanicTask",
+        "message_label": "PanicTask",
+        "reply": "JoinHandle<String>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/ask_join_demo.rs",
+            "line": 237
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": [
+      {
+        "category": "unresolved_edge",
+        "location": {
+          "file": "examples/ask_join_demo.rs",
+          "line": 176
+        },
+        "sender": "external",
+        "detail": ".ask_join(..): message type not determined"
+      },
+      {
+        "category": "unresolved_edge",
+        "location": {
+          "file": "examples/ask_join_demo.rs",
+          "line": 219
+        },
+        "sender": "external",
+        "detail": ".ask_join(..): message type not determined"
+      }
+    ]
+  }
+}

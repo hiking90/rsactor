@@ -1,0 +1,27 @@
+[package]
+name = "rsactor-graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Static analysis tool that draws the actor topology of an rsactor application"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["actor", "rsactor", "graph", "graphviz"]
+# Distribution on crates.io is still undecided.
+publish = false
+
+[[bin]]
+name = "rsactor-graph"
+path = "src/main.rs"
+
+[dependencies]
+syn = { workspace = true, features = ["visit"] }
+quote.workspace = true
+# `span-locations` makes `Span::start()` report real line numbers for source
+# parsed outside a proc macro, which is how this tool parses every file.
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

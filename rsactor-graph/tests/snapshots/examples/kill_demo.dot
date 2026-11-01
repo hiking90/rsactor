@@ -1,0 +1,9 @@
+digraph "kill_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "actor:example:kill_demo:kill_demo::DemoActor" [label="{kill_demo::DemoActor|Ping -\> String\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "external" -> "actor:example:kill_demo:kill_demo::DemoActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:kill_demo:kill_demo::DemoActor" [label="ask Ping -> String"];
+}

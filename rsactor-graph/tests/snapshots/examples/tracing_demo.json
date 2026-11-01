@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "name": "tracing_demo",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "target": "example:tracing_demo",
+        "path": "tracing_demo::TracingDemoActor",
+        "display": "tracing_demo::TracingDemoActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "tracing_demo::Echo",
+            "label": "Echo",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 64
+            }
+          },
+          {
+            "key": "tracing_demo::FailingMessage",
+            "label": "FailingMessage",
+            "reply": "Result<String, String>",
+            "reply_key": "std::result::Result<std::string::String, std::string::String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 91
+            }
+          },
+          {
+            "key": "tracing_demo::GetCounter",
+            "label": "GetCounter",
+            "reply": "u64",
+            "reply_key": "u64",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 69
+            }
+          },
+          {
+            "key": "tracing_demo::Increment",
+            "label": "Increment",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 74
+            }
+          },
+          {
+            "key": "tracing_demo::Ping",
+            "label": "Ping",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 59
+            }
+          },
+          {
+            "key": "tracing_demo::SlowOperation",
+            "label": "SlowOperation",
+            "reply": "String",
+            "reply_key": "std::string::String",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/tracing_demo.rs",
+              "line": 80
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/tracing_demo.rs",
+          "line": 51
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 114
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": "tell_with_timeout",
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::Increment",
+        "message_label": "Increment",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 155
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::Echo",
+        "message_label": "Echo",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 121
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::FailingMessage",
+        "message_label": "FailingMessage",
+        "reply": "Result<String, String>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 148
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::GetCounter",
+        "message_label": "GetCounter",
+        "reply": "u64",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 131
+          },
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 160
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::Increment",
+        "message_label": "Increment",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 125
+          },
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 126
+          },
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 127
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::Ping",
+        "message_label": "Ping",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 117
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::SlowOperation",
+        "message_label": "SlowOperation",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 135
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": "ask_with_timeout",
+        "from": "external",
+        "to": "actor:example:tracing_demo:tracing_demo::TracingDemoActor",
+        "message": "tracing_demo::SlowOperation",
+        "message_label": "SlowOperation",
+        "reply": "String",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/tracing_demo.rs",
+            "line": 140
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}

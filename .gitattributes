@@ -1,1 +1,4 @@
 *.sh linguist-vendored
+# rsactor-graph golden snapshots are compared byte for byte; keep LF on
+# Windows checkouts too.
+rsactor-graph/tests/snapshots/** text eol=lf

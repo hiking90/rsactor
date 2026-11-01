@@ -1,0 +1,14 @@
+digraph "handler_demo" {
+  rankdir=LR;
+  node [shape=record, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+  "actor:example:handler_demo:handler_demo::CounterActor" [label="{handler_demo::CounterActor|GetStatus -\> Status\lPing\l}"];
+  "actor:example:handler_demo:handler_demo::LoggerActor" [label="{handler_demo::LoggerActor|GetStatus -\> Status\lPing\l}"];
+  "external" [shape=ellipse, style=dashed, label="external (main)"];
+  "handlers:AskHandler:handler_demo::GetStatus:handler_demo::Status" [shape=box, style="rounded,dashed", label="AskHandler<GetStatus, Status>\ncandidates: handler_demo::CounterActor, handler_demo::LoggerActor"];
+  "handlers:TellHandler:handler_demo::Ping" [shape=box, style="rounded,dashed", label="TellHandler<Ping>\ncandidates: handler_demo::CounterActor, handler_demo::LoggerActor"];
+  "external" -> "actor:example:handler_demo:handler_demo::CounterActor" [style="bold", label="spawn"];
+  "external" -> "actor:example:handler_demo:handler_demo::LoggerActor" [style="bold", label="spawn"];
+  "external" -> "handlers:AskHandler:handler_demo::GetStatus:handler_demo::Status" [label="ask GetStatus -> Status"];
+  "external" -> "handlers:TellHandler:handler_demo::Ping" [label="tell Ping"];
+}

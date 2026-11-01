@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "name": "actor_async_worker",
+  "graph": {
+    "nodes": [
+      {
+        "kind": "actor",
+        "id": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "target": "example:actor_async_worker",
+        "path": "actor_async_worker::RequesterActor",
+        "display": "actor_async_worker::RequesterActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_async_worker::GetResults",
+            "label": "GetResults",
+            "reply": "Vec<String>",
+            "reply_key": "std::vec::Vec<std::string::String>",
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 82
+            }
+          },
+          {
+            "key": "actor_async_worker::RequestWork",
+            "label": "RequestWork",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 52
+            }
+          },
+          {
+            "key": "actor_async_worker::WorkCompleted",
+            "label": "WorkCompleted",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 73
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_async_worker.rs",
+          "line": 12
+        }
+      },
+      {
+        "kind": "actor",
+        "id": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "target": "example:actor_async_worker",
+        "path": "actor_async_worker::WorkerActor",
+        "display": "actor_async_worker::WorkerActor",
+        "open": false,
+        "messages": [
+          {
+            "key": "actor_async_worker::ProcessTask",
+            "label": "ProcessTask",
+            "reply": null,
+            "reply_key": null,
+            "resolution": "exact",
+            "cfg": [],
+            "location": {
+              "file": "examples/actor_async_worker.rs",
+              "line": 121
+            }
+          }
+        ],
+        "location": {
+          "file": "examples/actor_async_worker.rs",
+          "line": 95
+        }
+      },
+      {
+        "kind": "external",
+        "id": "external"
+      }
+    ],
+    "edges": [
+      {
+        "kind": "holds",
+        "variant": null,
+        "from": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 13
+          },
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 18
+          }
+        ]
+      },
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 157
+          }
+        ]
+      },
+      {
+        "kind": "spawn",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "message": null,
+        "message_label": null,
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 156
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "to": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "message": "actor_async_worker::ProcessTask",
+        "message_label": "ProcessTask",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 63
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "actor:example:actor_async_worker:actor_async_worker::WorkerActor",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": "actor_async_worker::WorkCompleted",
+        "message_label": "WorkCompleted",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 140
+          }
+        ]
+      },
+      {
+        "kind": "tell",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": "actor_async_worker::RequestWork",
+        "message_label": "RequestWork",
+        "reply": null,
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 162
+          }
+        ]
+      },
+      {
+        "kind": "ask",
+        "variant": null,
+        "from": "external",
+        "to": "actor:example:actor_async_worker:actor_async_worker::RequesterActor",
+        "message": "actor_async_worker::GetResults",
+        "message_label": "GetResults",
+        "reply": "Vec<String>",
+        "receiver_resolution": "exact",
+        "message_resolution": "exact",
+        "locations": [
+          {
+            "file": "examples/actor_async_worker.rs",
+            "line": 174
+          }
+        ]
+      }
+    ]
+  },
+  "report": {
+    "entries": []
+  }
+}
