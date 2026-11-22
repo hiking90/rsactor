@@ -179,6 +179,28 @@ documentation and tests, so read each entry. Upgrade steps are in
 
 ### Fixed
 
+- **`#[derive(Actor)]` tripped `clippy::unused_async_trait_impl`** (pedantic,
+  added in Rust 1.98) in every crate that derives with pedantic lints on. The
+  generated `on_start` was an `async fn` with nothing to await, and the warning
+  landed on the user's `#[derive(Actor)]`, where no source change could clear
+  it. `on_start` now returns `core::future::ready(Ok(args))` from a plain `fn`;
+  the actor sees the same result, and the documented "equivalent to" impl shows
+  the new form.
+- **`#[message_handlers]` left `clippy::unused_async` (pedantic) unfixable on
+  handlers that await nothing.** A handler must be an `async fn`, so the lint
+  could only be silenced by hand. The macro now adds
+  `#[cfg_attr(clippy, allow(clippy::unused_async))]` to a `#[handler]` method
+  whose body contains no `await`; other methods in the block keep the lint and
+  a plain `rustc` build never sees the attribute. A crate with
+  `#![forbid(clippy::unused_async)]` gets E0453 on such a handler under clippy,
+  in place of the lint error it got before.
+
+  Not covered: `clippy::unused_async_trait_impl` (Rust 1.98+) also reports
+  these inherent methods, which is a clippy false positive
+  ([rust-clippy#17772](https://github.com/rust-lang/rust-clippy/issues/17772)).
+  The macro cannot name that lint without making clippy older than 1.98 warn
+  about an unknown lint, so until clippy is fixed add
+  `#![allow(clippy::unused_async_trait_impl)]` to the crate.
 - **The `tracing` feature's documentation contradicted its implementation.**
   The crate docs and README described it as the switch that turns logging on,
   while `Cargo.toml` and `Message::on_tell_result` stated the opposite: the
