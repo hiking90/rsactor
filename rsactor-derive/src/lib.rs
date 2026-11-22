@@ -49,20 +49,25 @@
 //! # struct MyActor { name: String, count: u32 }
 //! use rsactor::{Actor, ActorRef};
 //! use std::convert::Infallible;
+//! use std::future::{ready, Future};
 //!
 //! impl Actor for MyActor {
 //!     type Args = Self;
 //!     type Error = Infallible;
 //!     type IdleEvent = ();
 //!
-//!     async fn on_start(
+//!     fn on_start(
 //!         args: Self::Args,
 //!         _actor_ref: &ActorRef<Self>,
-//!     ) -> std::result::Result<Self, Self::Error> {
-//!         Ok(args)
+//!     ) -> impl Future<Output = std::result::Result<Self, Self::Error>> + Send {
+//!         ready(Ok(args))
 //!     }
 //! }
 //! ```
+//!
+//! `on_start` returns a ready future instead of being an `async fn` because
+//! its body has nothing to await; an `async fn` there would trigger
+//! `clippy::unused_async_trait_impl` (pedantic) in the crate that derives.
 //!
 //! ### When to Use
 //!
@@ -181,11 +186,11 @@ use syn::{
 ///     type Error = std::convert::Infallible;
 ///     type IdleEvent = ();
 ///
-///     async fn on_start(
+///     fn on_start(
 ///         args: Self::Args,
 ///         _actor_ref: &rsactor::ActorRef<Self>,
-///     ) -> std::result::Result<Self, Self::Error> {
-///         Ok(args)
+///     ) -> impl std::future::Future<Output = std::result::Result<Self, Self::Error>> + Send {
+///         std::future::ready(Ok(args))
 ///     }
 /// }
 /// ```
@@ -232,11 +237,17 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
                     type Error = ::core::convert::Infallible;
                     type IdleEvent = ();
 
-                    async fn on_start(
+                    // A ready future rather than an `async fn`: the body never
+                    // awaits, and an `async fn` here trips
+                    // `clippy::unused_async_trait_impl` at the user's
+                    // `#[derive(Actor)]`, where it cannot be fixed.
+                    fn on_start(
                         args: Self::Args,
                         _actor_ref: &::rsactor::ActorRef<Self>,
-                    ) -> ::core::result::Result<Self, Self::Error> {
-                        ::core::result::Result::Ok(args)
+                    ) -> impl ::core::future::Future<
+                        Output = ::core::result::Result<Self, Self::Error>,
+                    > + ::core::marker::Send {
+                        ::core::future::ready(::core::result::Result::Ok(args))
                     }
                 }
             };
@@ -312,6 +323,28 @@ fn derive_actor_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 ///
 /// `#[message_handlers]` itself takes no arguments; options belong on
 /// `#[handler(...)]`.
+///
+/// # Clippy
+///
+/// A handler has to be an `async fn` even when it awaits nothing, which is
+/// what `clippy::unused_async` (pedantic) reports. On a handler whose body
+/// contains no `await`, the macro therefore adds
+/// `#[cfg_attr(clippy, allow(clippy::unused_async))]`. Other methods in the
+/// block are untouched, and a plain `rustc` build never sees the attribute.
+///
+/// - A crate with `#![forbid(clippy::unused_async)]` gets E0453 on such a
+///   handler under clippy, in place of the lint error it got before.
+/// - An `await` that appears only inside a nested `async` block or closure
+///   counts as an `await` for the macro but not for clippy; that handler keeps
+///   the warning.
+/// - `clippy::unused_async_trait_impl` (pedantic, Rust 1.98+) also fires on
+///   these inherent methods. That is a clippy false positive
+///   ([rust-clippy#17772](https://github.com/rust-lang/rust-clippy/issues/17772))
+///   and the macro does not suppress it: clippy before 1.98 does not know the
+///   lint, so naming it would warn there. Until clippy is fixed, allow it in
+///   the crate: `#![allow(clippy::unused_async_trait_impl)]`.
+///
+/// # Crate Path
 ///
 /// The generated impls use `::rsactor::…` paths, so the using crate must have
 /// `rsactor` in its extern prelude under that name. A crate that reaches
@@ -466,10 +499,34 @@ fn process_handler_methods(
     Ok(message_impls)
 }
 
+/// Strips `#[handler]` from every method and, on a handler whose body has no
+/// `await`, allows `clippy::unused_async`.
+///
+/// A handler must be an `async fn`, so that lint cannot be acted on there. The
+/// allow is limited in three ways so it changes nothing else:
+/// - handlers only: other methods in the block keep the lint;
+/// - bodies without an `await` token only: a body that awaits does not trigger
+///   the lint, and an `allow` it does not need would still be a hard error
+///   (E0453) in a crate that forbids the lint;
+/// - `cfg_attr(clippy, …)`: a plain `rustc` build never sees the attribute.
+///
+/// The token test is coarser than the lint. An `await` that sits only inside a
+/// nested `async` block or closure counts here but not for clippy, so such a
+/// handler still gets the warning.
 fn clean_handler_attributes(items: &mut [ImplItem]) {
     for item in items {
         if let ImplItem::Fn(method) = item {
+            let attr_count = method.attrs.len();
             method.attrs.retain(|attr| !attr.path().is_ident("handler"));
+            let is_handler = method.attrs.len() != attr_count;
+
+            if is_handler
+                && !tokens_contain_ident(quote::ToTokens::to_token_stream(&method.block), "await")
+            {
+                method.attrs.push(syn::parse_quote!(
+                    #[cfg_attr(clippy, allow(clippy::unused_async))]
+                ));
+            }
         }
     }
 }
